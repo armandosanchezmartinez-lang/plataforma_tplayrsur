@@ -332,8 +332,7 @@ $roles_labels = [
         .user-name { font-size:0.82rem; font-weight:700; }
         .user-role { font-size:0.7rem; color:var(--text2); }
         .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
-        // Se reemplaza .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
-        .kpi-card {padding: 28px 30px; }
+        .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .kpi-card.full { grid-column:span 2; }
         .kpi-header { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
         .kpi-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
@@ -342,18 +341,14 @@ $roles_labels = [
         .kpi-purple { background:#f0ebff; }
         .kpi-orange { background:#fff7ed; }
         .kpi-label { font-size:0.88rem; font-weight:700; }
-        // Se reemplaza .kpi-numbers { display:flex; gap:28px; }
-        .kpi-numbers {gap: 40px; }
-
+        .kpi-numbers { display:flex; gap:28px; }
         .kpi-num { display:flex; flex-direction:column; }
-        //Se reempleza KPI-VAL .kpi-val { font-size:1.9rem; font-weight:800; letter-spacing:-1px; line-height:1; }
-        .kpi-val {font-size: 2.8rem; letter-spacing: -1px; }
+        .kpi-val { font-size:1.9rem; font-weight:800; letter-spacing:-1px; line-height:1; }
         .kpi-val.blue   { color:var(--blue2); }
         .kpi-val.green  { color:var(--green); }
         .kpi-val.purple { color:var(--purple); }
         .kpi-val.red    { color:var(--red); }
-        //Se reempleza KPI-SUB .kpi-sub { font-size:0.7rem; color:var(--text2); margin-top:4px; font-weight:600; }
-        .kpi-sub {font-size: 0.85rem; }
+        .kpi-sub { font-size:0.7rem; color:var(--text2); margin-top:4px; font-weight:600; }
         .progress-bar-wrap { margin-top:14px; }
         .progress-bar-bg { background:#e2e8f4; border-radius:99px; height:10px; overflow:hidden; }
         .progress-bar-fill { height:100%; border-radius:99px; transition:width 0.6s ease; }
@@ -364,45 +359,11 @@ $roles_labels = [
         .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
         .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .chart-title { font-size:0.88rem; font-weight:700; margin-bottom:16px; color:var(--text); }
-        // Se reemplaza .chart-wrap { position:relative; height:200px; }
-        .chart-wrap {height: 300px; }
+        .chart-wrap { position:relative; height:200px; }
         .evo-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
-        // Se reemplaza .evo-wrap { position:relative; height:220px; }
-        .evo-wrap {height: 340px; }
+        .evo-wrap { position:relative; height:220px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
-
-        // ── FORMATO STYLE ───────────────────────────────────────────────────────
-        body {
-          font-size: 15px;
-        }
-
-       .page-header h2 {
-         font-size: 1.9rem;
-       }
-
-       .page-header p {
-         font-size: 0.95rem;
-       }
-
-       .user-name {
-        font-size: 0.95rem;
-       }
-
-      .user-role {
-        font-size: 0.8rem;
-      }
-
-      @media (min-width: 1200px) {
-        .kpi-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .charts-row {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-      }
-
     </style>
 </head>
 <body>
@@ -554,44 +515,17 @@ const inst3p  = <?= $inst_3p ?>;
 const vent2p  = <?= $vent_2p ?>;
 const vent3p  = <?= $vent_3p ?>;
 
-// SE REEMPLAZA const donutOpts = () => ({
-//    responsive: true, maintainAspectRatio: false,
-//    plugins: {
-//        legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
-//        tooltip: { callbacks: { label: ctx => {
-//            const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
-//            const p = t > 0 ? ((ctx.parsed/t)*100).toFixed(1) : 0;
-//            return ` ${ctx.label}: ${ctx.parsed.toLocaleString()} (${p}%)`;
-//        }}}
-//    }
-//});
-
-
 const donutOpts = () => ({
-    responsive: true,
-    maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false,
     plugins: {
-        legend: {
-            position: 'bottom',
-            labels: {
-                font: { size: 14 },
-                padding: 20
-            }
-        },
-        tooltip: {
-            bodyFont: { size: 14 },
-            titleFont: { size: 14 },
-            callbacks: {
-                label: ctx => {
-                    const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
-                    const p = t > 0 ? ((ctx.parsed/t)*100).toFixed(1) : 0;
-                    return ` ${ctx.label}: ${ctx.parsed.toLocaleString()} (${p}%)`;
-                }
-            }
-        }
+        legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
+        tooltip: { callbacks: { label: ctx => {
+            const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const p = t > 0 ? ((ctx.parsed/t)*100).toFixed(1) : 0;
+            return ` ${ctx.label}: ${ctx.parsed.toLocaleString()} (${p}%)`;
+        }}}
     }
 });
-
 
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
@@ -604,37 +538,14 @@ new Chart(document.getElementById('cVentMix'), {
     options: donutOpts()
 });
 
-// Se Reemplaza const barOpts = () => ({
-//    responsive: true, maintainAspectRatio: false,
-//    plugins: { legend: { display: false } },
-//    scales: {
-//        y: { beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } },
-//        x: { grid: { display: false }, ticks: { font: { size: 10 } } }
-//    }
-//});
-
 const barOpts = () => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-        legend: { display: false },
-        tooltip: {
-            bodyFont: { size: 14 }
-        }
-    },
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
     scales: {
-        y: {
-            beginAtZero: true,
-            grid: { color: '#e2e8f4' },
-            ticks: { font: { size: 13 } }
-        },
-        x: {
-            grid: { display: false },
-            ticks: { font: { size: 12 } }
-        }
+        y: { beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } },
+        x: { grid: { display: false }, ticks: { font: { size: 10 } } }
     }
 });
-
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
     data: { labels: labels6, datasets: [{ data: instEvo, backgroundColor: '#3b66b8', borderRadius: 6 }] },
