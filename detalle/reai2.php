@@ -30,7 +30,7 @@ $anio_query = (int)date('Y');
 // Día vencido: ayer
 $fecha_dia_actual  = date('Y-m-d', strtotime('-1 day'));
 // Misma semana anterior: mismo día de la semana pasada
-$fecha_dia_anterior = date('Y-m-d', strtotime('-7 days'));
+$fecha_dia_anterior = date('Y-m-d', strtotime('-8 days'));
 
 $roles_labels = [
     'admin'              => 'Administrador',
