@@ -150,13 +150,7 @@ if ($rol === 'admin') {
     }
 }
 $kpi_vent = $r_vent ? (mysqli_fetch_assoc($r_vent)['total'] ?? 0) : 0;
-if ($kpi_vent > 0) {
-    $porcentaje = ($kpi_inst / $kpi_vent) * 100;
-    // Esto lo deja con 2 decimales, una coma para miles y un punto para decimales
-    $kpi_conv_display = number_format($porcentaje, 2) . "%";
-} else {
-    $kpi_conv_display = "0.0%";
-}
+$kpi_conv = ($kpi_vent > 0) ? ($kpi_inst / $kpi_vent) * 100 : 0;
 
 
 // ── HC ACTIVO Y VACANTE ──────────────────────────────────────────────────────
