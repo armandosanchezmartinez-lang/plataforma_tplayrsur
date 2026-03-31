@@ -426,7 +426,7 @@ $roles_labels = [
 
         <div class="kpi-card">
             <div class="kpi-header">
-                <div class="kpi-icon kpi-green"></div>
+                <div class="kpi-icon kpi-green">🔄</div>
                 <div class="kpi-label">Conversion</div>
             </div>
             <div class="kpi-numbers">
