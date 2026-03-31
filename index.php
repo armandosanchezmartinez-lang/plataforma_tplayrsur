@@ -340,7 +340,7 @@ $roles_labels = [
         .kpi-green  { background:#e6faf3; }
         .kpi-purple { background:#f0ebff; }
         .kpi-orange { background:#fff7ed; }
-        .kpi-label { font-size:0.88rem; font-weight:700; }
+        .kpi-label { font-size:1.5rem; font-weight:700; }
         .kpi-numbers { display:flex; gap:28px; }
         .kpi-num { display:flex; flex-direction:column; }
         .kpi-val { font-size:1.9rem; font-weight:800; letter-spacing:-1px; line-height:1; }
