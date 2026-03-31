@@ -238,7 +238,8 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
         .sidebar-bottom { margin-top:auto; width:100%; padding:0 12px; }
         .logout-btn { display:block; text-align:center; padding:10px; border-radius:8px; color:rgba(255,255,255,0.6); text-decoration:none; font-size:0.78rem; font-weight:600; }
         .logout-btn:hover { background:rgba(255,255,255,0.1); color:white; }
-        .main { margin-left:var(--sidebar); flex:1; padding:32px; overflow-x:auto; }
+        .main { margin-left:var(--sidebar); flex:1; padding:32px; min-width:0; }
+        .table-card { overflow-x:auto; }
         .page-header { margin-bottom:20px; }
         .page-header h2 { font-size:1.5rem; font-weight:700; }
         .page-header p { font-size:0.82rem; color:var(--text2); margin-top:2px; }
