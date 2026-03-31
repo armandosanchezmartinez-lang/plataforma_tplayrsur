@@ -150,6 +150,7 @@ if ($rol === 'admin') {
     }
 }
 $kpi_vent = $r_vent ? (mysqli_fetch_assoc($r_vent)['total'] ?? 0) : 0;
+$kpi_conv = $kpi_inst / $kpi_vent;
 
 // ── HC ACTIVO Y VACANTE ──────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
