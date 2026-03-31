@@ -19,7 +19,6 @@ $nombre_usuario = $_SESSION['usuario'] ?? '';
 
 $puestos_comerciales = "'PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGOCIOS','VENDEDOR NEGOCIO'";
 
-// ── FUNCIONES DE JERARQUÍA ───────────────────────────────────────────────────
 function getSubordinados($conexion, $id_pos, $semana = null, $anio = null) {
     $ids = [];
     if ($semana && $anio) {
@@ -47,7 +46,6 @@ function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = 
     return array_unique($todos);
 }
 
-// ── SEMANA MÁS RECIENTE ──────────────────────────────────────────────────────
 $semana_actual = null; $anio_actual = null; $semana_base = null;
 $res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
 if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
@@ -56,11 +54,9 @@ if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
     $semana_actual = $semana_base;
 }
 
-// ── NIVELES POR ROL ──────────────────────────────────────────────────────────
 $niveles = ['admin'=>6,'director_regional'=>5,'director_distrital'=>4,'lider'=>3,'coach'=>2,'vendedor'=>1];
 $nivel   = $niveles[$rol] ?? 1;
 
-// ── DATOS DEL USUARIO ────────────────────────────────────────────────────────
 $nombre_completo  = $nombre_usuario;
 $posicion_usuario = '';
 $distrito_usuario = '';
@@ -78,7 +74,6 @@ if ($stmt_nombre) {
     mysqli_stmt_close($stmt_nombre);
 }
 
-// ── SUBORDINADOS ─────────────────────────────────────────────────────────────
 $subordinados_ids = [];
 $folio_ids        = [];
 
@@ -103,17 +98,14 @@ $mes_actual   = (int)date('n');
 $anio_query   = (int)date('Y');
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
-// Roles que filtran por distrito (no por vendedor)
 $por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
 $mostrar_meta = $por_distrito;
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_inst = mysqli_query($conexion,
-        "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
-    $r_inst = mysqli_query($conexion,
-        "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_inst = mysqli_query($conexion, "SELECT 0 as total");
@@ -131,11 +123,9 @@ $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 
 // ── VENTAS ───────────────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_vent = mysqli_query($conexion,
-        "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
 } elseif ($por_distrito) {
-    $r_vent = mysqli_query($conexion,
-        "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_vent = mysqli_query($conexion, "SELECT 0 as total");
@@ -150,9 +140,9 @@ if ($rol === 'admin') {
     }
 }
 $kpi_vent = $r_vent ? (mysqli_fetch_assoc($r_vent)['total'] ?? 0) : 0;
-$kpi_conv = ($kpi_vent > 0) ? ($kpi_inst / $kpi_vent) * 100 : 0;
+$kpi_conv = ($kpi_vent > 0) ? round(($kpi_inst / $kpi_vent) * 100, 1) : 0;
 
-// ── HC ACTIVO Y VACANTE ──────────────────────────────────────────────────────
+// ── HC ───────────────────────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
 if ($semana_actual && $anio_actual) {
     if ($rol === 'admin') {
@@ -161,14 +151,12 @@ if ($semana_actual && $anio_actual) {
     } else {
         if (!empty($subordinados_ids)) {
             $ph = implode(',', array_fill(0, count($subordinados_ids), '?'));
-
             $stmt_act = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs NOT LIKE '%VACANTE%' AND semana=? AND anio=? AND posicion IN ($puestos_comerciales) AND id_posicion IN ($ph)");
             $tipos = 'ii' . str_repeat('s', count($subordinados_ids));
             $bind  = array_merge([$semana_actual, $anio_actual], array_values($subordinados_ids));
             mysqli_stmt_bind_param($stmt_act, $tipos, ...$bind);
             mysqli_stmt_execute($stmt_act);
             $r_hc_act = mysqli_stmt_get_result($stmt_act);
-
             $stmt_vac = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs LIKE '%VACANTE%' AND semana=? AND anio=? AND posicion IN ($puestos_comerciales) AND posicion_lr IN ($ph)");
             mysqli_stmt_bind_param($stmt_vac, $tipos, ...$bind);
             mysqli_stmt_execute($stmt_vac);
@@ -184,18 +172,16 @@ if ($semana_actual && $anio_actual) {
 $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
-// ── META ACUMULADA ───────────────────────────────────────────────────────────
+// ── META ─────────────────────────────────────────────────────────────────────
 $dias_transcurridos = (int)date('j') - 2;
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
 if ($mostrar_meta) {
     if ($rol === 'admin') {
-        $r_meta = mysqli_query($conexion,
-            "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
+        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
     } else {
-        $r_meta = mysqli_query($conexion,
-            "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito='$distrito_esc'");
+        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito='$distrito_esc'");
     }
     if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
         $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
@@ -206,11 +192,9 @@ if ($mostrar_meta) {
 
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_mix_inst = mysqli_query($conexion,
-        "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
-    $r_mix_inst = mysqli_query($conexion,
-        "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_mix_inst = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
@@ -230,11 +214,9 @@ $inst_2p = (int)($mix_inst['p2'] ?? 0);
 
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_mix_vent = mysqli_query($conexion,
-        "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
 } elseif ($por_distrito) {
-    $r_mix_vent = mysqli_query($conexion,
-        "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_mix_vent = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
@@ -261,7 +243,6 @@ for ($i = 5; $i >= 0; $i--) {
     $m  = (int)date('n', $ts);
     $a  = (int)date('Y', $ts);
     $meses_labels[] = date('M Y', $ts);
-
     if ($rol === 'admin') {
         $ri = mysqli_query($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a AND origen_prospecto <> '-'");
         $rv = mysqli_query($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a");
@@ -280,7 +261,6 @@ for ($i = 5; $i >= 0; $i--) {
             mysqli_stmt_bind_param($stmt_ri, $tipos, ...$bind);
             mysqli_stmt_execute($stmt_ri);
             $ri = mysqli_stmt_get_result($stmt_ri);
-
             $stmt_rv = mysqli_prepare($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
             mysqli_stmt_bind_param($stmt_rv, $tipos, ...$bind);
             mysqli_stmt_execute($stmt_rv);
@@ -308,11 +288,7 @@ $roles_labels = [
     <title>Dashboard — TOTALXPEDIENT</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <style>
-        :root {
-            --blue:#2b57a7; --blue2:#3b66b8; --bg:#f4f6fb; --white:#ffffff;
-            --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4;
-            --green:#10b981; --purple:#7c3aed; --red:#ef4444; --sidebar:200px;
-        }
+        :root { --blue:#2b57a7; --blue2:#3b66b8; --bg:#f4f6fb; --white:#ffffff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --purple:#7c3aed; --red:#ef4444; --sidebar:200px; }
         * { box-sizing:border-box; margin:0; padding:0; }
         body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
         .sidebar { width:var(--sidebar); background:var(--blue); min-height:100vh; position:fixed; top:0; left:0; display:flex; flex-direction:column; align-items:center; padding:28px 0; z-index:100; }
@@ -332,17 +308,21 @@ $roles_labels = [
         .user-avatar { width:34px; height:34px; border-radius:50%; background:var(--blue); color:white; display:flex; align-items:center; justify-content:center; font-size:0.8rem; font-weight:700; }
         .user-name { font-size:0.82rem; font-weight:700; }
         .user-role { font-size:0.7rem; color:var(--text2); }
+
+        /* KPI GRID */
         .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
-        .kpi-container { display: flex;flex -wrap: wrap;gap: 20px; margin-top: 20px; margin-bottom: 20px; justify-content: flex-start;}
-        .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); flex: 0 1 250px; min-width: 220px; box-sizing: border-box;}
-        .kpi-card.full { grid-column:span 2;max-width: 1000px; }
+        .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
+        .kpi-card.full { grid-column:span 2; }
+        .kpi-card.triple { grid-column:span 2; display:flex; padding:0; overflow:hidden; }
+        .kpi-section { flex:1; padding:22px 24px; }
+        .kpi-section:not(:last-child) { border-right:1px solid var(--border); }
         .kpi-header { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
         .kpi-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
         .kpi-blue   { background:#e8f0fe; }
         .kpi-green  { background:#e6faf3; }
         .kpi-purple { background:#f0ebff; }
         .kpi-orange { background:#fff7ed; }
-        .kpi-label { font-size:1.5rem; font-weight:700; }
+        .kpi-label { font-size:0.88rem; font-weight:700; }
         .kpi-numbers { display:flex; gap:28px; }
         .kpi-num { display:flex; flex-direction:column; }
         .kpi-val { font-size:1.9rem; font-weight:800; letter-spacing:-1px; line-height:1; }
@@ -373,10 +353,9 @@ $roles_labels = [
     <div class="sidebar-logo">📊</div>
     <div class="sidebar-brand">TOTALXPEDIENT</div>
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
-    <!-- <a href="import/import_instalaciones.php" class="nav-item"><span class="nav-icon">🔧</span> Instalaciones</a>
-    <a href="import/import_ventas.php" class="nav-item"><span class="nav-icon">📈</span> Ventas</a> -->
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <a href="detalle/reai_v2.php" class="nav-item"><span class="nav-icon">📊</span> Seguimiento</a>
     <div class="sidebar-bottom">
         <a href="logout.php" class="logout-btn">⎋ Cerrar sesión</a>
     </div>
@@ -398,7 +377,7 @@ $roles_labels = [
     </div>
 
     <div class="kpi-grid">
-        
+
         <?php if ($mostrar_meta): ?>
         <div class="kpi-card full">
             <div class="kpi-header">
@@ -435,46 +414,47 @@ $roles_labels = [
         </div>
         <?php endif; ?>
 
-        <div class="kpi-card">
-            <div class="kpi-header">
-                <div class="kpi-icon kpi-blue">🔧</div>
-                <div class="kpi-label">Instalaciones</div>
+        <!-- INSTALACIONES + VENTAS + CONVERSIÓN EN UNA SOLA LÍNEA -->
+        <div class="kpi-card triple">
+            <div class="kpi-section">
+                <div class="kpi-header">
+                    <div class="kpi-icon kpi-blue">🔧</div>
+                    <div class="kpi-label">Instalaciones</div>
+                </div>
+                <div class="kpi-numbers">
+                    <div class="kpi-num">
+                        <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
+                        <span class="kpi-sub">del mes</span>
+                    </div>
+                </div>
             </div>
-            <div class="kpi-numbers">
-                <div class="kpi-num">
-                    <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
-                    <span class="kpi-sub">del mes</span>
+            <div class="kpi-section">
+                <div class="kpi-header">
+                    <div class="kpi-icon kpi-green">📈</div>
+                    <div class="kpi-label">Ventas</div>
+                </div>
+                <div class="kpi-numbers">
+                    <div class="kpi-num">
+                        <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
+                        <span class="kpi-sub">del mes</span>
+                    </div>
+                </div>
+            </div>
+            <div class="kpi-section">
+                <div class="kpi-header">
+                    <div class="kpi-icon kpi-green">🔄</div>
+                    <div class="kpi-label">Conversión</div>
+                </div>
+                <div class="kpi-numbers">
+                    <div class="kpi-num">
+                        <span class="kpi-val green"><?= number_format($kpi_conv, 1) ?>%</span>
+                        <span class="kpi-sub">del mes</span>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="kpi-card">
-            <div class="kpi-header">
-                <div class="kpi-icon kpi-green">📈</div>
-                <div class="kpi-label">Ventas</div>
-            </div>
-            <div class="kpi-numbers">
-                <div class="kpi-num">
-                    <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
-                    <span class="kpi-sub">del mes</span>
-                </div>
-            </div>
-        </div>
-
-
-        <div class="kpi-card">
-            <div class="kpi-header">
-                <div class="kpi-icon kpi-green">🔄</div>
-                <div class="kpi-label">Conversion</div>
-            </div>
-            <div class="kpi-numbers">
-                <div class="kpi-num">
-                    <span class="kpi-val green"><?= number_format($kpi_conv). "%" ?></span>
-                    <span class="kpi-sub">del mes</span>
-                </div>
-            </div>
-        </div>
-
+        <!-- HC -->
         <div class="kpi-card full">
             <div class="kpi-header">
                 <div class="kpi-icon kpi-purple">👥</div>
@@ -495,6 +475,7 @@ $roles_labels = [
                 </div>
             </div>
         </div>
+
     </div>
 
     <div class="charts-row">
@@ -543,7 +524,6 @@ const donutOpts = () => ({
         }}}
     }
 });
-
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
@@ -554,7 +534,6 @@ new Chart(document.getElementById('cVentMix'), {
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
     options: donutOpts()
 });
-
 const barOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: { legend: { display: false } },
