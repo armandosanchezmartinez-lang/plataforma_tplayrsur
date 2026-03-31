@@ -494,12 +494,12 @@ $roles_labels = [
         <div class="chart-title">Instalaciones y Ventas — Últimos 6 meses</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub">Instalaciones</div>
-                <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
-            </div>
-            <div>
                 <div class="evo-sub">Ventas</div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
+            </div>
+            <div>
+                <div class="evo-sub">Instalaciones</div>
+                <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
     </div>
