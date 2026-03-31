@@ -494,42 +494,6 @@ $roles_labels = [
                 </div>
             </div>
         </div>
-
-        <?php if ($mostrar_meta): ?>
-        <div class="kpi-card full">
-            <div class="kpi-header">
-                <div class="kpi-icon kpi-orange">🎯</div>
-                <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t') ?></div>
-            </div>
-            <div class="kpi-numbers" style="margin-bottom:0;">
-                <div class="kpi-num">
-                    <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
-                    <span class="kpi-sub">instalaciones</span>
-                </div>
-                <div class="kpi-num">
-                    <span class="kpi-val" style="color:#f59e0b;"><?= number_format($kpi_meta_acum) ?></span>
-                    <span class="kpi-sub">meta acumulada</span>
-                </div>
-                <div class="kpi-num">
-                    <span class="kpi-val <?= $kpi_meta_pct >= 100 ? 'green' : 'red' ?>"
-                          style="<?= $kpi_meta_pct >= 80 && $kpi_meta_pct < 100 ? 'color:#f59e0b;' : '' ?>">
-                        <?= $kpi_meta_pct ?>%
-                    </span>
-                    <span class="kpi-sub">avance</span>
-                </div>
-            </div>
-            <div class="progress-bar-wrap">
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill <?= $kpi_meta_pct >= 100 ? 'good' : ($kpi_meta_pct >= 80 ? 'warning' : 'danger') ?>"
-                         style="width:<?= min($kpi_meta_pct, 100) ?>%"></div>
-                </div>
-                <div class="progress-labels">
-                    <span>0</span>
-                    <span>Meta: <?= number_format($kpi_meta_acum) ?></span>
-                </div>
-            </div>
-        </div>
-        <?php endif; ?>
     </div>
 
     <div class="charts-row">
