@@ -150,7 +150,7 @@ if ($rol === 'admin') {
     }
 }
 $kpi_vent = $r_vent ? (mysqli_fetch_assoc($r_vent)['total'] ?? 0) : 0;
-$kpi_conv = $kpi_inst / $kpi_vent;
+$kpi_conv = ($kpi_vent > 0) ? ($kpi_inst / $kpi_vent) : 0;
 
 // ── HC ACTIVO Y VACANTE ──────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
@@ -418,6 +418,20 @@ $roles_labels = [
             <div class="kpi-numbers">
                 <div class="kpi-num">
                     <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
+                    <span class="kpi-sub">del mes</span>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-green"></div>
+                <div class="kpi-label">Conversion</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val green"><?= number_format($kpi_conv) ?></span>
                     <span class="kpi-sub">del mes</span>
                 </div>
             </div>
