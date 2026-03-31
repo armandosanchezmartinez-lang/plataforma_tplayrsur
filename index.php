@@ -287,6 +287,7 @@ $roles_labels = [
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard — TOTALXPEDIENT</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
     <style>
         :root { --blue:#2b57a7; --blue2:#3b66b8; --bg:#f4f6fb; --white:#ffffff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --purple:#7c3aed; --red:#ef4444; --sidebar:200px; }
         * { box-sizing:border-box; margin:0; padding:0; }
@@ -480,12 +481,12 @@ $roles_labels = [
 
     <div class="charts-row">
         <div class="chart-card">
-            <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
-            <div class="chart-wrap"><canvas id="cInstMix"></canvas></div>
-        </div>
-        <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Ventas</div>
             <div class="chart-wrap"><canvas id="cVentMix"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
+            <div class="chart-wrap"><canvas id="cInstMix"></canvas></div>
         </div>
     </div>
 
@@ -513,10 +514,21 @@ const inst3p  = <?= $inst_3p ?>;
 const vent2p  = <?= $vent_2p ?>;
 const vent3p  = <?= $vent_3p ?>;
 
+Chart.register(ChartDataLabels);
+
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
         legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
+        datalabels: {
+            color: '#fff',
+            font: { size: 13, weight: 'bold' },
+            formatter: (value, ctx) => {
+                const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
+                if (t === 0 || value === 0) return '';
+                return ((value/t)*100).toFixed(1) + '%';
+            }
+        },
         tooltip: { callbacks: { label: ctx => {
             const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
             const p = t > 0 ? ((ctx.parsed/t)*100).toFixed(1) : 0;
@@ -536,7 +548,7 @@ new Chart(document.getElementById('cVentMix'), {
 });
 const barOpts = () => ({
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
+    plugins: { legend: { display: false }, datalabels: { display: false } },
     scales: {
         y: { beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } },
         x: { grid: { display: false }, ticks: { font: { size: 10 } } }
