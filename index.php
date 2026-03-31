@@ -431,7 +431,7 @@ $roles_labels = [
             </div>
             <div class="kpi-numbers">
                 <div class="kpi-num">
-                    <span class="kpi-val green"><?= number_format($kpi_conv) ?></span>
+                    <span class="kpi-val green"><?= number_format($kpi_conv). "%" ?></span>
                     <span class="kpi-sub">del mes</span>
                 </div>
             </div>
