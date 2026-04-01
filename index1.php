@@ -186,7 +186,6 @@ $kpi_meta_pct       = 0;
 
 // 3. TERCERO: Lógica de negocio y consultas
 if ($mostrar_meta) {
-    // Usamos $mes_actual (que ya calculamos arriba que es el de ayer)
     if ($rol === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
     } else {
@@ -196,7 +195,6 @@ if ($mostrar_meta) {
     if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
         $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
         
-        // El cálculo ahora es automático: si es día 1, multiplicará por 31 (de marzo)
         $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
         $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     }
@@ -359,6 +357,26 @@ $roles_labels = [
         .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
         .evo-wrap { position:relative; height:220px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
+
+        /* --- NUEVOS ESTILOS DEL VELOCÍMETRO --- */
+        .kpi-speed-layout { display: flex; align-items: flex-end; justify-content: space-around; gap: 20px; margin-top: 20px; }
+        .speedometer-container { position: relative; width: 220px; height: 110px; display: flex; justify-content: center; }
+        .speedometer-arco-mascara { position: absolute; top: 0; left: 0; width: 220px; height: 110px; border-radius: 110px 110px 0 0; overflow: hidden; }
+        .speedometer-gradiente { 
+            position: absolute; top: 0; left: 0; width: 220px; height: 220px; border-radius: 50%; 
+            /* 0% a 100% va de -90deg a +90deg. Colores: Rojo(0-45deg), Naranja(45-135deg), Verde(135-180deg) */
+            background: conic-gradient(from -90deg, 
+                var(--red) 0deg 45deg, 
+                #f59e0b 45deg 135deg, 
+                var(--green) 135deg 180deg, 
+                transparent 180deg 360deg); 
+        }
+        .speedometer-centro-blanco { position: absolute; top: 22px; left: 22px; width: 176px; height: 176px; border-radius: 50%; background-color: var(--white); }
+        .needle-pivote { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); width: 14px; height: 14px; background-color: var(--text); border-radius: 50%; z-index: 3; }
+        .needle { position: absolute; bottom: 0px; left: calc(50% - 2px); width: 4px; height: 95px; background-color: var(--text); transform-origin: center bottom; transition: transform 1s ease-out; z-index: 2; border-radius: 2px; }
+        .porcentaje-sobre-arco { position: absolute; bottom: 10px; right: -15px; font-size: 1.1rem; font-weight: 800; z-index: 4; }
+        .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; height: 110px; }
+        .speed-val { font-size: 2.8rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
     </style>
 </head>
 <body>
@@ -391,43 +409,45 @@ $roles_labels = [
 
     <div class="kpi-grid">
 
-        <?php if ($mostrar_meta): ?>
+        <?php if ($mostrar_meta): 
+            // Cálculos específicos para el velocímetro
+            $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 180); // Evitar que la aguja dé la vuelta
+            $angulo_aguja = ($porcentaje_visual_aguja / 100 * 180) - 90;
+            // Definir el color del porcentaje flotante (usando tus variables CSS)
+            $color_porcentaje = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
+        ?>
         <div class="kpi-card full">
             <div class="kpi-header">
                 <div class="kpi-icon kpi-orange">🎯</div>
                 <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t', strtotime('-1 day'))?></div>
             </div>
-            <div class="kpi-numbers" style="margin-bottom:0;">
-                <div class="kpi-num">
-                    <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
-                    <span class="kpi-sub">instalaciones</span>
-                </div>
-                <div class="kpi-num">
-                    <span class="kpi-val" style="color:#f59e0b;"><?= number_format($kpi_meta_acum) ?></span>
-                    <span class="kpi-sub">meta acumulada</span>
-                </div>
-                <div class="kpi-num">
-                    <span class="kpi-val <?= $kpi_meta_pct >= 100 ? 'green' : 'red' ?>"
-                          style="<?= $kpi_meta_pct >= 80 && $kpi_meta_pct < 100 ? 'color:#f59e0b;' : '' ?>">
+            
+            <div class="kpi-speed-layout">
+                <div class="speedometer-container">
+                    <div class="speedometer-arco-mascara">
+                        <div class="speedometer-gradiente"></div>
+                        <div class="speedometer-centro-blanco"></div>
+                    </div>
+                    <div class="needle-pivote"></div>
+                    <div class="needle" style="transform: rotate(<?= $angulo_aguja ?>deg);"></div>
+                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje ?>;">
                         <?= $kpi_meta_pct ?>%
-                    </span>
-                    <span class="kpi-sub">avance</span>
+                    </div>
                 </div>
-            </div>
-            <div class="progress-bar-wrap">
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill <?= $kpi_meta_pct >= 100 ? 'good' : ($kpi_meta_pct >= 80 ? 'warning' : 'danger') ?>"
-                         style="width:<?= min($kpi_meta_pct, 100) ?>%"></div>
-                </div>
-                <div class="progress-labels">
-                    <span>0</span>
-                    <span>Meta: <?= number_format($kpi_meta_acum) ?></span>
+
+                <div class="speed-numbers">
+                    <span class="speed-val"><?= number_format($kpi_inst) ?></span>
+                    <span class="kpi-sub" style="font-size: 0.9rem; margin-bottom: 15px;">Instalaciones reales</span>
+                    
+                    <div style="text-align: right;">
+                        <span class="kpi-val" style="color:#f59e0b; font-size: 1.4rem;"><?= number_format($kpi_meta_acum) ?></span><br>
+                        <span class="kpi-sub">Meta acumulada</span>
+                    </div>
                 </div>
             </div>
         </div>
         <?php endif; ?>
 
-        <!-- INSTALACIONES + VENTAS + CONVERSIÓN EN UNA SOLA LÍNEA -->
         <div class="kpi-card triple">
             <div class="kpi-section">
                 <div class="kpi-header">
@@ -467,7 +487,6 @@ $roles_labels = [
             </div>
         </div>
 
-        <!-- HC -->
         <div class="kpi-card full">
             <div class="kpi-header">
                 <div class="kpi-icon kpi-purple">👥</div>
