@@ -94,8 +94,8 @@ if ($rol !== 'admin') {
     }
 }
 
-$mes_actual   = (int)date('n');
-$anio_query   = (int)date('Y');
+$mes_actual   = (int)date('n', strtotime('-1 day'));   // (int)date('n');
+$anio_query   = (int)date('Y', strtotime('-1 day'));   // (int)date('Y');
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 $por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
@@ -173,18 +173,30 @@ $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
 // ── META ─────────────────────────────────────────────────────────────────────
-$dias_transcurridos = (int)date('j') - 1;
+$ayer_timestamp = strtotime('-1 day');
+
+$dia_ayer           = (int)date('j', $ayer_timestamp);    
+$mes_actual         = (int)date('n', $ayer_timestamp); // Usamos el mes de ayer para la consulta
+$anio_query         = (int)date('Y', $ayer_timestamp); 
+$dias_transcurridos = $dia_ayer; 
+
+// 2. SEGUNDO: Inicializar variables de KPI
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
+// 3. TERCERO: Lógica de negocio y consultas
 if ($mostrar_meta) {
+    // Usamos $mes_actual (que ya calculamos arriba que es el de ayer)
     if ($rol === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
     } else {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito='$distrito_esc'");
     }
+
     if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
         $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
+        
+        // El cálculo ahora es automático: si es día 1, multiplicará por 31 (de marzo)
         $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
         $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     }
@@ -383,7 +395,7 @@ $roles_labels = [
         <div class="kpi-card full">
             <div class="kpi-header">
                 <div class="kpi-icon kpi-orange">🎯</div>
-                <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t') ?></div>
+                <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t', strtotime('-1 day'))?></div>
             </div>
             <div class="kpi-numbers" style="margin-bottom:0;">
                 <div class="kpi-num">
