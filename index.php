@@ -366,7 +366,7 @@ $roles_labels = [
     <div class="page-header">
         <div>
             <h2><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?></h2>
-            <p><?= date('d \d\e F Y') ?></p>
+            <p><?= date('d \d\e F Y', strtotime('-1 day')) ?></p>
         </div>
         <div class="user-badge">
             <div class="user-avatar"><?= strtoupper(substr($nombre_completo, 0, 1)) ?></div>
