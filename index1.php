@@ -173,7 +173,7 @@ $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
 // ── META ─────────────────────────────────────────────────────────────────────
-$dias_transcurridos = (int)date('j') - 2;
+$dias_transcurridos = (int)date('j') - 1;
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
@@ -383,7 +383,7 @@ $roles_labels = [
         <div class="kpi-card full">
             <div class="kpi-header">
                 <div class="kpi-icon kpi-orange">🎯</div>
-                <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t') ?></div>
+                <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t', strtotime('-1 day'))?></div>
             </div>
             <div class="kpi-numbers" style="margin-bottom:0;">
                 <div class="kpi-num">
