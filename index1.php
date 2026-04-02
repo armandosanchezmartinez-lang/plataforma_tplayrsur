@@ -94,8 +94,8 @@ if ($rol !== 'admin') {
     }
 }
 
-$mes_actual   = (int)date('n', strtotime('-1 day'));   // (int)date('n');
-$anio_query   = (int)date('Y', strtotime('-1 day'));   // (int)date('Y');
+$mes_actual   = (int)date('n', strtotime('-2 day'));   // (int)date('n');
+$anio_query   = (int)date('Y', strtotime('-2 day'));   // (int)date('Y');
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 $por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
