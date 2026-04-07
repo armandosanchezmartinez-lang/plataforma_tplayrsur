@@ -173,7 +173,7 @@ $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
 // ── META ─────────────────────────────────────────────────────────────────────
-$ayer_timestamp = strtotime('-2 day');
+$ayer_timestamp = strtotime('-1 day');
 
 $dia_ayer           = (int)date('j', $ayer_timestamp);    
 $mes_actual         = (int)date('n', $ayer_timestamp); // Usamos el mes de ayer para la consulta
