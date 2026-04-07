@@ -319,7 +319,7 @@ $roles_labels = [
         /* KPI GRID - AJUSTADO A 4 COLUMNAS EN UNA LÍNEA */
         .kpi-grid { display:grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap:20px; margin-bottom:24px; }
         .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: center; }
-        .kpi-card.full { grid-column: 1 / -1; } /* Hace que abarque todas las columnas disponibles (para Headcount) */
+        .kpi-card.full { grid-column: 1 / -1; }
         
         .kpi-header { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
         .kpi-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
@@ -360,7 +360,17 @@ $roles_labels = [
         .speedometer-centro-blanco { position: absolute; top: 22px; left: 22px; width: 176px; height: 176px; border-radius: 50%; background-color: var(--white); }
         .needle-pivote { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); width: 14px; height: 14px; background-color: var(--text); border-radius: 50%; z-index: 3; }
         .needle { position: absolute; bottom: 0px; left: calc(50% - 2px); width: 4px; height: 95px; background-color: var(--text); transform-origin: center bottom; transition: transform 1s ease-out; z-index: 2; border-radius: 2px; }
-        .porcentaje-sobre-arco { position: absolute; bottom: 10px; right: -15px; font-size: 1.1rem; font-weight: 800; z-index: 4; }
+        
+        /* AQUÍ ESTÁ EL AJUSTE DEL TEXTO CENTRADO */
+        .porcentaje-sobre-arco { 
+            position: absolute; 
+            bottom: 15px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            font-size: 1.4rem; 
+            font-weight: 800; 
+            z-index: 4; 
+        }
         
         .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
         .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
@@ -397,7 +407,6 @@ $roles_labels = [
     <div class="kpi-grid">
 
         <?php if ($mostrar_meta): 
-            // AQUÍ ESTÁ EL AJUSTE PARA EL LÍMITE DE 100% VISUAL
             $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 100); 
             $angulo_aguja = ($porcentaje_visual_aguja / 100 * 180) - 90;
             $color_porcentaje = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');

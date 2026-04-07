@@ -94,8 +94,8 @@ if ($rol !== 'admin') {
     }
 }
 
-$mes_actual   = (int)date('n', strtotime('-2 day'));   // (int)date('n');
-$anio_query   = (int)date('Y', strtotime('-2 day'));   // (int)date('Y');
+$mes_actual   = (int)date('n', strtotime('-2 day'));
+$anio_query   = (int)date('Y', strtotime('-2 day'));
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 $por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
@@ -174,17 +174,14 @@ $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) :
 
 // ── META ─────────────────────────────────────────────────────────────────────
 $ayer_timestamp = strtotime('-1 day');
-
 $dia_ayer           = (int)date('j', $ayer_timestamp);    
-$mes_actual         = (int)date('n', $ayer_timestamp); // Usamos el mes de ayer para la consulta
+$mes_actual         = (int)date('n', $ayer_timestamp); 
 $anio_query         = (int)date('Y', $ayer_timestamp); 
 $dias_transcurridos = $dia_ayer; 
 
-// 2. SEGUNDO: Inicializar variables de KPI
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
-// 3. TERCERO: Lógica de negocio y consultas
 if ($mostrar_meta) {
     if ($rol === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
@@ -194,7 +191,6 @@ if ($mostrar_meta) {
 
     if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
         $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
-        
         $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
         $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     }
@@ -320,13 +316,11 @@ $roles_labels = [
         .user-name { font-size:0.82rem; font-weight:700; }
         .user-role { font-size:0.7rem; color:var(--text2); }
 
-        /* KPI GRID */
-        .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
-        .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
-        .kpi-card.full { grid-column:span 2; }
-        .kpi-card.triple { grid-column:span 2; display:flex; padding:0; overflow:hidden; }
-        .kpi-section { flex:1; padding:22px 24px; }
-        .kpi-section:not(:last-child) { border-right:1px solid var(--border); }
+        /* KPI GRID - AJUSTADO A 4 COLUMNAS EN UNA LÍNEA */
+        .kpi-grid { display:grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap:20px; margin-bottom:24px; }
+        .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: center; }
+        .kpi-card.full { grid-column: 1 / -1; } /* Hace que abarque todas las columnas disponibles (para Headcount) */
+        
         .kpi-header { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
         .kpi-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
         .kpi-blue   { background:#e8f0fe; }
@@ -342,13 +336,7 @@ $roles_labels = [
         .kpi-val.purple { color:var(--purple); }
         .kpi-val.red    { color:var(--red); }
         .kpi-sub { font-size:0.7rem; color:var(--text2); margin-top:4px; font-weight:600; }
-        .progress-bar-wrap { margin-top:14px; }
-        .progress-bar-bg { background:#e2e8f4; border-radius:99px; height:10px; overflow:hidden; }
-        .progress-bar-fill { height:100%; border-radius:99px; transition:width 0.6s ease; }
-        .progress-bar-fill.good    { background:#10b981; }
-        .progress-bar-fill.warning { background:#f59e0b; }
-        .progress-bar-fill.danger  { background:#ef4444; }
-        .progress-labels { display:flex; justify-content:space-between; margin-top:6px; font-size:0.7rem; color:var(--text2); font-weight:600; }
+        
         .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
         .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .chart-title { font-size:0.88rem; font-weight:700; margin-bottom:16px; color:var(--text); }
@@ -358,25 +346,24 @@ $roles_labels = [
         .evo-wrap { position:relative; height:220px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
 
-        /* --- NUEVOS ESTILOS DEL VELOCÍMETRO --- */
-        .kpi-speed-layout { display: flex; align-items: flex-end; justify-content: space-around; gap: 20px; margin-top: 20px; }
-        .speedometer-container { position: relative; width: 220px; height: 110px; display: flex; justify-content: center; }
+        /* VELOCÍMETRO COMPACTO PARA FILA ÚNICA */
+        .kpi-speed-layout { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 10px; }
+        .speedometer-container { 
+            position: relative; width: 220px; height: 110px; display: flex; justify-content: center; 
+            transform: scale(0.85); transform-origin: left bottom; margin-bottom: -15px; 
+        }
         .speedometer-arco-mascara { position: absolute; top: 0; left: 0; width: 220px; height: 110px; border-radius: 110px 110px 0 0; overflow: hidden; }
         .speedometer-gradiente { 
             position: absolute; top: 0; left: 0; width: 220px; height: 220px; border-radius: 50%; 
-            /* 0% a 100% va de -90deg a +90deg. Colores: Rojo(0-45deg), Naranja(45-135deg), Verde(135-180deg) */
-            background: conic-gradient(from -90deg, 
-                var(--red) 0deg 45deg, 
-                #f59e0b 45deg 135deg, 
-                var(--green) 135deg 180deg, 
-                transparent 180deg 360deg); 
+            background: conic-gradient(from -90deg, var(--red) 0deg 45deg, #f59e0b 45deg 135deg, var(--green) 135deg 180deg, transparent 180deg 360deg); 
         }
         .speedometer-centro-blanco { position: absolute; top: 22px; left: 22px; width: 176px; height: 176px; border-radius: 50%; background-color: var(--white); }
         .needle-pivote { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); width: 14px; height: 14px; background-color: var(--text); border-radius: 50%; z-index: 3; }
         .needle { position: absolute; bottom: 0px; left: calc(50% - 2px); width: 4px; height: 95px; background-color: var(--text); transform-origin: center bottom; transition: transform 1s ease-out; z-index: 2; border-radius: 2px; }
         .porcentaje-sobre-arco { position: absolute; bottom: 10px; right: -15px; font-size: 1.1rem; font-weight: 800; z-index: 4; }
-        .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; height: 110px; }
-        .speed-val { font-size: 2.8rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
+        
+        .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
+        .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
     </style>
 </head>
 <body>
@@ -410,16 +397,15 @@ $roles_labels = [
     <div class="kpi-grid">
 
         <?php if ($mostrar_meta): 
-            // Cálculos específicos para el velocímetro
-            $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 180); // Evitar que la aguja dé la vuelta
+            // AQUÍ ESTÁ EL AJUSTE PARA EL LÍMITE DE 100% VISUAL
+            $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 100); 
             $angulo_aguja = ($porcentaje_visual_aguja / 100 * 180) - 90;
-            // Definir el color del porcentaje flotante (usando tus variables CSS)
             $color_porcentaje = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
         ?>
-        <div class="kpi-card full">
-            <div class="kpi-header">
-                <div class="kpi-icon kpi-orange">🎯</div>
-                <div class="kpi-label">Avance vs Meta — Día <?= $dias_transcurridos ?> de <?= date('t', strtotime('-1 day'))?></div>
+        <div class="kpi-card" style="padding-right: 15px;">
+            <div class="kpi-header" style="margin-bottom: 5px;">
+                <div class="kpi-icon kpi-orange" style="width: 32px; height: 32px;">🎯</div>
+                <div class="kpi-label">Avance vs Meta</div>
             </div>
             
             <div class="kpi-speed-layout">
@@ -437,52 +423,50 @@ $roles_labels = [
 
                 <div class="speed-numbers">
                     <span class="speed-val"><?= number_format($kpi_inst) ?></span>
-                    <span class="kpi-sub" style="font-size: 0.9rem; margin-bottom: 15px;">Instalaciones reales</span>
+                    <span class="kpi-sub" style="margin-bottom: 10px;">Instalaciones</span>
                     
-                    <div style="text-align: right;">
-                        <span class="kpi-val" style="color:#f59e0b; font-size: 1.4rem;"><?= number_format($kpi_meta_acum) ?></span><br>
-                        <span class="kpi-sub">Meta acumulada</span>
-                    </div>
+                    <span class="kpi-val" style="color:#f59e0b; font-size: 1.3rem;"><?= number_format($kpi_meta_acum) ?></span>
+                    <span class="kpi-sub">Meta (Día <?= $dias_transcurridos ?>)</span>
                 </div>
             </div>
         </div>
         <?php endif; ?>
 
-        <div class="kpi-card triple">
-            <div class="kpi-section">
-                <div class="kpi-header">
-                    <div class="kpi-icon kpi-blue">🔧</div>
-                    <div class="kpi-label">Instalaciones</div>
-                </div>
-                <div class="kpi-numbers">
-                    <div class="kpi-num">
-                        <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
-                        <span class="kpi-sub">del mes</span>
-                    </div>
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-blue">🔧</div>
+                <div class="kpi-label">Instalaciones</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
+                    <span class="kpi-sub">del mes</span>
                 </div>
             </div>
-            <div class="kpi-section">
-                <div class="kpi-header">
-                    <div class="kpi-icon kpi-green">📈</div>
-                    <div class="kpi-label">Ventas</div>
-                </div>
-                <div class="kpi-numbers">
-                    <div class="kpi-num">
-                        <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
-                        <span class="kpi-sub">del mes</span>
-                    </div>
+        </div>
+        
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-green">📈</div>
+                <div class="kpi-label">Ventas</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
+                    <span class="kpi-sub">del mes</span>
                 </div>
             </div>
-            <div class="kpi-section">
-                <div class="kpi-header">
-                    <div class="kpi-icon kpi-green">🔄</div>
-                    <div class="kpi-label">Conversión</div>
-                </div>
-                <div class="kpi-numbers">
-                    <div class="kpi-num">
-                        <span class="kpi-val green"><?= number_format($kpi_conv, 1) ?>%</span>
-                        <span class="kpi-sub">del mes</span>
-                    </div>
+        </div>
+        
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-green">🔄</div>
+                <div class="kpi-label">Conversión</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val green"><?= number_format($kpi_conv, 1) ?>%</span>
+                    <span class="kpi-sub">del mes</span>
                 </div>
             </div>
         </div>
