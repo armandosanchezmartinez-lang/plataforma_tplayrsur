@@ -246,7 +246,13 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
         .search-bar { margin-bottom:16px; }
         .search-input { width:100%; max-width:380px; padding:10px 16px 10px 40px; border:1px solid var(--border); border-radius:10px; font-size:0.9rem; background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236b7a99' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.156a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z'/%3E%3C/svg%3E") no-repeat 12px center; outline:none; }
         .search-input:focus { border-color:var(--blue); }
-        .table-card { background:var(--white); border-radius:16px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); overflow:hidden; }
+        .table-card { 
+            background: var(--white); 
+            border-radius: 16px; 
+            border: 1px solid var(--border); 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04); 
+            overflow-x: auto; /* Esto habilita la barra espaciadora horizontal */
+        }
         table { width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap; }
         thead tr:first-child th { background:#1d4ed8; color:white; padding:10px 12px; font-weight:700; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.5px; text-align:center; }
         thead tr:last-child th { background:var(--blue); color:white; padding:8px 12px; font-weight:700; font-size:0.7rem; text-transform:uppercase; text-align:center; }
