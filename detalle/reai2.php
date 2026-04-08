@@ -2,35 +2,295 @@
 ini_set('display_errors', 0);
 error_reporting(0);
 header("Cache-Control: no-cache, no-store, must-revalidate");
+header("Pragma: no-cache");
+header("Expires: 0");
 session_start();
 if (!isset($_SESSION['usuario'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
-include '../conexion.php';
+include 'conexion.php';
 
-$rol              = $_SESSION['rol'] ?? 'vendedor';
-$id_posicion      = $_SESSION['id_posicion'] ?? '';
-$talento_gs_coach = $_SESSION['numero_talento_gs'] ?? '';
-$puestos_comerciales = ['PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGOCIOS','VENDEDOR NEGOCIO'];
-$puestos_in = "'" . implode("','", $puestos_comerciales) . "'";
+$rol            = $_SESSION['rol'] ?? 'vendedor';
+$talento_gs     = $_SESSION['numero_talento_gs'] ?? '';
+$id_posicion    = $_SESSION['id_posicion'] ?? '';
+$nombre_usuario = $_SESSION['usuario'] ?? '';
 
-// Semana y año más recientes
-$semana_actual = null; $anio_actual = null;
-$res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
-if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
-    $semana_actual = (int)$row_sem['semana'];
-    $anio_actual   = (int)$row_sem['anio'];
+$puestos_comerciales = "'PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGOCIOS','VENDEDOR NEGOCIO'";
+
+function getSubordinados($conexion, $id_pos, $semana = null, $anio = null) {
+    $ids = [];
+    if ($semana && $anio) {
+        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr = ? AND numero_talento_gs NOT LIKE '%VACANTE%' AND semana = ? AND anio = ?");
+        mysqli_stmt_bind_param($stmt, "sii", $id_pos, $semana, $anio);
+    } else {
+        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr = ? AND numero_talento_gs NOT LIKE '%VACANTE%'");
+        mysqli_stmt_bind_param($stmt, "s", $id_pos);
+    }
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    while ($row = mysqli_fetch_assoc($res)) $ids[] = $row['id_posicion'];
+    mysqli_stmt_close($stmt);
+    return $ids;
 }
 
-$mes_actual = (int)date('n');
-$anio_query = (int)date('Y');
+function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = null, $anio = null) {
+    if ($niveles_restantes <= 0) return [];
+    $directos = getSubordinados($conexion, $id_pos, $semana, $anio);
+    $todos = $directos;
+    foreach ($directos as $id) {
+        $sub = getTodosSubordinados($conexion, $id, $niveles_restantes - 1, $semana, $anio);
+        $todos = array_merge($todos, $sub);
+    }
+    return array_unique($todos);
+}
 
-// Día vencido: ayer
-$fecha_dia_actual  = date('Y-m-d', strtotime('-1 day'));
-// Misma semana anterior: mismo día de la semana pasada
-$fecha_dia_anterior = date('Y-m-d', strtotime('-8 days'));
+$semana_actual = null; $anio_actual = null; $semana_base = null;
+$res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
+if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
+    $semana_base   = (int)$row_sem['semana'];
+    $anio_actual   = (int)$row_sem['anio'];
+    $semana_actual = $semana_base;
+}
+
+$niveles = ['admin'=>6,'director_regional'=>5,'director_distrital'=>4,'lider'=>3,'coach'=>2,'vendedor'=>1];
+$nivel   = $niveles[$rol] ?? 1;
+
+$nombre_completo  = $nombre_usuario;
+$posicion_usuario = '';
+$distrito_usuario = '';
+
+$stmt_nombre = mysqli_prepare($conexion, "SELECT nombre_colaborador, posicion, distrito FROM hc WHERE id_posicion = ? LIMIT 1");
+if ($stmt_nombre) {
+    mysqli_stmt_bind_param($stmt_nombre, "s", $id_posicion);
+    mysqli_stmt_execute($stmt_nombre);
+    $res_nombre = mysqli_stmt_get_result($stmt_nombre);
+    if ($row_nombre = mysqli_fetch_assoc($res_nombre)) {
+        $nombre_completo  = $row_nombre['nombre_colaborador'] ?? $nombre_usuario;
+        $posicion_usuario = $row_nombre['posicion'] ?? '';
+        $distrito_usuario = $row_nombre['distrito'] ?? '';
+    }
+    mysqli_stmt_close($stmt_nombre);
+}
+
+$subordinados_ids = [];
+$folio_ids        = [];
+
+if ($rol !== 'admin') {
+    $subordinados_ids = getTodosSubordinados($conexion, $id_posicion, $nivel, $semana_actual, $anio_actual);
+    $subordinados_ids[] = $id_posicion;
+    $subordinados_ids = array_unique(array_values($subordinados_ids));
+
+    if (!empty($subordinados_ids)) {
+        $ph_sub = implode(',', array_fill(0, count($subordinados_ids), '?'));
+        $stmt_folios = mysqli_prepare($conexion, "SELECT DISTINCT numero_talento_gs FROM hc WHERE id_posicion IN ($ph_sub) AND numero_talento_gs NOT LIKE '%VACANTE%'");
+        $tipos_sub = str_repeat('s', count($subordinados_ids));
+        mysqli_stmt_bind_param($stmt_folios, $tipos_sub, ...array_values($subordinados_ids));
+        mysqli_stmt_execute($stmt_folios);
+        $res_folios = mysqli_stmt_get_result($stmt_folios);
+        while ($row_f = mysqli_fetch_assoc($res_folios)) $folio_ids[] = $row_f['numero_talento_gs'];
+        mysqli_stmt_close($stmt_folios);
+    }
+}
+
+$mes_actual   = (int)date('n', strtotime('-2 day'));
+$anio_query   = (int)date('Y', strtotime('-2 day'));
+$distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
+
+$por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
+$mostrar_meta = $por_distrito;
+
+// ── INSTALACIONES ────────────────────────────────────────────────────────────
+if ($rol === 'admin') {
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
+} elseif ($por_distrito) {
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
+} else {
+    if (empty($folio_ids)) {
+        $r_inst = mysqli_query($conexion, "SELECT 0 as total");
+    } else {
+        $ph = implode(',', array_fill(0, count($folio_ids), '?'));
+        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $tipos = 'ii' . str_repeat('s', count($folio_ids));
+        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        mysqli_stmt_bind_param($stmt_inst, $tipos, ...$bind);
+        mysqli_stmt_execute($stmt_inst);
+        $r_inst = mysqli_stmt_get_result($stmt_inst);
+    }
+}
+$kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
+
+// ── VENTAS ───────────────────────────────────────────────────────────────────
+if ($rol === 'admin') {
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
+} elseif ($por_distrito) {
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
+} else {
+    if (empty($folio_ids)) {
+        $r_vent = mysqli_query($conexion, "SELECT 0 as total");
+    } else {
+        $ph = implode(',', array_fill(0, count($folio_ids), '?'));
+        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
+        $tipos = 'ii' . str_repeat('s', count($folio_ids));
+        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        mysqli_stmt_bind_param($stmt_vent, $tipos, ...$bind);
+        mysqli_stmt_execute($stmt_vent);
+        $r_vent = mysqli_stmt_get_result($stmt_vent);
+    }
+}
+$kpi_vent = $r_vent ? (mysqli_fetch_assoc($r_vent)['total'] ?? 0) : 0;
+$kpi_conv = ($kpi_vent > 0) ? round(($kpi_inst / $kpi_vent) * 100, 1) : 0;
+
+// ── HC ───────────────────────────────────────────────────────────────────────
+$kpi_hc_act = 0; $kpi_hc_vac = 0;
+if ($semana_actual && $anio_actual) {
+    if ($rol === 'admin') {
+        $r_hc_act = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs NOT LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
+        $r_hc_vac = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
+    } else {
+        if (!empty($subordinados_ids)) {
+            $ph = implode(',', array_fill(0, count($subordinados_ids), '?'));
+            $stmt_act = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs NOT LIKE '%VACANTE%' AND semana=? AND anio=? AND posicion IN ($puestos_comerciales) AND id_posicion IN ($ph)");
+            $tipos = 'ii' . str_repeat('s', count($subordinados_ids));
+            $bind  = array_merge([$semana_actual, $anio_actual], array_values($subordinados_ids));
+            mysqli_stmt_bind_param($stmt_act, $tipos, ...$bind);
+            mysqli_stmt_execute($stmt_act);
+            $r_hc_act = mysqli_stmt_get_result($stmt_act);
+            $stmt_vac = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs LIKE '%VACANTE%' AND semana=? AND anio=? AND posicion IN ($puestos_comerciales) AND posicion_lr IN ($ph)");
+            mysqli_stmt_bind_param($stmt_vac, $tipos, ...$bind);
+            mysqli_stmt_execute($stmt_vac);
+            $r_hc_vac = mysqli_stmt_get_result($stmt_vac);
+        } else {
+            $r_hc_act = mysqli_query($conexion, "SELECT 0 as total");
+            $r_hc_vac = mysqli_query($conexion, "SELECT 0 as total");
+        }
+    }
+    $kpi_hc_act = $r_hc_act ? (mysqli_fetch_assoc($r_hc_act)['total'] ?? 0) : 0;
+    $kpi_hc_vac = $r_hc_vac ? (mysqli_fetch_assoc($r_hc_vac)['total'] ?? 0) : 0;
+}
+$kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
+$kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
+
+// ── META ─────────────────────────────────────────────────────────────────────
+$ayer_timestamp = strtotime('-1 day');
+$dia_ayer           = (int)date('j', $ayer_timestamp);    
+$mes_actual         = (int)date('n', $ayer_timestamp); 
+$anio_query         = (int)date('Y', $ayer_timestamp); 
+$dias_transcurridos = $dia_ayer; 
+
+$kpi_meta_acum      = 0;
+$kpi_meta_pct       = 0;
+
+if ($mostrar_meta) {
+    if ($rol === 'admin') {
+        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
+    } else {
+        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito='$distrito_esc'");
+    }
+
+    if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
+        $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
+        $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
+        $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
+    }
+}
+
+// ── MIX INSTALACIONES ────────────────────────────────────────────────────────
+if ($rol === 'admin') {
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
+} elseif ($por_distrito) {
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
+} else {
+    if (empty($folio_ids)) {
+        $r_mix_inst = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
+    } else {
+        $ph = implode(',', array_fill(0, count($folio_ids), '?'));
+        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $tipos = 'ii' . str_repeat('s', count($folio_ids));
+        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        mysqli_stmt_bind_param($stmt_mix, $tipos, ...$bind);
+        mysqli_stmt_execute($stmt_mix);
+        $r_mix_inst = mysqli_stmt_get_result($stmt_mix);
+    }
+}
+$mix_inst = $r_mix_inst ? mysqli_fetch_assoc($r_mix_inst) : ['p3'=>0,'p2'=>0];
+$inst_3p = (int)($mix_inst['p3'] ?? 0);
+$inst_2p = (int)($mix_inst['p2'] ?? 0);
+
+// ── MIX VENTAS ───────────────────────────────────────────────────────────────
+if ($rol === 'admin') {
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
+} elseif ($por_distrito) {
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
+} else {
+    if (empty($folio_ids)) {
+        $r_mix_vent = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
+    } else {
+        $ph = implode(',', array_fill(0, count($folio_ids), '?'));
+        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
+        $tipos = 'ii' . str_repeat('s', count($folio_ids));
+        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        mysqli_stmt_bind_param($stmt_mix_v, $tipos, ...$bind);
+        mysqli_stmt_execute($stmt_mix_v);
+        $r_mix_vent = mysqli_stmt_get_result($stmt_mix_v);
+    }
+}
+$mix_vent = $r_mix_vent ? mysqli_fetch_assoc($r_mix_vent) : ['p3'=>0,'p2'=>0];
+$vent_3p = (int)($mix_vent['p3'] ?? 0);
+$vent_2p = (int)($mix_vent['p2'] ?? 0);
+
+// ── EVOLUCIÓN 6 MESES POR CANAL ─────────────────────────────────────────────
+$meses_labels = [];
+$canales = ['Cambaceo','Punto de Venta','Call Center','eCommerce','Venta Digital','Winback','Desarrollos','Distribuidor','Autoempresarios Autorizados','Otro'];
+
+// Inicializar arrays por canal
+$evo_inst_canal = [];
+$evo_vent_canal = [];
+foreach ($canales as $c) {
+    $evo_inst_canal[$c] = [];
+    $evo_vent_canal[$c] = [];
+}
+
+for ($i = 5; $i >= 0; $i--) {
+    $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
+    $m  = (int)date('n', $ts);
+    $a  = (int)date('Y', $ts);
+    $meses_labels[] = date('M Y', $ts);
+
+    // Instalaciones por origen_prospecto
+    $filtro_inst = $rol === 'admin' ? "" : ($por_distrito ? "AND distrito='$distrito_esc'" : "");
+    $sql_inst_canal = "SELECT COALESCE(NULLIF(NULLIF(origen_prospecto,''),'-'),'Otro') as canal, COUNT(cuenta) as t
+                       FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a $filtro_inst
+                       GROUP BY canal";
+    $res_ic = mysqli_query($conexion, $sql_inst_canal);
+    $inst_por_canal = [];
+    while ($row = mysqli_fetch_assoc($res_ic)) {
+        $k = in_array($row['canal'], $canales) ? $row['canal'] : 'Otro';
+        $inst_por_canal[$k] = ($inst_por_canal[$k] ?? 0) + (int)$row['t'];
+    }
+
+    // Ventas por canal_venta
+    $filtro_vent = $rol === 'admin' ? "" : ($por_distrito ? "AND distrito='$distrito_esc'" : "");
+    $sql_vent_canal = "SELECT COALESCE(NULLIF(NULLIF(canal_venta,''),'-'),'Otro') as canal, COUNT(*) as t
+                       FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a $filtro_vent
+                       GROUP BY canal";
+    $res_vc = mysqli_query($conexion, $sql_vent_canal);
+    $vent_por_canal = [];
+    while ($row = mysqli_fetch_assoc($res_vc)) {
+        $k = in_array($row['canal'], $canales) ? $row['canal'] : 'Otro';
+        $vent_por_canal[$k] = ($vent_por_canal[$k] ?? 0) + (int)$row['t'];
+    }
+
+    foreach ($canales as $c) {
+        $evo_inst_canal[$c][] = $inst_por_canal[$c] ?? 0;
+        $evo_vent_canal[$c][] = $vent_por_canal[$c] ?? 0;
+    }
+}
+
+// Filtrar canales sin datos en ningún mes
+$canales_inst_activos = array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0);
+$canales_vent_activos = array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0);
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -40,193 +300,17 @@ $roles_labels = [
     'coach'              => 'Coach',
     'vendedor'           => 'Vendedor',
 ];
-
-$puede_capturar = ($rol === 'coach');
-
-// ── HISTORIAL AJAX ────────────────────────────────────────────────────────────
-if (isset($_GET['action']) && $_GET['action'] === 'historial') {
-    $talento = mysqli_real_escape_string($conexion, $_GET['talento_gs'] ?? '');
-    $res = mysqli_query($conexion, "SELECT * FROM reai WHERE numero_talento_gs = '$talento' ORDER BY fecha DESC, created_at DESC");
-    $registros = [];
-    while ($row = mysqli_fetch_assoc($res)) $registros[] = $row;
-    header('Content-Type: application/json');
-    echo json_encode($registros);
-    exit();
-}
-
-// ── GUARDAR REAI ─────────────────────────────────────────────────────────────
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puede_capturar && isset($_POST['action']) && $_POST['action'] === 'guardar') {
-    $talento_vendedor = mysqli_real_escape_string($conexion, $_POST['numero_talento_gs'] ?? '');
-    $nombre_vendedor  = mysqli_real_escape_string($conexion, $_POST['nombre_colaborador'] ?? '');
-    $asunto           = $_POST['asunto'] ?? '';
-    $fecha            = $_POST['fecha'] ?? '';
-    $descripcion      = mysqli_real_escape_string($conexion, $_POST['descripcion'] ?? '');
-    $evidencia_nombre = '';
-    $asuntos_validos  = ['Retroalimentación','ECNUs','Acta Administrativa','Incidencia'];
-
-    if (!in_array($asunto, $asuntos_validos)) {
-        echo json_encode(['status'=>'error','msg'=>'Asunto no válido']); exit();
-    }
-    if (!empty($_FILES['evidencia']['name'])) {
-        $ext     = pathinfo($_FILES['evidencia']['name'], PATHINFO_EXTENSION);
-        $allowed = ['jpg','jpeg','png','pdf','doc','docx'];
-        if (in_array(strtolower($ext), $allowed)) {
-            $upload_dir = '../uploads/reai/';
-            if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
-            $nombre_archivo = time() . '_' . preg_replace('/[^a-zA-Z0-9._]/', '_', $_FILES['evidencia']['name']);
-            if (move_uploaded_file($_FILES['evidencia']['tmp_name'], $upload_dir . $nombre_archivo)) {
-                $evidencia_nombre = $nombre_archivo;
-            }
-        } else {
-            echo json_encode(['status'=>'error','msg'=>'Formato no permitido']); exit();
-        }
-    }
-    $asunto_esc = mysqli_real_escape_string($conexion, $asunto);
-    $sql = "INSERT INTO reai (numero_talento_gs, nombre_colaborador, asunto, fecha, descripcion, evidencia, capturado_por, talento_gs_coach, id_posicion_coach)
-            VALUES ('$talento_vendedor','$nombre_vendedor','$asunto_esc','$fecha','$descripcion','$evidencia_nombre','$talento_gs_coach','$talento_gs_coach','$id_posicion')";
-    if (mysqli_query($conexion, $sql)) {
-        echo json_encode(['status'=>'ok','msg'=>'Registro guardado correctamente']);
-    } else {
-        echo json_encode(['status'=>'error','msg'=>'Error: '.mysqli_error($conexion)]);
-    }
-    exit();
-}
-
-// ── OBTENER VENDEDORES SEGÚN JERARQUÍA ────────────────────────────────────────
-$vendedores = [];
-if ($semana_actual && $anio_actual) {
-    if ($rol === 'coach') {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) as antiguedad,
-                     c.nombre_colaborador as nombre_coach, c.numero_talento_gs as talento_coach
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     WHERE v.posicion_lr = ? AND v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_actual, $anio_actual);
-    } elseif ($rol === 'lider') {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) as antiguedad,
-                     c.nombre_colaborador as nombre_coach, c.numero_talento_gs as talento_coach
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     WHERE c.posicion_lr = ? AND v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY c.nombre_colaborador, v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_actual, $anio_actual);
-    } elseif ($rol === 'director_distrital') {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) as antiguedad,
-                     c.nombre_colaborador as nombre_coach, c.numero_talento_gs as talento_coach
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     INNER JOIN hc l ON c.posicion_lr = l.id_posicion AND l.semana = v.semana AND l.anio = v.anio
-                     WHERE l.posicion_lr = ? AND v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY l.nombre_colaborador, c.nombre_colaborador, v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_actual, $anio_actual);
-    } else {
-        // admin / director_regional
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) as antiguedad,
-                     c.nombre_colaborador as nombre_coach, c.numero_talento_gs as talento_coach
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     WHERE v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY c.nombre_colaborador, v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "ii", $semana_actual, $anio_actual);
-    }
-    mysqli_stmt_execute($stmt);
-    $res_vend = mysqli_stmt_get_result($stmt);
-    while ($row = mysqli_fetch_assoc($res_vend)) $vendedores[] = $row;
-    mysqli_stmt_close($stmt);
-}
-
-// ── VENTAS E INSTALACIONES POR VENDEDOR ──────────────────────────────────────
-$stats = [];
-if (!empty($vendedores)) {
-    $talentos = array_column($vendedores, 'numero_talento_gs');
-    $ph = implode(',', array_fill(0, count($talentos), '?'));
-    $tipos = str_repeat('s', count($talentos));
-
-    // Ventas del mes
-    $stmt_vm = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_vm, 'ii'.$tipos, $mes_actual, $anio_query, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_vm);
-    $res_vm = mysqli_stmt_get_result($stmt_vm);
-    while ($r = mysqli_fetch_assoc($res_vm)) $stats[$r['folio_empleado']]['ventas_mes'] = $r['total'];
-    mysqli_stmt_close($stmt_vm);
-
-    // Ventas día vencido (ayer)
-    $stmt_vd = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(*) as total FROM ventas WHERE DATE(fecha_cierre)=? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_vd, 's'.$tipos, $fecha_dia_actual, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_vd);
-    $res_vd = mysqli_stmt_get_result($stmt_vd);
-    while ($r = mysqli_fetch_assoc($res_vd)) $stats[$r['folio_empleado']]['ventas_dia'] = $r['total'];
-    mysqli_stmt_close($stmt_vd);
-
-    // Ventas semana anterior (mismo día -7)
-    $stmt_vs = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(*) as total FROM ventas WHERE DATE(fecha_cierre)=? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_vs, 's'.$tipos, $fecha_dia_anterior, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_vs);
-    $res_vs = mysqli_stmt_get_result($stmt_vs);
-    while ($r = mysqli_fetch_assoc($res_vs)) $stats[$r['folio_empleado']]['ventas_sem_ant'] = $r['total'];
-    mysqli_stmt_close($stmt_vs);
-
-    // Instalaciones del mes
-    $stmt_im = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_im, 'ii'.$tipos, $mes_actual, $anio_query, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_im);
-    $res_im = mysqli_stmt_get_result($stmt_im);
-    while ($r = mysqli_fetch_assoc($res_im)) $stats[$r['folio_empleado']]['inst_mes'] = $r['total'];
-    mysqli_stmt_close($stmt_im);
-
-    // Instalaciones día vencido
-    $stmt_id = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) as total FROM instalaciones WHERE DATE(fecha)=? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_id, 's'.$tipos, $fecha_dia_actual, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_id);
-    $res_id = mysqli_stmt_get_result($stmt_id);
-    while ($r = mysqli_fetch_assoc($res_id)) $stats[$r['folio_empleado']]['inst_dia'] = $r['total'];
-    mysqli_stmt_close($stmt_id);
-
-    // Instalaciones semana anterior
-    $stmt_is = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) as total FROM instalaciones WHERE DATE(fecha)=? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_is, 's'.$tipos, $fecha_dia_anterior, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_is);
-    $res_is = mysqli_stmt_get_result($stmt_is);
-    while ($r = mysqli_fetch_assoc($res_is)) $stats[$r['folio_empleado']]['inst_sem_ant'] = $r['total'];
-    mysqli_stmt_close($stmt_is);
-
-    // REAI counts
-    $stmt_rc = mysqli_prepare($conexion, "SELECT numero_talento_gs, asunto, COUNT(*) as total FROM reai WHERE numero_talento_gs IN ($ph) GROUP BY numero_talento_gs, asunto");
-    mysqli_stmt_bind_param($stmt_rc, $tipos, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_rc);
-    $res_rc = mysqli_stmt_get_result($stmt_rc);
-    while ($r = mysqli_fetch_assoc($res_rc)) $stats[$r['numero_talento_gs']]['reai'][$r['asunto']] = $r['total'];
-    mysqli_stmt_close($stmt_rc);
-}
-
-$label_dia_act = date('d/m', strtotime($fecha_dia_actual));
-$label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2 — TOTALXPEDIENT</title>
+    <title>Dashboard — TOTALXPEDIENT</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
     <style>
-        :root { --blue:#2b57a7; --bg:#f4f6fb; --white:#fff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --red:#ef4444; --sidebar:200px; }
+        :root { --blue:#2b57a7; --blue2:#3b66b8; --bg:#f4f6fb; --white:#ffffff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --purple:#7c3aed; --red:#ef4444; --sidebar:200px; }
         * { box-sizing:border-box; margin:0; padding:0; }
         body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
         .sidebar { width:var(--sidebar); background:var(--blue); min-height:100vh; position:fixed; top:0; left:0; display:flex; flex-direction:column; align-items:center; padding:28px 0; z-index:100; }
@@ -236,334 +320,328 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
         .nav-item:hover,.nav-item.active { color:white; background:rgba(255,255,255,0.12); }
         .nav-icon { font-size:1.3rem; }
         .sidebar-bottom { margin-top:auto; width:100%; padding:0 12px; }
-        .logout-btn { display:block; text-align:center; padding:10px; border-radius:8px; color:rgba(255,255,255,0.6); text-decoration:none; font-size:0.78rem; font-weight:600; }
+        .logout-btn { display:block; text-align:center; padding:10px; border-radius:8px; color:rgba(255,255,255,0.6); text-decoration:none; font-size:0.78rem; font-weight:600; transition:all 0.2s; }
         .logout-btn:hover { background:rgba(255,255,255,0.1); color:white; }
-        .main { margin-left:var(--sidebar); flex:1; padding:32px; min-width:0; }
-        .table-card { overflow-x:auto; }
-        .page-header { margin-bottom:20px; }
-        .page-header h2 { font-size:1.5rem; font-weight:700; }
+        .main { margin-left:var(--sidebar); flex:1; padding:32px; }
+        .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:28px; }
+        .page-header h2 { font-size:1.5rem; font-weight:700; letter-spacing:-0.5px; }
         .page-header p { font-size:0.82rem; color:var(--text2); margin-top:2px; }
-        .search-bar { margin-bottom:16px; }
-        .search-input { width:100%; max-width:380px; padding:10px 16px 10px 40px; border:1px solid var(--border); border-radius:10px; font-size:0.9rem; background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236b7a99' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.156a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z'/%3E%3C/svg%3E") no-repeat 12px center; outline:none; }
-        .search-input:focus { border-color:var(--blue); }
-        .table-card { background:var(--white); border-radius:16px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); overflow:hidden; }
-        table { width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap; }
-        thead tr:first-child th { background:#1d4ed8; color:white; padding:10px 12px; font-weight:700; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.5px; text-align:center; }
-        thead tr:last-child th { background:var(--blue); color:white; padding:8px 12px; font-weight:700; font-size:0.7rem; text-transform:uppercase; text-align:center; }
-        thead th.left { text-align:left; }
-        tbody tr { border-bottom:1px solid var(--border); }
-        tbody tr:last-child { border-bottom:none; }
-        tbody tr:hover td { background:#f8faff; }
-        td { padding:10px 12px; vertical-align:middle; text-align:center; }
-        td.left { text-align:left; }
-        .sub-text { font-size:0.68rem; color:var(--text2); margin-top:2px; }
-        .num-pos { color:var(--green); font-weight:700; }
-        .num-neg { color:var(--red); font-weight:700; }
-        .num-neu { color:var(--text2); font-weight:600; }
-        .diff-badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:0.7rem; font-weight:700; }
-        .diff-pos { background:#d1fae5; color:#065f46; }
-        .diff-neg { background:#fee2e2; color:#991b1b; }
-        .diff-neu { background:#f4f6fb; color:#6b7a99; }
-        .reai-badge { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:7px; font-size:0.7rem; font-weight:700; cursor:pointer; border:none; transition:all 0.15s; }
-        .reai-badge.has-data { background:#e8f0fe; color:var(--blue); }
-        .reai-badge.no-data  { background:#f4f6fb; color:#d1d5db; cursor:default; }
-        .reai-badge.can-add  { background:#f0fdf4; color:#059669; }
-        .reai-badge:hover:not(.no-data) { transform:scale(1.15); }
-        .sep { border-left:2px solid var(--border); }
-        .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center; }
-        .modal-overlay.open { display:flex; }
-        .modal { background:white; border-radius:16px; padding:28px; width:100%; max-width:520px; box-shadow:0 20px 60px rgba(0,0,0,0.2); max-height:90vh; overflow-y:auto; }
-        .modal-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; }
-        .modal-title { font-size:1rem; font-weight:700; line-height:1.3; }
-        .modal-close { background:none; border:none; font-size:1.4rem; cursor:pointer; color:var(--text2); flex-shrink:0; margin-left:12px; }
-        .form-group { margin-bottom:16px; }
-        .form-group label { display:block; font-size:0.78rem; font-weight:700; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
-        .form-group select,.form-group input,.form-group textarea { width:100%; padding:10px 14px; border:1px solid var(--border); border-radius:8px; font-size:0.9rem; font-family:inherit; outline:none; }
-        .form-group textarea { resize:vertical; min-height:80px; }
-        .btn-primary { width:100%; padding:12px; background:var(--blue); color:white; border:none; border-radius:8px; font-size:0.95rem; font-weight:700; cursor:pointer; }
-        .btn-primary:disabled { background:#9ca3af; cursor:not-allowed; }
-        .historial-item { border:1px solid var(--border); border-radius:10px; padding:14px; margin-bottom:10px; }
-        .historial-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-        .historial-asunto { font-size:0.78rem; font-weight:700; padding:3px 10px; border-radius:20px; }
-        .asunto-r { background:#dbeafe; color:#1d4ed8; }
-        .asunto-e { background:#fef3c7; color:#92400e; }
-        .asunto-a { background:#fee2e2; color:#991b1b; }
-        .asunto-i { background:#f3e8ff; color:#6b21a8; }
-        .historial-fecha { font-size:0.75rem; color:var(--text2); }
-        .historial-desc { font-size:0.82rem; margin-top:6px; }
-        .historial-evidencia a { font-size:0.78rem; color:var(--blue); text-decoration:none; font-weight:600; }
-        .divider { border:none; border-top:1px solid var(--border); margin:20px 0; }
-        .section-label { font-size:0.78rem; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:14px; font-weight:700; }
-        .toast { position:fixed; bottom:24px; right:24px; padding:12px 20px; border-radius:10px; font-size:0.85rem; font-weight:600; z-index:9999; display:none; color:white; }
-        .toast.show { display:block; }
-        .toast.success { background:#065f46; }
-        .toast.error   { background:#991b1b; }
-        .hidden { display:none; }
-        .empty-state { text-align:center; padding:48px; color:var(--text2); }
+        .user-badge { display:flex; align-items:center; gap:10px; background:var(--white); border:1px solid var(--border); border-radius:50px; padding:8px 16px 8px 8px; }
+        .user-avatar { width:34px; height:34px; border-radius:50%; background:var(--blue); color:white; display:flex; align-items:center; justify-content:center; font-size:0.8rem; font-weight:700; }
+        .user-name { font-size:0.82rem; font-weight:700; }
+        .user-role { font-size:0.7rem; color:var(--text2); }
+
+        /* KPI GRID - AJUSTADO A 4 COLUMNAS EN UNA LÍNEA */
+        .kpi-grid { display:grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap:20px; margin-bottom:24px; }
+        .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: center; }
+        .kpi-card.full { grid-column: 1 / -1; }
+        
+        .kpi-header { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+        .kpi-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
+        .kpi-blue   { background:#e8f0fe; }
+        .kpi-green  { background:#e6faf3; }
+        .kpi-purple { background:#f0ebff; }
+        .kpi-orange { background:#fff7ed; }
+        .kpi-label { font-size:0.88rem; font-weight:700; }
+        .kpi-numbers { display:flex; gap:28px; }
+        .kpi-num { display:flex; flex-direction:column; }
+        .kpi-val { font-size:1.9rem; font-weight:800; letter-spacing:-1px; line-height:1; }
+        .kpi-val.blue   { color:var(--blue2); }
+        .kpi-val.green  { color:var(--green); }
+        .kpi-val.purple { color:var(--purple); }
+        .kpi-val.red    { color:var(--red); }
+        .kpi-sub { font-size:0.7rem; color:var(--text2); margin-top:4px; font-weight:600; }
+        
+        .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
+        .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
+        .chart-title { font-size:0.88rem; font-weight:700; margin-bottom:16px; color:var(--text); }
+        .chart-wrap { position:relative; height:200px; }
+        .evo-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
+        .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
+        .evo-wrap { position:relative; height:220px; }
+        .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
+
+        /* VELOCÍMETRO COMPACTO PARA FILA ÚNICA */
+        .kpi-speed-layout { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 10px; }
+        .speedometer-container { 
+            position: relative; width: 220px; height: 110px; display: flex; justify-content: center; 
+            transform: scale(0.85); transform-origin: left bottom; margin-bottom: -15px; 
+        }
+        .speedometer-arco-mascara { position: absolute; top: 0; left: 0; width: 220px; height: 110px; border-radius: 110px 110px 0 0; overflow: hidden; }
+        .speedometer-gradiente { 
+            position: absolute; top: 0; left: 0; width: 220px; height: 220px; border-radius: 50%; 
+            background: conic-gradient(from -90deg, var(--red) 0deg 45deg, #f59e0b 45deg 135deg, var(--green) 135deg 180deg, transparent 180deg 360deg); 
+        }
+        .speedometer-centro-blanco { position: absolute; top: 22px; left: 22px; width: 176px; height: 176px; border-radius: 50%; background-color: var(--white); }
+        .needle-pivote { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); width: 14px; height: 14px; background-color: var(--text); border-radius: 50%; z-index: 3; }
+        .needle { position: absolute; bottom: 0px; left: calc(50% - 2px); width: 4px; height: 95px; background-color: var(--text); transform-origin: center bottom; transition: transform 1s ease-out; z-index: 2; border-radius: 2px; }
+        
+        /* AQUÍ ESTÁ EL AJUSTE DEL TEXTO CENTRADO */
+        .porcentaje-sobre-arco { 
+            position: absolute; 
+            bottom: 15px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            font-size: 1.4rem; 
+            font-weight: 800; 
+            z-index: 4; 
+        }
+        
+        .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
+        .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
     </style>
 </head>
 <body>
 <aside class="sidebar">
     <div class="sidebar-logo">📊</div>
     <div class="sidebar-brand">TOTALXPEDIENT</div>
-    <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
-    <a href="../import/import_instalaciones.php" class="nav-item"><span class="nav-icon">🔧</span> Instalaciones</a>
-    <a href="../import/import_ventas.php" class="nav-item"><span class="nav-icon">📈</span> Ventas</a>
-    <a href="hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
-    <a href="reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
-    <a href="reai_v2.php" class="nav-item active"><span class="nav-icon">📊</span> REAI v2</a>
+    <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
+    <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <a href="detalle/reai_v2.php" class="nav-item"><span class="nav-icon">📊</span> Seguimiento</a>
     <div class="sidebar-bottom">
-        <a href="../logout.php" class="logout-btn">⎋ Cerrar sesión</a>
+        <a href="logout.php" class="logout-btn">⎋ Cerrar sesión</a>
     </div>
 </aside>
 
 <main class="main">
     <div class="page-header">
-        <h2>Seguimiento de Equipo</h2>
-        <p><?= date('d \d\e F Y') ?> · Comparativa: <?= $label_dia_act ?> vs <?= $label_dia_ant ?> ·
-        <?php if ($puede_capturar): ?>
-            <span style="color:#059669;font-weight:700;">✓ Captura habilitada</span>
-        <?php else: ?>
-            <span style="color:var(--text2);">Solo visualización</span>
+        <div>
+            <h2><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?></h2>
+            <p><?= date('d \d\e F Y', strtotime('-1 day')) ?></p>
+        </div>
+        <div class="user-badge">
+            <div class="user-avatar"><?= strtoupper(substr($nombre_completo, 0, 1)) ?></div>
+            <div>
+                <div class="user-name"><?= htmlspecialchars($nombre_completo) ?></div>
+                <div class="user-role"><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="kpi-grid">
+
+        <?php if ($mostrar_meta): 
+            $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 100); 
+            $angulo_aguja = ($porcentaje_visual_aguja / 100 * 180) - 90;
+            $color_porcentaje = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
+        ?>
+        <div class="kpi-card" style="padding-right: 15px;">
+            <div class="kpi-header" style="margin-bottom: 5px;">
+                <div class="kpi-icon kpi-orange" style="width: 32px; height: 32px;">🎯</div>
+                <div class="kpi-label">Avance vs Meta</div>
+            </div>
+            
+            <div class="kpi-speed-layout">
+                <div class="speedometer-container">
+                    <div class="speedometer-arco-mascara">
+                        <div class="speedometer-gradiente"></div>
+                        <div class="speedometer-centro-blanco"></div>
+                    </div>
+                    <div class="needle-pivote"></div>
+                    <div class="needle" style="transform: rotate(<?= $angulo_aguja ?>deg);"></div>
+                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje ?>;">
+                        <?= $kpi_meta_pct ?>%
+                    </div>
+                </div>
+
+                <div class="speed-numbers">
+                    <span class="speed-val"><?= number_format($kpi_inst) ?></span>
+                    <span class="kpi-sub" style="margin-bottom: 10px;">Instalaciones</span>
+                    
+                    <span class="kpi-val" style="color:#f59e0b; font-size: 1.3rem;"><?= number_format($kpi_meta_acum) ?></span>
+                    <span class="kpi-sub">Meta (Día <?= $dias_transcurridos ?>)</span>
+                </div>
+            </div>
+        </div>
         <?php endif; ?>
-        </p>
+
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-blue">🔧</div>
+                <div class="kpi-label">Instalaciones</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
+                    <span class="kpi-sub">del mes</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-green">📈</div>
+                <div class="kpi-label">Ventas</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
+                    <span class="kpi-sub">del mes</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-green">🔄</div>
+                <div class="kpi-label">Conversión</div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val green"><?= number_format($kpi_conv, 1) ?>%</span>
+                    <span class="kpi-sub">del mes</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="kpi-card full">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-purple">👥</div>
+                <div class="kpi-label">Headcount — Semana <?= $semana_base ?> · <?= $anio_actual ?></div>
+            </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val purple"><?= number_format($kpi_hc_act) ?></span>
+                    <span class="kpi-sub">activo</span>
+                </div>
+                <div class="kpi-num">
+                    <span class="kpi-val red"><?= number_format($kpi_hc_vac) ?></span>
+                    <span class="kpi-sub">vacante</span>
+                </div>
+                <div class="kpi-num">
+                    <span class="kpi-val purple"><?= $kpi_hc_pct ?>%</span>
+                    <span class="kpi-sub">ocupación</span>
+                </div>
+            </div>
+        </div>
+
     </div>
 
-    <?php if (empty($vendedores)): ?>
-        <div class="table-card"><div class="empty-state">No se encontraron colaboradores.</div></div>
-    <?php else: ?>
-
-    <div class="search-bar">
-        <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador o coach..." oninput="filtrarTabla()">
+    <div class="charts-row">
+        <div class="chart-card">
+            <div class="chart-title">Mix 2P y 3P — Ventas</div>
+            <div class="chart-wrap"><canvas id="cVentMix"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
+            <div class="chart-wrap"><canvas id="cInstMix"></canvas></div>
+        </div>
     </div>
 
-    <div class="table-card">
-        <table>
-            <thead>
-                <tr>
-                    <th colspan="3" class="left">Colaborador</th>
-                    <th colspan="3">Ventas</th>
-                    <th colspan="3">Instalaciones</th>
-                    <th colspan="4" class="sep">REAI</th>
-                </tr>
-                <tr>
-                    <th class="left">Nombre</th>
-                    <th class="left">Coach</th>
-                    <th>Antigüedad</th>
-                    <th>Mes</th>
-                    <th><?= $label_dia_act ?></th>
-                    <th><?= $label_dia_ant ?> / Dif</th>
-                    <th>Mes</th>
-                    <th><?= $label_dia_act ?></th>
-                    <th><?= $label_dia_ant ?> / Dif</th>
-                    <th class="sep">R</th>
-                    <th>E</th>
-                    <th>A</th>
-                    <th>I</th>
-                </tr>
-            </thead>
-            <tbody id="tablaBody">
-            <?php foreach ($vendedores as $vend):
-                $tgs       = $vend['numero_talento_gs'];
-                $nombre    = $vend['nombre_colaborador'];
-                $antig     = $vend['antiguedad'] ?? 0;
-                $coach_nom = $vend['nombre_coach'] ?? '—';
-                $st        = $stats[$tgs] ?? [];
-
-                $ventas_mes     = $st['ventas_mes'] ?? 0;
-                $ventas_dia     = $st['ventas_dia'] ?? 0;
-                $ventas_sem_ant = $st['ventas_sem_ant'] ?? 0;
-                $ventas_diff    = $ventas_dia - $ventas_sem_ant;
-
-                $inst_mes     = $st['inst_mes'] ?? 0;
-                $inst_dia     = $st['inst_dia'] ?? 0;
-                $inst_sem_ant = $st['inst_sem_ant'] ?? 0;
-                $inst_diff    = $inst_dia - $inst_sem_ant;
-
-                $reai  = $st['reai'] ?? [];
-                $cnt_r = $reai['Retroalimentación'] ?? 0;
-                $cnt_e = $reai['ECNUs'] ?? 0;
-                $cnt_a = $reai['Acta Administrativa'] ?? 0;
-                $cnt_i = $reai['Incidencia'] ?? 0;
-
-                $vd_class = $ventas_diff > 0 ? 'diff-pos' : ($ventas_diff < 0 ? 'diff-neg' : 'diff-neu');
-                $id_class = $inst_diff > 0 ? 'diff-pos' : ($inst_diff < 0 ? 'diff-neg' : 'diff-neu');
-            ?>
-            <tr data-nombre="<?= strtolower(htmlspecialchars($nombre)) ?>" data-coach="<?= strtolower(htmlspecialchars($coach_nom)) ?>">
-                <td class="left">
-                    <div style="font-weight:600;"><?= htmlspecialchars($nombre) ?></div>
-                    <div class="sub-text"><?= $tgs ?></div>
-                </td>
-                <td class="left" style="font-size:0.78rem;"><?= htmlspecialchars($coach_nom) ?></td>
-                <td><span style="font-weight:700;"><?= $antig ?></span> <span class="sub-text">m</span></td>
-
-                <!-- VENTAS -->
-                <td><span style="font-weight:700;"><?= $ventas_mes ?></span></td>
-                <td><?= $ventas_dia ?></td>
-                <td>
-                    <span class="sub-text"><?= $ventas_sem_ant ?></span>
-                    <span class="diff-badge <?= $vd_class ?>"><?= $ventas_diff >= 0 ? '+' : '' ?><?= $ventas_diff ?></span>
-                </td>
-
-                <!-- INSTALACIONES -->
-                <td><span style="font-weight:700;"><?= $inst_mes ?></span></td>
-                <td><?= $inst_dia ?></td>
-                <td>
-                    <span class="sub-text"><?= $inst_sem_ant ?></span>
-                    <span class="diff-badge <?= $id_class ?>"><?= $inst_diff >= 0 ? '+' : '' ?><?= $inst_diff ?></span>
-                </td>
-
-                <?php
-                $asuntos_map = [
-                    'R' => ['Retroalimentación',   $cnt_r],
-                    'E' => ['ECNUs',               $cnt_e],
-                    'A' => ['Acta Administrativa', $cnt_a],
-                    'I' => ['Incidencia',           $cnt_i],
-                ];
-                $first = true;
-                foreach ($asuntos_map as $letra => [$asunto_val, $cnt]):
-                    $tgs_js    = addslashes($tgs);
-                    $nombre_js = addslashes($nombre);
-                    $asunto_js = addslashes($asunto_val);
-                    $sep_class = $first ? 'sep' : '';
-                    $first = false;
-                ?>
-                <td class="<?= $sep_class ?>">
-                    <?php if ($puede_capturar): ?>
-                        <button class="reai-badge <?= $cnt > 0 ? 'has-data' : 'can-add' ?>"
-                            onclick="abrirModal('<?= $tgs_js ?>','<?= $nombre_js ?>','<?= $asunto_js ?>')"
-                            title="<?= $cnt > 0 ? "$asunto_val ($cnt)" : "Agregar $asunto_val" ?>">
-                            <?= $cnt > 0 ? $cnt : '+' ?>
-                        </button>
-                    <?php else: ?>
-                        <button class="reai-badge <?= $cnt > 0 ? 'has-data' : 'no-data' ?>"
-                            <?= $cnt > 0 ? "onclick=\"abrirModal('$tgs_js','$nombre_js','$asunto_js')\"" : 'disabled' ?>>
-                            <?= $cnt > 0 ? $cnt : '—' ?>
-                        </button>
-                    <?php endif; ?>
-                </td>
-                <?php endforeach; ?>
-            </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
+    <div class="evo-card">
+        <div class="chart-title">Evolución — Últimos 6 meses por canal</div>
+        <div class="evo-grid">
+            <div>
+                <div class="evo-sub">Ventas por canal</div>
+                <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
+            </div>
+            <div>
+                <div class="evo-sub">Instalaciones por origen</div>
+                <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
+            </div>
+        </div>
     </div>
-    <?php endif; ?>
 </main>
 
-<!-- MODAL -->
-<div class="modal-overlay" id="modalOverlay" onclick="cerrarModal(event)">
-    <div class="modal">
-        <div class="modal-header">
-            <div class="modal-title" id="modalTitle"></div>
-            <button class="modal-close" onclick="cerrarModalBtn()">×</button>
-        </div>
-        <div id="modalBody"></div>
-    </div>
-</div>
-<div class="toast" id="toast"></div>
-
 <script>
-let currentTalento = '', currentNombre = '', currentAsunto = '';
-const puedeCapturar = <?= $puede_capturar ? 'true' : 'false' ?>;
-const asuntoColors = {
-    'Retroalimentación':'asunto-r','ECNUs':'asunto-e',
-    'Acta Administrativa':'asunto-a','Incidencia':'asunto-i'
+const inst2p  = <?= $inst_2p ?>;
+const inst3p  = <?= $inst_3p ?>;
+const vent2p  = <?= $vent_2p ?>;
+const vent3p  = <?= $vent_3p ?>;
+
+Chart.register(ChartDataLabels);
+
+const donutOpts = () => ({
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
+        datalabels: {
+            color: '#fff',
+            font: { size: 13, weight: 'bold' },
+            formatter: (value, ctx) => {
+                const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
+                if (t === 0 || value === 0) return '';
+                return ((value/t)*100).toFixed(1) + '%';
+            }
+        },
+        tooltip: { callbacks: { label: ctx => {
+            const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const p = t > 0 ? ((ctx.parsed/t)*100).toFixed(1) : 0;
+            return ` ${ctx.label}: ${ctx.parsed.toLocaleString()} (${p}%)`;
+        }}}
+    }
+});
+new Chart(document.getElementById('cInstMix'), {
+    type: 'doughnut',
+    data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
+    options: donutOpts()
+});
+new Chart(document.getElementById('cVentMix'), {
+    type: 'doughnut',
+    data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
+    options: donutOpts()
+});
+const labels6 = <?= json_encode($meses_labels) ?>;
+
+const canalColores = {
+    'Cambaceo':                    '#2b57a7',
+    'Punto de Venta':              '#10b981',
+    'Call Center':                 '#f59e0b',
+    'eCommerce':                   '#7c3aed',
+    'Venta Digital':               '#06b6d4',
+    'Winback':                     '#ec4899',
+    'Desarrollos':                 '#84cc16',
+    'Distribuidor':                '#f97316',
+    'Autoempresarios Autorizados': '#6366f1',
+    'Otro':                        '#94a3b8',
 };
 
-function filtrarTabla() {
-    const q = document.getElementById('buscador').value.toLowerCase();
-    document.querySelectorAll('#tablaBody tr').forEach(tr => {
-        const n = tr.dataset.nombre || '', c = tr.dataset.coach || '';
-        tr.classList.toggle('hidden', q !== '' && !n.includes(q) && !c.includes(q));
-    });
-}
+const instCanales = <?= json_encode(array_values(array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0))) ?>;
+const instData    = <?= json_encode(array_values(array_map(fn($c) => $evo_inst_canal[$c], array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0)))) ?>;
 
-function abrirModal(talento, nombre, asunto) {
-    currentTalento = talento; currentNombre = nombre; currentAsunto = asunto;
-    document.getElementById('modalTitle').textContent = nombre + ' — ' + asunto;
-    document.getElementById('modalOverlay').classList.add('open');
-    document.getElementById('modalBody').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text2);">Cargando...</div>';
+const ventCanales = <?= json_encode(array_values(array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0))) ?>;
+const ventData    = <?= json_encode(array_values(array_map(fn($c) => $evo_vent_canal[$c], array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0)))) ?>;
 
-    fetch('reai_v2.php?action=historial&talento_gs=' + encodeURIComponent(talento))
-        .then(r => r.json())
-        .then(data => {
-            const filtrados = data.filter(r => r.asunto === asunto);
-            let html = '';
-            if (filtrados.length > 0) {
-                html += `<div class="section-label">Historial (${filtrados.length})</div>`;
-                filtrados.forEach(r => {
-                    html += `<div class="historial-item">
-                        <div class="historial-header">
-                            <span class="historial-asunto ${asuntoColors[r.asunto]||''}">${r.asunto}</span>
-                            <span class="historial-fecha">${r.fecha}</span>
-                        </div>
-                        <div class="historial-desc">${r.descripcion||'—'}</div>
-                        ${r.evidencia?`<div class="historial-evidencia"><a href="../uploads/reai/${r.evidencia}" target="_blank">📎 Ver evidencia</a></div>`:''}
-                    </div>`;
-                });
-            } else {
-                html += '<div style="text-align:center;padding:16px 0;color:var(--text2);font-size:0.85rem;">Sin registros previos</div>';
-            }
-            if (puedeCapturar) {
-                const hoy = new Date().toISOString().split('T')[0];
-                html += `<hr class="divider">
-                <div class="section-label">Nuevo registro</div>
-                <div class="form-group"><label>Asunto</label>
-                    <select id="f_asunto">
-                        <option value="Retroalimentación" ${asunto==='Retroalimentación'?'selected':''}>Retroalimentación</option>
-                        <option value="ECNUs" ${asunto==='ECNUs'?'selected':''}>ECNUs</option>
-                        <option value="Acta Administrativa" ${asunto==='Acta Administrativa'?'selected':''}>Acta Administrativa</option>
-                        <option value="Incidencia" ${asunto==='Incidencia'?'selected':''}>Incidencia</option>
-                    </select>
-                </div>
-                <div class="form-group"><label>Fecha</label><input type="date" id="f_fecha" value="${hoy}"></div>
-                <div class="form-group"><label>Descripción</label><textarea id="f_descripcion" placeholder="Escribe los detalles..."></textarea></div>
-                <div class="form-group"><label>Evidencia (jpg, png, pdf, doc)</label><input type="file" id="f_evidencia" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx"></div>
-                <button class="btn-primary" id="btnGuardar" onclick="guardarReai()">Guardar registro</button>`;
-            }
-            document.getElementById('modalBody').innerHTML = html;
-        });
-}
+const stackedOpts = () => ({
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 10, boxWidth: 12 } },
+        datalabels: { display: false }
+    },
+    scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } },
+        y: { stacked: true, beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } }
+    }
+});
 
-function guardarReai() {
-    const btn = document.getElementById('btnGuardar');
-    btn.disabled = true; btn.textContent = 'Guardando...';
-    const fd = new FormData();
-    fd.append('action','guardar');
-    fd.append('numero_talento_gs', currentTalento);
-    fd.append('nombre_colaborador', currentNombre);
-    fd.append('asunto', document.getElementById('f_asunto').value);
-    fd.append('fecha', document.getElementById('f_fecha').value);
-    fd.append('descripcion', document.getElementById('f_descripcion').value);
-    const ev = document.getElementById('f_evidencia');
-    if (ev.files[0]) fd.append('evidencia', ev.files[0]);
+new Chart(document.getElementById('cInstEvo'), {
+    type: 'bar',
+    data: {
+        labels: labels6,
+        datasets: instCanales.map((c, i) => ({
+            label: c,
+            data: instData[i],
+            backgroundColor: canalColores[c] || '#94a3b8',
+            borderRadius: i === instCanales.length - 1 ? 4 : 0,
+        }))
+    },
+    options: stackedOpts()
+});
 
-    fetch('reai_v2.php', {method:'POST', body:fd})
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'ok') {
-                mostrarToast(data.msg, 'success');
-                cerrarModalBtn();
-                setTimeout(() => location.reload(), 800);
-            } else {
-                mostrarToast(data.msg, 'error');
-                btn.disabled = false; btn.textContent = 'Guardar registro';
-            }
-        })
-        .catch(() => { mostrarToast('Error de conexión','error'); btn.disabled=false; btn.textContent='Guardar registro'; });
-}
-
-function cerrarModal(e) { if (e.target.id === 'modalOverlay') cerrarModalBtn(); }
-function cerrarModalBtn() {
-    document.getElementById('modalOverlay').classList.remove('open');
-    document.getElementById('modalBody').innerHTML = '';
-}
-function mostrarToast(msg, tipo) {
-    const t = document.getElementById('toast');
-    t.textContent = msg; t.className = 'toast show ' + tipo;
-    setTimeout(() => t.className = 'toast', 3000);
-}
+new Chart(document.getElementById('cVentEvo'), {
+    type: 'bar',
+    data: {
+        labels: labels6,
+        datasets: ventCanales.map((c, i) => ({
+            label: c,
+            data: ventData[i],
+            backgroundColor: canalColores[c] || '#94a3b8',
+            borderRadius: i === ventCanales.length - 1 ? 4 : 0,
+        }))
+    },
+    options: stackedOpts()
+});
 </script>
 </body>
 </html>
