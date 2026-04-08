@@ -240,42 +240,57 @@ $mix_vent = $r_mix_vent ? mysqli_fetch_assoc($r_mix_vent) : ['p3'=>0,'p2'=>0];
 $vent_3p = (int)($mix_vent['p3'] ?? 0);
 $vent_2p = (int)($mix_vent['p2'] ?? 0);
 
-// ── EVOLUCIÓN 6 MESES ────────────────────────────────────────────────────────
-$evolucion_inst = [];
-$evolucion_vent = [];
-$meses_labels   = [];
+// ── EVOLUCIÓN 6 MESES POR CANAL ─────────────────────────────────────────────
+$meses_labels = [];
+$canales = ['Cambaceo','Punto de Venta','Call Center','eCommerce','Venta Digital','Winback','Desarrollos','Distribuidor','Autoempresarios Autorizados','Otro'];
+
+// Inicializar arrays por canal
+$evo_inst_canal = [];
+$evo_vent_canal = [];
+foreach ($canales as $c) {
+    $evo_inst_canal[$c] = [];
+    $evo_vent_canal[$c] = [];
+}
+
 for ($i = 5; $i >= 0; $i--) {
     $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
     $m  = (int)date('n', $ts);
     $a  = (int)date('Y', $ts);
     $meses_labels[] = date('M Y', $ts);
-    if ($rol === 'admin') {
-        $ri = mysqli_query($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a AND origen_prospecto <> '-'");
-        $rv = mysqli_query($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a");
-    } elseif ($por_distrito) {
-        $ri = mysqli_query($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
-        $rv = mysqli_query($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a AND distrito='$distrito_esc'");
-    } else {
-        if (empty($folio_ids)) {
-            $ri = mysqli_query($conexion, "SELECT 0 as t");
-            $rv = mysqli_query($conexion, "SELECT 0 as t");
-        } else {
-            $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-            $stmt_ri = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
-            $tipos = 'ii' . str_repeat('s', count($folio_ids));
-            $bind  = array_merge([$m, $a], array_values($folio_ids));
-            mysqli_stmt_bind_param($stmt_ri, $tipos, ...$bind);
-            mysqli_stmt_execute($stmt_ri);
-            $ri = mysqli_stmt_get_result($stmt_ri);
-            $stmt_rv = mysqli_prepare($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
-            mysqli_stmt_bind_param($stmt_rv, $tipos, ...$bind);
-            mysqli_stmt_execute($stmt_rv);
-            $rv = mysqli_stmt_get_result($stmt_rv);
-        }
+
+    // Instalaciones por origen_prospecto
+    $filtro_inst = $rol === 'admin' ? "" : ($por_distrito ? "AND distrito='$distrito_esc'" : "");
+    $sql_inst_canal = "SELECT COALESCE(NULLIF(NULLIF(origen_prospecto,''),'-'),'Otro') as canal, COUNT(cuenta) as t
+                       FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a $filtro_inst
+                       GROUP BY canal";
+    $res_ic = mysqli_query($conexion, $sql_inst_canal);
+    $inst_por_canal = [];
+    while ($row = mysqli_fetch_assoc($res_ic)) {
+        $k = in_array($row['canal'], $canales) ? $row['canal'] : 'Otro';
+        $inst_por_canal[$k] = ($inst_por_canal[$k] ?? 0) + (int)$row['t'];
     }
-    $evolucion_inst[] = (int)(($ri ? mysqli_fetch_assoc($ri)['t'] : 0) ?? 0);
-    $evolucion_vent[] = (int)(($rv ? mysqli_fetch_assoc($rv)['t'] : 0) ?? 0);
+
+    // Ventas por canal_venta
+    $filtro_vent = $rol === 'admin' ? "" : ($por_distrito ? "AND distrito='$distrito_esc'" : "");
+    $sql_vent_canal = "SELECT COALESCE(NULLIF(NULLIF(canal_venta,''),'-'),'Otro') as canal, COUNT(*) as t
+                       FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a $filtro_vent
+                       GROUP BY canal";
+    $res_vc = mysqli_query($conexion, $sql_vent_canal);
+    $vent_por_canal = [];
+    while ($row = mysqli_fetch_assoc($res_vc)) {
+        $k = in_array($row['canal'], $canales) ? $row['canal'] : 'Otro';
+        $vent_por_canal[$k] = ($vent_por_canal[$k] ?? 0) + (int)$row['t'];
+    }
+
+    foreach ($canales as $c) {
+        $evo_inst_canal[$c][] = $inst_por_canal[$c] ?? 0;
+        $evo_vent_canal[$c][] = $vent_por_canal[$c] ?? 0;
+    }
 }
+
+// Filtrar canales sin datos en ningún mes
+$canales_inst_activos = array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0);
+$canales_vent_activos = array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0);
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -515,14 +530,14 @@ $roles_labels = [
     </div>
 
     <div class="evo-card">
-        <div class="chart-title">Instalaciones y Ventas — Últimos 6 meses</div>
+        <div class="chart-title">Evolución — Últimos 6 meses por canal</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub">Ventas</div>
+                <div class="evo-sub">Ventas por canal</div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
             </div>
             <div>
-                <div class="evo-sub">Instalaciones</div>
+                <div class="evo-sub">Instalaciones por origen</div>
                 <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
@@ -530,9 +545,6 @@ $roles_labels = [
 </main>
 
 <script>
-const labels6 = <?= json_encode($meses_labels) ?>;
-const instEvo = <?= json_encode($evolucion_inst) ?>;
-const ventEvo = <?= json_encode($evolucion_vent) ?>;
 const inst2p  = <?= $inst_2p ?>;
 const inst3p  = <?= $inst_3p ?>;
 const vent2p  = <?= $vent_2p ?>;
@@ -570,23 +582,65 @@ new Chart(document.getElementById('cVentMix'), {
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
     options: donutOpts()
 });
-const barOpts = () => ({
+const labels6 = <?= json_encode($meses_labels) ?>;
+
+const canalColores = {
+    'Cambaceo':                    '#2b57a7',
+    'Punto de Venta':              '#10b981',
+    'Call Center':                 '#f59e0b',
+    'eCommerce':                   '#7c3aed',
+    'Venta Digital':               '#06b6d4',
+    'Winback':                     '#ec4899',
+    'Desarrollos':                 '#84cc16',
+    'Distribuidor':                '#f97316',
+    'Autoempresarios Autorizados': '#6366f1',
+    'Otro':                        '#94a3b8',
+};
+
+const instCanales = <?= json_encode(array_values(array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0))) ?>;
+const instData    = <?= json_encode(array_values(array_map(fn($c) => $evo_inst_canal[$c], array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0)))) ?>;
+
+const ventCanales = <?= json_encode(array_values(array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0))) ?>;
+const ventData    = <?= json_encode(array_values(array_map(fn($c) => $evo_vent_canal[$c], array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0)))) ?>;
+
+const stackedOpts = () => ({
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, datalabels: { display: false } },
+    plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 10, boxWidth: 12 } },
+        datalabels: { display: false }
+    },
     scales: {
-        y: { beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } },
-        x: { grid: { display: false }, ticks: { font: { size: 10 } } }
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } },
+        y: { stacked: true, beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } }
     }
 });
+
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
-    data: { labels: labels6, datasets: [{ data: instEvo, backgroundColor: '#3b66b8', borderRadius: 6 }] },
-    options: barOpts()
+    data: {
+        labels: labels6,
+        datasets: instCanales.map((c, i) => ({
+            label: c,
+            data: instData[i],
+            backgroundColor: canalColores[c] || '#94a3b8',
+            borderRadius: i === instCanales.length - 1 ? 4 : 0,
+        }))
+    },
+    options: stackedOpts()
 });
+
 new Chart(document.getElementById('cVentEvo'), {
     type: 'bar',
-    data: { labels: labels6, datasets: [{ data: ventEvo, backgroundColor: '#10b981', borderRadius: 6 }] },
-    options: barOpts()
+    data: {
+        labels: labels6,
+        datasets: ventCanales.map((c, i) => ({
+            label: c,
+            data: ventData[i],
+            backgroundColor: canalColores[c] || '#94a3b8',
+            borderRadius: i === ventCanales.length - 1 ? 4 : 0,
+        }))
+    },
+    options: stackedOpts()
 });
 </script>
 </body>
