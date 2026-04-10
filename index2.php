@@ -364,7 +364,7 @@ $roles_labels = [
         .chart-wrap { position:relative; height:200px; }
         .evo-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
-        .evo-wrap { position: relative; height: 300px; }
+        .evo-wrap { position: relative; height: 1300px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
 
         /* VELOCÍMETRO */
