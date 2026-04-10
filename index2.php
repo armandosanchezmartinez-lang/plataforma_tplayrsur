@@ -5,6 +5,7 @@ header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
 header("Expires: 0");
 session_start();
+
 if (!isset($_SESSION['usuario'])) {
     header("Location: login.php");
     exit();
@@ -12,6 +13,7 @@ if (!isset($_SESSION['usuario'])) {
 
 include 'conexion.php';
 
+// --- CONFIGURACIÓN DE USUARIO Y ROLES ---
 $rol            = $_SESSION['rol'] ?? 'vendedor';
 $talento_gs     = $_SESSION['numero_talento_gs'] ?? '';
 $id_posicion    = $_SESSION['id_posicion'] ?? '';
@@ -19,6 +21,7 @@ $nombre_usuario = $_SESSION['usuario'] ?? '';
 
 $puestos_comerciales = "'PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGOCIOS','VENDEDOR NEGOCIO'";
 
+// --- FUNCIONES DE JERARQUÍA ---
 function getSubordinados($conexion, $id_pos, $semana = null, $anio = null) {
     $ids = [];
     if ($semana && $anio) {
@@ -46,6 +49,7 @@ function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = 
     return array_unique($todos);
 }
 
+// --- TIEMPO Y FECHAS ---
 $semana_actual = null; $anio_actual = null; $semana_base = null;
 $res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
 if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
@@ -56,10 +60,6 @@ if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
 
 $niveles = ['admin'=>6,'director_regional'=>5,'director_distrital'=>4,'lider'=>3,'coach'=>2,'vendedor'=>1];
 $nivel   = $niveles[$rol] ?? 1;
-
-$nombre_completo  = $nombre_usuario;
-$posicion_usuario = '';
-$distrito_usuario = '';
 
 $stmt_nombre = mysqli_prepare($conexion, "SELECT nombre_colaborador, posicion, distrito FROM hc WHERE id_posicion = ? LIMIT 1");
 if ($stmt_nombre) {
@@ -74,14 +74,13 @@ if ($stmt_nombre) {
     mysqli_stmt_close($stmt_nombre);
 }
 
+// --- FILTRADO POR JERARQUÍA ---
 $subordinados_ids = [];
 $folio_ids        = [];
-
 if ($rol !== 'admin') {
     $subordinados_ids = getTodosSubordinados($conexion, $id_posicion, $nivel, $semana_actual, $anio_actual);
     $subordinados_ids[] = $id_posicion;
     $subordinados_ids = array_unique(array_values($subordinados_ids));
-
     if (!empty($subordinados_ids)) {
         $ph_sub = implode(',', array_fill(0, count($subordinados_ids), '?'));
         $stmt_folios = mysqli_prepare($conexion, "SELECT DISTINCT numero_talento_gs FROM hc WHERE id_posicion IN ($ph_sub) AND numero_talento_gs NOT LIKE '%VACANTE%'");
@@ -240,57 +239,64 @@ $mix_vent = $r_mix_vent ? mysqli_fetch_assoc($r_mix_vent) : ['p3'=>0,'p2'=>0];
 $vent_3p = (int)($mix_vent['p3'] ?? 0);
 $vent_2p = (int)($mix_vent['p2'] ?? 0);
 
-// ── EVOLUCIÓN 6 MESES POR CANAL ─────────────────────────────────────────────
+// ── EVOLUCIÓN 6 MESES APILADA ────────────────────────────────────────────────
 $meses_labels = [];
-$canales = ['Cambaceo','Punto de Venta','Call Center','eCommerce','Venta Digital','Winback','Desarrollos','Distribuidor','Autoempresarios Autorizados','Otro'];
+$datos_inst_stacked = []; 
+$datos_vent_stacked = [];
 
-// Inicializar arrays por canal
-$evo_inst_canal = [];
-$evo_vent_canal = [];
-foreach ($canales as $c) {
-    $evo_inst_canal[$c] = [];
-    $evo_vent_canal[$c] = [];
-}
-
+// Generar etiquetas de meses (eje X)
 for ($i = 5; $i >= 0; $i--) {
     $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
-    $m  = (int)date('n', $ts);
-    $a  = (int)date('Y', $ts);
     $meses_labels[] = date('M Y', $ts);
+}
 
-    // Instalaciones por origen_prospecto
-    $filtro_inst = $rol === 'admin' ? "" : ($por_distrito ? "AND distrito='$distrito_esc'" : "");
-    $sql_inst_canal = "SELECT COALESCE(NULLIF(NULLIF(origen_prospecto,''),'-'),'Otro') as canal, COUNT(cuenta) as t
-                       FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a $filtro_inst
-                       GROUP BY canal";
-    $res_ic = mysqli_query($conexion, $sql_inst_canal);
-    $inst_por_canal = [];
-    while ($row = mysqli_fetch_assoc($res_ic)) {
-        $k = in_array($row['canal'], $canales) ? $row['canal'] : 'Otro';
-        $inst_por_canal[$k] = ($inst_por_canal[$k] ?? 0) + (int)$row['t'];
-    }
+// 1. Datos Instalaciones por Origen
+$query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
+    FROM instalaciones 
+    WHERE fecha >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) AND origen_prospecto <> '-' ";
+if ($rol !== 'admin' && $por_distrito) {
+    $query_inst .= " AND distrito='$distrito_esc'";
+} elseif ($rol !== 'admin' && !empty($folio_ids)) {
+    $ph = implode("','", array_values($folio_ids));
+    $query_inst .= " AND folio_empleado IN ('$ph')";
+}
+$query_inst .= " GROUP BY anio, mes, origen_prospecto";
 
-    // Ventas por canal_venta
-    $filtro_vent = $rol === 'admin' ? "" : ($por_distrito ? "AND distrito='$distrito_esc'" : "");
-    $sql_vent_canal = "SELECT COALESCE(NULLIF(NULLIF(canal_venta,''),'-'),'Otro') as canal, COUNT(*) as t
-                       FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a $filtro_vent
-                       GROUP BY canal";
-    $res_vc = mysqli_query($conexion, $sql_vent_canal);
-    $vent_por_canal = [];
-    while ($row = mysqli_fetch_assoc($res_vc)) {
-        $k = in_array($row['canal'], $canales) ? $row['canal'] : 'Otro';
-        $vent_por_canal[$k] = ($vent_por_canal[$k] ?? 0) + (int)$row['t'];
-    }
-
-    foreach ($canales as $c) {
-        $evo_inst_canal[$c][] = $inst_por_canal[$c] ?? 0;
-        $evo_vent_canal[$c][] = $vent_por_canal[$c] ?? 0;
+$res_i = mysqli_query($conexion, $query_inst);
+while($row = mysqli_fetch_assoc($res_i)) {
+    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
+    $idx = array_search($label_mes, $meses_labels);
+    if($idx !== false) {
+        $orig = $row['origen_prospecto'] ?: 'OTROS';
+        if(!isset($datos_inst_stacked[$orig])) $datos_inst_stacked[$orig] = array_fill(0, 6, 0);
+        $datos_inst_stacked[$orig][$idx] = (int)$row['total'];
     }
 }
 
-// Filtrar canales sin datos en ningún mes
-$canales_inst_activos = array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0);
-$canales_vent_activos = array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0);
+// 2. Datos Ventas por Canal
+$query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
+    FROM ventas 
+    WHERE fecha_cierre >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) ";
+if ($rol !== 'admin' && $por_distrito) {
+    $query_vent .= " AND distrito='$distrito_esc'";
+} elseif ($rol !== 'admin' && !empty($folio_ids)) {
+    $ph = implode("','", array_values($folio_ids));
+    $query_vent .= " AND folio_empleado IN ('$ph')";
+}
+$query_vent .= " GROUP BY anio, mes, canal_venta";
+
+$res_v = mysqli_query($conexion, $query_vent);
+while($row = mysqli_fetch_assoc($res_v)) {
+    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
+    $idx = array_search($label_mes, $meses_labels);
+    if($idx !== false) {
+        $canal = $row['canal_venta'] ?: 'OTROS';
+        if(!isset($datos_vent_stacked[$canal])) $datos_vent_stacked[$canal] = array_fill(0, 6, 0);
+        $datos_vent_stacked[$canal][$idx] = (int)$row['total'];
+    }
+}
+
+$colores_palette = ['#2b57a7', '#10b981', '#f59e0b', '#7c3aed', '#ef4444', '#06b6d4', '#ec4899'];
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -331,7 +337,7 @@ $roles_labels = [
         .user-name { font-size:0.82rem; font-weight:700; }
         .user-role { font-size:0.7rem; color:var(--text2); }
 
-        /* KPI GRID - AJUSTADO A 4 COLUMNAS EN UNA LÍNEA */
+        /* KPI GRID - 4 COLUMNAS */
         .kpi-grid { display:grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap:20px; margin-bottom:24px; }
         .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: center; }
         .kpi-card.full { grid-column: 1 / -1; }
@@ -361,7 +367,7 @@ $roles_labels = [
         .evo-wrap { position:relative; height:220px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
 
-        /* VELOCÍMETRO COMPACTO PARA FILA ÚNICA */
+        /* VELOCÍMETRO */
         .kpi-speed-layout { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 10px; }
         .speedometer-container { 
             position: relative; width: 220px; height: 110px; display: flex; justify-content: center; 
@@ -375,17 +381,7 @@ $roles_labels = [
         .speedometer-centro-blanco { position: absolute; top: 22px; left: 22px; width: 176px; height: 176px; border-radius: 50%; background-color: var(--white); }
         .needle-pivote { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); width: 14px; height: 14px; background-color: var(--text); border-radius: 50%; z-index: 3; }
         .needle { position: absolute; bottom: 0px; left: calc(50% - 2px); width: 4px; height: 95px; background-color: var(--text); transform-origin: center bottom; transition: transform 1s ease-out; z-index: 2; border-radius: 2px; }
-        
-        /* AQUÍ ESTÁ EL AJUSTE DEL TEXTO CENTRADO */
-        .porcentaje-sobre-arco { 
-            position: absolute; 
-            bottom: 15px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            font-size: 1.4rem; 
-            font-weight: 800; 
-            z-index: 4; 
-        }
+        .porcentaje-sobre-arco { position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); font-size: 1.4rem; font-weight: 800; z-index: 4; }
         
         .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
         .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
@@ -530,14 +526,14 @@ $roles_labels = [
     </div>
 
     <div class="evo-card">
-        <div class="chart-title">Evolución — Últimos 6 meses por canal</div>
+        <div class="chart-title">Instalaciones y Ventas — Últimos 6 meses</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub">Ventas por canal</div>
+                <div class="evo-sub">Ventas</div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
             </div>
             <div>
-                <div class="evo-sub">Instalaciones por origen</div>
+                <div class="evo-sub">Instalaciones</div>
                 <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
@@ -545,24 +541,21 @@ $roles_labels = [
 </main>
 
 <script>
-const inst2p  = <?= $inst_2p ?>;
-const inst3p  = <?= $inst_3p ?>;
-const vent2p  = <?= $vent_2p ?>;
-const vent3p  = <?= $vent_3p ?>;
-
 Chart.register(ChartDataLabels);
+
+// --- DONUTS (MIX) ---
+const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
+const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>;
 
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
         legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
         datalabels: {
-            color: '#fff',
-            font: { size: 13, weight: 'bold' },
+            color: '#fff', font: { size: 13, weight: 'bold' },
             formatter: (value, ctx) => {
                 const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
-                if (t === 0 || value === 0) return '';
-                return ((value/t)*100).toFixed(1) + '%';
+                return (t === 0 || value === 0) ? '' : ((value/t)*100).toFixed(1) + '%';
             }
         },
         tooltip: { callbacks: { label: ctx => {
@@ -572,6 +565,7 @@ const donutOpts = () => ({
         }}}
     }
 });
+
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
@@ -582,65 +576,97 @@ new Chart(document.getElementById('cVentMix'), {
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
     options: donutOpts()
 });
+
+// --- EVOLUCIÓN APILADA (6 MESES) ---
+const colors = <?= json_encode($colores_palette) ?>;
 const labels6 = <?= json_encode($meses_labels) ?>;
 
-const canalColores = {
-    'Cambaceo':                    '#2b57a7',
-    'Punto de Venta':              '#10b981',
-    'Call Center':                 '#f59e0b',
-    'eCommerce':                   '#7c3aed',
-    'Venta Digital':               '#06b6d4',
-    'Winback':                     '#ec4899',
-    'Desarrollos':                 '#84cc16',
-    'Distribuidor':                '#f97316',
-    'Autoempresarios Autorizados': '#6366f1',
-    'Otro':                        '#94a3b8',
+const instDatasets = []; let i = 0;
+<?php foreach($datos_inst_stacked as $label => $data): ?>
+    instDatasets.push({ label: '<?= $label ?>', data: <?= json_encode($data) ?>, backgroundColor: colors[i % colors.length], borderRadius: 2 }); i++;
+<?php endforeach; ?>
+
+const ventDatasets = []; let j = 0;
+<?php foreach($datos_vent_stacked as $label => $data): ?>
+    ventDatasets.push({ label: '<?= $label ?>', data: <?= json_encode($data) ?>, backgroundColor: colors[j % colors.length], borderRadius: 2 }); j++;
+<?php endforeach; ?>
+
+// 1. PLUGIN PARA PINTAR EL TOTAL EN LA PARTE SUPERIOR
+const pluginTotalesArriba = {
+    id: 'pluginTotalesArriba',
+    afterDatasetsDraw: (chart) => {
+        const ctx = chart.ctx;
+        if(chart.data.datasets.length === 0) return;
+        
+        chart.data.datasets[0].data.forEach((_, index) => {
+            let total = 0;
+            let topY = chart.scales.y.bottom;
+            let metaX = 0;
+            let hasData = false;
+
+            for (let k = 0; k < chart.data.datasets.length; k++) {
+                const meta = chart.getDatasetMeta(k);
+                const val = chart.data.datasets[k].data[index];
+                
+                if (chart.isDatasetVisible(k) && val > 0) {
+                    total += val;
+                    metaX = meta.data[index].x;
+                    if (meta.data[index].y < topY) { topY = meta.data[index].y; }
+                    hasData = true;
+                }
+            }
+
+            if (hasData && total > 0) {
+                ctx.save();
+                ctx.fillStyle = '#1a2540'; // Azul oscuro para el número del total
+                ctx.font = 'bold 12px "Segoe UI", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(total, metaX, topY - 4); // Se dibuja 4px arriba de la barra
+                ctx.restore();
+            }
+        });
+    }
 };
 
-const instCanales = <?= json_encode(array_values(array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0))) ?>;
-const instData    = <?= json_encode(array_values(array_map(fn($c) => $evo_inst_canal[$c], array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0)))) ?>;
-
-const ventCanales = <?= json_encode(array_values(array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0))) ?>;
-const ventData    = <?= json_encode(array_values(array_map(fn($c) => $evo_vent_canal[$c], array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0)))) ?>;
-
-const stackedOpts = () => ({
-    responsive: true, maintainAspectRatio: false,
-    plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 10, boxWidth: 12 } },
-        datalabels: { display: false }
+// 2. CONFIGURACIÓN PARA BARRAS APILADAS Y NÚMEROS INTERNOS (DATALABELS)
+const stackOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { 
+        legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+        datalabels: { 
+            display: true,
+            color: '#ffffff', // Números internos en blanco
+            font: { weight: 'bold', size: 10 },
+            formatter: (value) => value > 0 ? value : '' // Oculta si es 0
+        }
     },
     scales: {
-        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } },
-        y: { stacked: true, beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } }
+        y: { 
+            stacked: true, beginAtZero: true, grid: { color: '#e2e8f4' },
+            suggestedMax: (ctx) => {
+                // Dar 15% más de espacio arriba para que el total no se corte
+                return ctx.chart.scales.y?.max ? ctx.chart.scales.y.max * 1.15 : null;
+            }
+        },
+        x: { stacked: true, grid: { display: false } }
     }
-});
+};
 
+// 3. RENDERIZADO CON EL PLUGIN AGREGADO
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
-    data: {
-        labels: labels6,
-        datasets: instCanales.map((c, i) => ({
-            label: c,
-            data: instData[i],
-            backgroundColor: canalColores[c] || '#94a3b8',
-            borderRadius: i === instCanales.length - 1 ? 4 : 0,
-        }))
-    },
-    options: stackedOpts()
+    data: { labels: labels6, datasets: instDatasets },
+    options: stackOpts,
+    plugins: [pluginTotalesArriba] // <- Aquí inyectamos el total arriba
 });
 
 new Chart(document.getElementById('cVentEvo'), {
     type: 'bar',
-    data: {
-        labels: labels6,
-        datasets: ventCanales.map((c, i) => ({
-            label: c,
-            data: ventData[i],
-            backgroundColor: canalColores[c] || '#94a3b8',
-            borderRadius: i === ventCanales.length - 1 ? 4 : 0,
-        }))
-    },
-    options: stackedOpts()
+    data: { labels: labels6, datasets: ventDatasets },
+    options: stackOpts,
+    plugins: [pluginTotalesArriba] // <- Aquí inyectamos el total arriba
 });
 </script>
 </body>
