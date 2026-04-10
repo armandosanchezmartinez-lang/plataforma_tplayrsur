@@ -364,7 +364,7 @@ $roles_labels = [
         .chart-wrap { position:relative; height:200px; }
         .evo-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
-        .evo-wrap { position:relative; height:220px; }
+        .evo-wrap { position: relative; height: 400px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
 
         /* VELOCÍMETRO */
@@ -591,13 +591,11 @@ const ventDatasets = []; let j = 0;
     ventDatasets.push({ label: '<?= $label ?>', data: <?= json_encode($data) ?>, backgroundColor: colors[j % colors.length], borderRadius: 2 }); j++;
 <?php endforeach; ?>
 
-// 1. PLUGIN PARA PINTAR EL TOTAL EN LA PARTE SUPERIOR
+// 1. PLUGIN PARA LOS TOTALES (Con ajuste de margen superior)
 const pluginTotalesArriba = {
     id: 'pluginTotalesArriba',
     afterDatasetsDraw: (chart) => {
         const ctx = chart.ctx;
-        if(chart.data.datasets.length === 0) return;
-        
         chart.data.datasets[0].data.forEach((_, index) => {
             let total = 0;
             let topY = chart.scales.y.bottom;
@@ -607,50 +605,60 @@ const pluginTotalesArriba = {
             for (let k = 0; k < chart.data.datasets.length; k++) {
                 const meta = chart.getDatasetMeta(k);
                 const val = chart.data.datasets[k].data[index];
-                
                 if (chart.isDatasetVisible(k) && val > 0) {
                     total += val;
                     metaX = meta.data[index].x;
-                    if (meta.data[index].y < topY) { topY = meta.data[index].y; }
+                    if (meta.data[index].y < topY) topY = meta.data[index].y;
                     hasData = true;
                 }
             }
 
             if (hasData && total > 0) {
                 ctx.save();
-                ctx.fillStyle = '#1a2540'; // Azul oscuro para el número del total
-                ctx.font = 'bold 12px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#1a2540'; 
+                ctx.font = 'bold 13px "Segoe UI", sans-serif'; // Un poco más grande
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'bottom';
-                ctx.fillText(total, metaX, topY - 4); // Se dibuja 4px arriba de la barra
+                ctx.fillText(total, metaX, topY - 8); // Más separación arriba
                 ctx.restore();
             }
         });
     }
 };
 
-// 2. CONFIGURACIÓN PARA BARRAS APILADAS Y NÚMEROS INTERNOS (DATALABELS)
+// 2. OPCIONES DE LAS BARRAS (Con mejores números internos)
 const stackOpts = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: { 
         legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
         datalabels: { 
-            display: true,
-            color: '#ffffff', // Números internos en blanco
-            font: { weight: 'bold', size: 10 },
-            formatter: (value) => value > 0 ? value : '' // Oculta si es 0
+            display: (context) => context.dataset.data[context.dataIndex] > 0, // No mostrar si es 0
+            color: '#ffffff',
+            font: { weight: 'bold', size: 11 },
+            // Sombra para que el blanco se lea en cualquier color de fondo
+            textShadowColor: 'rgba(0, 0, 0, 0.5)',
+            textShadowBlur: 4,
+            formatter: Math.round
         }
     },
     scales: {
         y: { 
-            stacked: true, beginAtZero: true, grid: { color: '#e2e8f4' },
+            stacked: true, 
+            beginAtZero: true, 
+            grid: { color: '#e2e8f4' },
+            ticks: { font: { size: 11 } },
             suggestedMax: (ctx) => {
-                // Dar 15% más de espacio arriba para que el total no se corte
-                return ctx.chart.scales.y?.max ? ctx.chart.scales.y.max * 1.15 : null;
+                // Forzamos un 25% de espacio extra arriba para que el total se vea claro
+                const max = ctx.chart.scales.y?.max;
+                return max ? max * 1.25 : null;
             }
         },
-        x: { stacked: true, grid: { display: false } }
+        x: { 
+            stacked: true, 
+            grid: { display: false },
+            ticks: { font: { size: 11, weight: 'bold' } } 
+        }
     }
 };
 
