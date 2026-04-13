@@ -670,8 +670,7 @@ $roles_labels = [
 <script>
 // --- DONUTS (MIX) ---
 const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
-const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>;
-Chart.register(ChartDataLabels); // mostrar % en el mix
+const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>; // mostrar % en el mix
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
@@ -694,12 +693,14 @@ const donutOpts = () => ({
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
-    options: donutOpts()
+    options: donutOpts(),
+    plugins: [ChartDataLabels]
 });
 new Chart(document.getElementById('cVentMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
-    options: donutOpts()
+    options: donutOpts(),
+    plugins: [ChartDataLabels]
 });
 
 // --- EVOLUCIÓN APILADA (6 MESES) ---
