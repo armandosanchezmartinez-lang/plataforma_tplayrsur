@@ -671,7 +671,7 @@ $roles_labels = [
 // --- DONUTS (MIX) ---
 const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
 const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>;
-
+Chart.register(ChartDataLabels); // mostrar % en el mix
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
