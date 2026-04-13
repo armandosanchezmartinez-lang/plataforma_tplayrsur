@@ -5,6 +5,7 @@ header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
 header("Expires: 0");
 session_start();
+
 if (!isset($_SESSION['usuario'])) {
     header("Location: login.php");
     exit();
@@ -12,6 +13,7 @@ if (!isset($_SESSION['usuario'])) {
 
 include 'conexion.php';
 
+// --- CONFIGURACIÓN DE USUARIO Y ROLES ---
 $rol            = $_SESSION['rol'] ?? 'vendedor';
 $talento_gs     = $_SESSION['numero_talento_gs'] ?? '';
 $id_posicion    = $_SESSION['id_posicion'] ?? '';
@@ -19,6 +21,7 @@ $nombre_usuario = $_SESSION['usuario'] ?? '';
 
 $puestos_comerciales = "'PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGOCIOS','VENDEDOR NEGOCIO'";
 
+// --- FUNCIONES DE JERARQUÍA ---
 function getSubordinados($conexion, $id_pos, $semana = null, $anio = null) {
     $ids = [];
     if ($semana && $anio) {
@@ -46,6 +49,7 @@ function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = 
     return array_unique($todos);
 }
 
+// --- TIEMPO Y FECHAS ---
 $semana_actual = null; $anio_actual = null; $semana_base = null;
 $res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
 if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
@@ -56,10 +60,6 @@ if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
 
 $niveles = ['admin'=>6,'director_regional'=>5,'director_distrital'=>4,'lider'=>3,'coach'=>2,'vendedor'=>1];
 $nivel   = $niveles[$rol] ?? 1;
-
-$nombre_completo  = $nombre_usuario;
-$posicion_usuario = '';
-$distrito_usuario = '';
 
 $stmt_nombre = mysqli_prepare($conexion, "SELECT nombre_colaborador, posicion, distrito FROM hc WHERE id_posicion = ? LIMIT 1");
 if ($stmt_nombre) {
@@ -74,14 +74,13 @@ if ($stmt_nombre) {
     mysqli_stmt_close($stmt_nombre);
 }
 
+// --- FILTRADO POR JERARQUÍA ---
 $subordinados_ids = [];
 $folio_ids        = [];
-
 if ($rol !== 'admin') {
     $subordinados_ids = getTodosSubordinados($conexion, $id_posicion, $nivel, $semana_actual, $anio_actual);
     $subordinados_ids[] = $id_posicion;
     $subordinados_ids = array_unique(array_values($subordinados_ids));
-
     if (!empty($subordinados_ids)) {
         $ph_sub = implode(',', array_fill(0, count($subordinados_ids), '?'));
         $stmt_folios = mysqli_prepare($conexion, "SELECT DISTINCT numero_talento_gs FROM hc WHERE id_posicion IN ($ph_sub) AND numero_talento_gs NOT LIKE '%VACANTE%'");
@@ -240,42 +239,64 @@ $mix_vent = $r_mix_vent ? mysqli_fetch_assoc($r_mix_vent) : ['p3'=>0,'p2'=>0];
 $vent_3p = (int)($mix_vent['p3'] ?? 0);
 $vent_2p = (int)($mix_vent['p2'] ?? 0);
 
-// ── EVOLUCIÓN 6 MESES ────────────────────────────────────────────────────────
-$evolucion_inst = [];
-$evolucion_vent = [];
-$meses_labels   = [];
+// ── EVOLUCIÓN 6 MESES APILADA ────────────────────────────────────────────────
+$meses_labels = [];
+$datos_inst_stacked = []; 
+$datos_vent_stacked = [];
+
+// Generar etiquetas de meses (eje X)
 for ($i = 5; $i >= 0; $i--) {
     $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
-    $m  = (int)date('n', $ts);
-    $a  = (int)date('Y', $ts);
     $meses_labels[] = date('M Y', $ts);
-    if ($rol === 'admin') {
-        $ri = mysqli_query($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a AND origen_prospecto <> '-'");
-        $rv = mysqli_query($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a");
-    } elseif ($por_distrito) {
-        $ri = mysqli_query($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=$m AND YEAR(fecha)=$a AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
-        $rv = mysqli_query($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=$m AND YEAR(fecha_cierre)=$a AND distrito='$distrito_esc'");
-    } else {
-        if (empty($folio_ids)) {
-            $ri = mysqli_query($conexion, "SELECT 0 as t");
-            $rv = mysqli_query($conexion, "SELECT 0 as t");
-        } else {
-            $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-            $stmt_ri = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as t FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
-            $tipos = 'ii' . str_repeat('s', count($folio_ids));
-            $bind  = array_merge([$m, $a], array_values($folio_ids));
-            mysqli_stmt_bind_param($stmt_ri, $tipos, ...$bind);
-            mysqli_stmt_execute($stmt_ri);
-            $ri = mysqli_stmt_get_result($stmt_ri);
-            $stmt_rv = mysqli_prepare($conexion, "SELECT COUNT(*) as t FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
-            mysqli_stmt_bind_param($stmt_rv, $tipos, ...$bind);
-            mysqli_stmt_execute($stmt_rv);
-            $rv = mysqli_stmt_get_result($stmt_rv);
-        }
-    }
-    $evolucion_inst[] = (int)(($ri ? mysqli_fetch_assoc($ri)['t'] : 0) ?? 0);
-    $evolucion_vent[] = (int)(($rv ? mysqli_fetch_assoc($rv)['t'] : 0) ?? 0);
 }
+
+// 1. Datos Instalaciones por Origen
+$query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
+    FROM instalaciones 
+    WHERE fecha >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) AND origen_prospecto <> '-' ";
+if ($rol !== 'admin' && $por_distrito) {
+    $query_inst .= " AND distrito='$distrito_esc'";
+} elseif ($rol !== 'admin' && !empty($folio_ids)) {
+    $ph = implode("','", array_values($folio_ids));
+    $query_inst .= " AND folio_empleado IN ('$ph')";
+}
+$query_inst .= " GROUP BY anio, mes, origen_prospecto";
+
+$res_i = mysqli_query($conexion, $query_inst);
+while($row = mysqli_fetch_assoc($res_i)) {
+    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
+    $idx = array_search($label_mes, $meses_labels);
+    if($idx !== false) {
+        $orig = $row['origen_prospecto'] ?: 'OTROS';
+        if(!isset($datos_inst_stacked[$orig])) $datos_inst_stacked[$orig] = array_fill(0, 6, 0);
+        $datos_inst_stacked[$orig][$idx] = (int)$row['total'];
+    }
+}
+
+// 2. Datos Ventas por Canal
+$query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
+    FROM ventas 
+    WHERE fecha_cierre >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) ";
+if ($rol !== 'admin' && $por_distrito) {
+    $query_vent .= " AND distrito='$distrito_esc'";
+} elseif ($rol !== 'admin' && !empty($folio_ids)) {
+    $ph = implode("','", array_values($folio_ids));
+    $query_vent .= " AND folio_empleado IN ('$ph')";
+}
+$query_vent .= " GROUP BY anio, mes, canal_venta";
+
+$res_v = mysqli_query($conexion, $query_vent);
+while($row = mysqli_fetch_assoc($res_v)) {
+    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
+    $idx = array_search($label_mes, $meses_labels);
+    if($idx !== false) {
+        $canal = $row['canal_venta'] ?: 'OTROS';
+        if(!isset($datos_vent_stacked[$canal])) $datos_vent_stacked[$canal] = array_fill(0, 6, 0);
+        $datos_vent_stacked[$canal][$idx] = (int)$row['total'];
+    }
+}
+
+$colores_palette = ['#2b57a7', '#10b981', '#f59e0b', '#7c3aed', '#ef4444', '#06b6d4', '#ec4899'];
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -316,8 +337,12 @@ $roles_labels = [
         .user-name { font-size:0.82rem; font-weight:700; }
         .user-role { font-size:0.7rem; color:var(--text2); }
 
-        /* KPI GRID - AJUSTADO A 4 COLUMNAS EN UNA LÍNEA */
+        /* KPI GRID - 4 COLUMNAS PARA PRIMERA FILA */
         .kpi-grid { display:grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap:20px; margin-bottom:24px; }
+        
+        /* KPI GRID - 3 COLUMNAS PARA SEGUNDA FILA (HEADCOUNT Y MIX) */
+        .kpi-grid-3cols { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+
         .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: center; }
         .kpi-card.full { grid-column: 1 / -1; }
         
@@ -338,15 +363,15 @@ $roles_labels = [
         .kpi-sub { font-size:0.7rem; color:var(--text2); margin-top:4px; font-weight:600; }
         
         .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
-        .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
+        .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column;}
         .chart-title { font-size:0.88rem; font-weight:700; margin-bottom:16px; color:var(--text); }
-        .chart-wrap { position:relative; height:200px; }
+        .chart-wrap { position:relative; flex: 1; min-height: 150px; }
         .evo-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
-        .evo-wrap { position:relative; height:220px; }
+        .evo-wrap { position: relative; height: 400px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
 
-        /* VELOCÍMETRO COMPACTO PARA FILA ÚNICA */
+        /* VELOCÍMETRO */
         .kpi-speed-layout { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 10px; }
         .speedometer-container { 
             position: relative; width: 220px; height: 110px; display: flex; justify-content: center; 
@@ -360,17 +385,7 @@ $roles_labels = [
         .speedometer-centro-blanco { position: absolute; top: 22px; left: 22px; width: 176px; height: 176px; border-radius: 50%; background-color: var(--white); }
         .needle-pivote { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); width: 14px; height: 14px; background-color: var(--text); border-radius: 50%; z-index: 3; }
         .needle { position: absolute; bottom: 0px; left: calc(50% - 2px); width: 4px; height: 95px; background-color: var(--text); transform-origin: center bottom; transition: transform 1s ease-out; z-index: 2; border-radius: 2px; }
-        
-        /* AQUÍ ESTÁ EL AJUSTE DEL TEXTO CENTRADO */
-        .porcentaje-sobre-arco { 
-            position: absolute; 
-            bottom: 15px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            font-size: 1.4rem; 
-            font-weight: 800; 
-            z-index: 4; 
-        }
+        .porcentaje-sobre-arco { position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); font-size: 1.4rem; font-weight: 800; z-index: 4; }
         
         .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
         .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
@@ -407,9 +422,9 @@ $roles_labels = [
     <div class="kpi-grid">
 
         <?php if ($mostrar_meta): 
-            $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 100); 
-            $angulo_aguja = ($porcentaje_visual_aguja / 100 * 180) - 90;
-            $color_porcentaje = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
+            $porcentaje_visual_aguja_meta = min((float)$kpi_meta_pct, 100); 
+            $angulo_aguja_meta = ($porcentaje_visual_aguja_meta / 100 * 180) - 90;
+            $color_porcentaje_meta = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
         ?>
         <div class="kpi-card" style="padding-right: 15px;">
             <div class="kpi-header" style="margin-bottom: 5px;">
@@ -424,8 +439,8 @@ $roles_labels = [
                         <div class="speedometer-centro-blanco"></div>
                     </div>
                     <div class="needle-pivote"></div>
-                    <div class="needle" style="transform: rotate(<?= $angulo_aguja ?>deg);"></div>
-                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje ?>;">
+                    <div class="needle" style="transform: rotate(<?= $angulo_aguja_meta ?>deg);"></div>
+                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje_meta ?>;">
                         <?= $kpi_meta_pct ?>%
                     </div>
                 </div>
@@ -480,49 +495,74 @@ $roles_labels = [
             </div>
         </div>
 
-        <div class="kpi-card full">
-            <div class="kpi-header">
-                <div class="kpi-icon kpi-purple">👥</div>
+    </div>
+
+    <div class="kpi-grid-3cols">
+        
+        <?php 
+            $porcentaje_visual_aguja_hc = min((float)$kpi_hc_pct, 100); 
+            $angulo_aguja_hc = ($porcentaje_visual_aguja_hc / 100 * 180) - 90;
+            $color_porcentaje_hc = ($kpi_hc_pct >= 100) ? 'var(--green)' : (($kpi_hc_pct >= 80) ? '#f59e0b' : 'var(--red)');
+        ?>
+        <div class="kpi-card" style="padding-right: 15px;">
+             <div class="kpi-header" style="margin-bottom: 5px;">
+                <div class="kpi-icon kpi-purple" style="width: 32px; height: 32px;">👥</div>
                 <div class="kpi-label">Headcount — Semana <?= $semana_base ?> · <?= $anio_actual ?></div>
             </div>
-            <div class="kpi-numbers">
-                <div class="kpi-num">
-                    <span class="kpi-val purple"><?= number_format($kpi_hc_act) ?></span>
-                    <span class="kpi-sub">activo</span>
+
+             <div class="kpi-speed-layout">
+                <div class="speedometer-container">
+                    <div class="speedometer-arco-mascara">
+                        <div class="speedometer-gradiente"></div>
+                        <div class="speedometer-centro-blanco"></div>
+                    </div>
+                    <div class="needle-pivote"></div>
+                    <div class="needle" style="transform: rotate(<?= $angulo_aguja_hc ?>deg);"></div>
+                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje_hc ?>;">
+                        <?= $kpi_hc_pct ?>%
+                    </div>
                 </div>
-                <div class="kpi-num">
-                    <span class="kpi-val red"><?= number_format($kpi_hc_vac) ?></span>
-                    <span class="kpi-sub">vacante</span>
-                </div>
-                <div class="kpi-num">
-                    <span class="kpi-val purple"><?= $kpi_hc_pct ?>%</span>
-                    <span class="kpi-sub">ocupación</span>
+
+                <div class="speed-numbers" style="align-items: flex-start; margin-left: 20px;">
+                    <div style="display:flex; gap: 20px;">
+                        <div class="kpi-num">
+                            <span class="kpi-val purple" style="font-size: 1.8rem;"><?= number_format($kpi_hc_act) ?></span>
+                            <span class="kpi-sub">Activo</span>
+                        </div>
+                        <div class="kpi-num">
+                            <span class="kpi-val red" style="font-size: 1.8rem;"><?= number_format($kpi_hc_vac) ?></span>
+                            <span class="kpi-sub">Vacante</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <span class="kpi-val" style="color:var(--text); font-size: 1.2rem;"><?= number_format($kpi_hc_total) ?></span>
+                        <span class="kpi-sub">Total Plantilla</span>
+                    </div>
                 </div>
             </div>
         </div>
 
-    </div>
-
-    <div class="charts-row">
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Ventas</div>
             <div class="chart-wrap"><canvas id="cVentMix"></canvas></div>
         </div>
+
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
             <div class="chart-wrap"><canvas id="cInstMix"></canvas></div>
         </div>
+
     </div>
 
     <div class="evo-card">
-        <div class="chart-title">Instalaciones y Ventas — Últimos 6 meses</div>
+        <div class="chart-title">Evolución — Últimos 6 meses por canal</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub">Ventas</div>
+                <div class="evo-sub">Ventas por canal</div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
             </div>
             <div>
-                <div class="evo-sub">Instalaciones</div>
+                <div class="evo-sub">Instalaciones por origen</div>
                 <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
@@ -530,27 +570,19 @@ $roles_labels = [
 </main>
 
 <script>
-const labels6 = <?= json_encode($meses_labels) ?>;
-const instEvo = <?= json_encode($evolucion_inst) ?>;
-const ventEvo = <?= json_encode($evolucion_vent) ?>;
-const inst2p  = <?= $inst_2p ?>;
-const inst3p  = <?= $inst_3p ?>;
-const vent2p  = <?= $vent_2p ?>;
-const vent3p  = <?= $vent_3p ?>;
-
-Chart.register(ChartDataLabels);
+// --- DONUTS (MIX) ---
+const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
+const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>;
 
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
+        legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 10 } },
         datalabels: {
-            color: '#fff',
-            font: { size: 13, weight: 'bold' },
+            color: '#fff', font: { size: 11, weight: 'bold' },
             formatter: (value, ctx) => {
                 const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
-                if (t === 0 || value === 0) return '';
-                return ((value/t)*100).toFixed(1) + '%';
+                return (t === 0 || value === 0) ? '' : ((value/t)*100).toFixed(1) + '%';
             }
         },
         tooltip: { callbacks: { label: ctx => {
@@ -560,6 +592,7 @@ const donutOpts = () => ({
         }}}
     }
 });
+
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
@@ -570,23 +603,134 @@ new Chart(document.getElementById('cVentMix'), {
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
     options: donutOpts()
 });
-const barOpts = () => ({
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, datalabels: { display: false } },
-    scales: {
-        y: { beginAtZero: true, grid: { color: '#e2e8f4' }, ticks: { font: { size: 11 } } },
-        x: { grid: { display: false }, ticks: { font: { size: 10 } } }
+
+// --- EVOLUCIÓN APILADA (6 MESES) ---
+const labels6 = <?= json_encode($meses_labels) ?>;
+
+const canalColores = {
+    'Cambaceo':                    '#2b57a7',
+    'Punto de Venta':              '#10b981',
+    'Call Center':                 '#f59e0b',
+    'eCommerce':                   '#7c3aed',
+    'Venta Digital':               '#06b6d4',
+    'Winback':                     '#ec4899',
+    'Desarrollos':                 '#84cc16',
+    'Distribuidor':                '#f97316',
+    'Autoempresarios Autorizados': '#6366f1',
+    'Otro':                        '#94a3b8',
+};
+
+// ... (Obtención de datasets igual que antes) ...
+<?php
+$instCanalesJS = array_values(array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0));
+$instDataJS = array_values(array_map(fn($c) => $evo_inst_canal[$c], $instCanalesJS));
+
+$ventCanalesJS = array_values(array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0));
+$ventDataJS = array_values(array_map(fn($c) => $evo_vent_canal[$c], $ventCanalesJS));
+?>
+const instCanales = <?= json_encode($instCanalesJS) ?>;
+const instData    = <?= json_encode($instDataJS) ?>;
+const ventCanales = <?= json_encode($ventCanalesJS) ?>;
+const ventData    = <?= json_encode($ventDataJS) ?>;
+
+
+// 1. PLUGIN PARA LOS TOTALES (Con ajuste de margen superior)
+const pluginTotalesArriba = {
+    id: 'pluginTotalesArriba',
+    afterDatasetsDraw: (chart) => {
+        const ctx = chart.ctx;
+        chart.data.datasets[0].data.forEach((_, index) => {
+            let total = 0;
+            let topY = chart.scales.y.bottom;
+            let metaX = 0;
+            let hasData = false;
+
+            for (let k = 0; k < chart.data.datasets.length; k++) {
+                const meta = chart.getDatasetMeta(k);
+                const val = chart.data.datasets[k].data[index];
+                if (chart.isDatasetVisible(k) && val > 0) {
+                    total += val;
+                    metaX = meta.data[index].x;
+                    if (meta.data[index].y < topY) topY = meta.data[index].y;
+                    hasData = true;
+                }
+            }
+
+            if (hasData && total > 0) {
+                ctx.save();
+                ctx.fillStyle = '#1a2540'; 
+                ctx.font = 'bold 13px "Segoe UI", sans-serif'; 
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(total, metaX, topY - 8); 
+                ctx.restore();
+            }
+        });
     }
-});
+};
+
+// 2. OPCIONES DE LAS BARRAS
+const stackOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { 
+        legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+        datalabels: { 
+            display: (context) => context.dataset.data[context.dataIndex] > 0, 
+            color: '#ffffff',
+            font: { weight: 'bold', size: 11 },
+            textShadowColor: 'rgba(0, 0, 0, 0.5)',
+            textShadowBlur: 4,
+            formatter: Math.round
+        }
+    },
+    scales: {
+        y: { 
+            stacked: true, 
+            beginAtZero: true, 
+            grid: { color: '#e2e8f4' },
+            ticks: { font: { size: 11 } },
+            suggestedMax: (ctx) => {
+                const max = ctx.chart.scales.y?.max;
+                return max ? max * 1.25 : null;
+            }
+        },
+        x: { 
+            stacked: true, 
+            grid: { display: false },
+            ticks: { font: { size: 11, weight: 'bold' } } 
+        }
+    }
+};
+
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
-    data: { labels: labels6, datasets: [{ data: instEvo, backgroundColor: '#3b66b8', borderRadius: 6 }] },
-    options: barOpts()
+    data: {
+        labels: labels6,
+        datasets: instCanales.map((c, i) => ({
+            label: c,
+            data: instData[i],
+            backgroundColor: canalColores[c] || '#94a3b8',
+            borderRadius: i === instCanales.length - 1 ? 4 : 0,
+        }))
+    },
+    options: stackOpts,
+    plugins: [pluginTotalesArriba]
 });
+
 new Chart(document.getElementById('cVentEvo'), {
     type: 'bar',
-    data: { labels: labels6, datasets: [{ data: ventEvo, backgroundColor: '#10b981', borderRadius: 6 }] },
-    options: barOpts()
+    data: {
+        labels: labels6,
+        datasets: ventCanales.map((c, i) => ({
+            label: c,
+            data: ventData[i],
+            backgroundColor: canalColores[c] || '#94a3b8',
+            borderRadius: i === ventCanales.length - 1 ? 4 : 0,
+        }))
+    },
+    options: stackOpts,
+    plugins: [pluginTotalesArriba]
 });
 </script>
 </body>
