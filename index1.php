@@ -621,18 +621,10 @@ const canalColores = {
 };
 
 // ... (Obtención de datasets igual que antes) ...
-<?php
-$instCanalesJS = array_values(array_filter($canales, fn($c) => array_sum($evo_inst_canal[$c]) > 0));
-$instDataJS = array_values(array_map(fn($c) => $evo_inst_canal[$c], $instCanalesJS));
-
-$ventCanalesJS = array_values(array_filter($canales, fn($c) => array_sum($evo_vent_canal[$c]) > 0));
-$ventDataJS = array_values(array_map(fn($c) => $evo_vent_canal[$c], $ventCanalesJS));
-?>
-const instCanales = <?= json_encode($instCanalesJS) ?>;
-const instData    = <?= json_encode($instDataJS) ?>;
-const ventCanales = <?= json_encode($ventCanalesJS) ?>;
-const ventData    = <?= json_encode($ventDataJS) ?>;
-
+const instCanales = <?= json_encode(empty($datos_inst_stacked) ? [] : array_keys($datos_inst_stacked)) ?>;
+const instData    = <?= json_encode(empty($datos_inst_stacked) ? [] : array_values($datos_inst_stacked)) ?>;
+const ventCanales = <?= json_encode(empty($datos_vent_stacked) ? [] : array_keys($datos_vent_stacked)) ?>;
+const ventData    = <?= json_encode(empty($datos_vent_stacked) ? [] : array_values($datos_vent_stacked)) ?>;
 
 // 1. PLUGIN PARA LOS TOTALES (Con ajuste de margen superior)
 const pluginTotalesArriba = {
