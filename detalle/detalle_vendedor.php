@@ -47,7 +47,7 @@ $ant_txt     = $ant_anios > 0 ? "{$ant_anios} año(s) " . ($ant_meses % 12) . " 
 // ── 18 SEMANAS ───────────────────────────────────────────────────────────────
 // Generar últimas 18 semanas ISO desde hoy hacia atrás
 $semanas = [];
-for ($i = 17; $i >= 0; $i--) {
+for ($i = 19; $i >= 0; $i--) {
     $ts   = strtotime("-{$i} weeks");
     $anio = (int)date('o', $ts); // año ISO
     $sem  = (int)date('W', $ts); // semana ISO
