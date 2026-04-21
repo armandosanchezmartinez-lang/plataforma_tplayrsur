@@ -181,7 +181,7 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
 </aside>
 
 <main class="main">
-    <a href="reai_v2.php" class="back-btn">← Volver al seguimiento</a>
+    <a href="reai1.php" class="back-btn">← Volver al seguimiento</a>
 
     <!-- TARJETA VENDEDOR -->
     <div class="vendedor-card">
