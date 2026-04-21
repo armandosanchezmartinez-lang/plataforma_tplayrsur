@@ -403,7 +403,11 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
             ?>
             <tr data-nombre="<?= strtolower(htmlspecialchars($nombre)) ?>" data-coach="<?= strtolower(htmlspecialchars($coach_nom)) ?>">
                 <td class="left">
-                    <div style="font-weight:600;"><?= htmlspecialchars($nombre) ?></div>
+                    <div style="font-weight:600;">
+                        <a href="detalle_vendedor.php?tgs=<?= urlencode($tgs) ?>" style="color:var(--blue);text-decoration:none;font-weight:600;" title="Ver seguimiento">
+                            <?= htmlspecialchars($nombre) ?>
+                        </a>
+                    </div>
                     <div class="sub-text"><?= htmlspecialchars($tgs) ?></div>
                 </td>
                 <td class="left" style="font-size:0.78rem;"><?= htmlspecialchars($coach_nom) ?></td>
