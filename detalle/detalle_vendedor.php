@@ -119,11 +119,11 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($nombre) ?> — Seguimiento</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
     <style>
         :root { --blue:#2b57a7; --bg:#f4f6fb; --white:#fff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --red:#ef4444; --orange:#f59e0b; --sidebar:200px; }
         * { box-sizing:border-box; margin:0; padding:0; }
@@ -248,6 +248,8 @@ const labels  = <?= json_encode($labels) ?>;
 const instData   = <?= json_encode($data_instalado) ?>;
 const noInstData = <?= json_encode($data_no_instalado) ?>;
 const totalData  = <?= json_encode($data_total) ?>;
+
+
 Chart.register(ChartDataLabels);
 
 new Chart(document.getElementById('cVendedor'), {
@@ -292,6 +294,7 @@ new Chart(document.getElementById('cVendedor'), {
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
+            legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 14, boxWidth: 14 } },
             datalabels: {
                 display: (ctx) => ctx.dataset.type !== 'line' && ctx.dataset.data[ctx.dataIndex] > 0,
                 color: '#fff',
@@ -300,7 +303,6 @@ new Chart(document.getElementById('cVendedor'), {
                 anchor: 'center',
                 align: 'center',
             },
-            legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 14, boxWidth: 14 } },
             tooltip: {
                 callbacks: {
                     afterBody: (items) => {
