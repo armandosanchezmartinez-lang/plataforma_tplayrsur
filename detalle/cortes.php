@@ -1,7 +1,10 @@
 <?php
-// 1. INCLUIR CONEXIÓN A BASE DE DATOS
-// Cambia esto por tu archivo real de conexión
-include 'conexion.php'; 
+// Cambia esto temporalmente para ver el error real
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+include 'conexion.php';
 
 // --- SECCIÓN AJAX: GUARDAR DATOS SIN RECARGAR ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
