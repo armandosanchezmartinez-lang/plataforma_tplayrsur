@@ -61,7 +61,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         .logo-header h1 { color: #2b57a7; font-size: 2.2rem; letter-spacing: 1px; font-weight: 700; }
         .brand-section img { width: 70%; max-width: 450px; }
         
-        label { display: block; margin-bottom: 15px; font-size: 0.9rem; color: #4a66a0; font-weight: 600; }
+        label { display: block; margin-bottom: 15px; font-size: 0.9rem; color: #060606; font-weight: 600; }
         input { width: 100%; padding: 15px; margin-bottom: 25px; border: 1px solid #dce0e9; border-radius: 8px; font-size: 1rem; background-color: #fcfcfc; outline: none; }
         
         /* --- NUEVO ESTILO DE BOTÓN --- */
