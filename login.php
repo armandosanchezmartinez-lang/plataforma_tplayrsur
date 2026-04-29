@@ -40,20 +40,56 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        
         .login-section { flex: 1; background-color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 40px; }
-        .brand-section { flex: 1; background-color: #2b57a7; display: flex; justify-content: center; align-items: center; }
+        
+        /* --- NUEVO FONDO DEGRADADO --- */
+        .brand-section { 
+            flex: 1; 
+            /* Fondo base oscuro con destellos radiales rosa y cyan */
+            background: radial-gradient(circle at bottom left, #e0008f 0%, transparent 60%), 
+                        radial-gradient(circle at bottom right, #00aaff 0%, transparent 60%), 
+                        #080414; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+        }
+        
         .form-container { width: 100%; max-width: 400px; }
         .logo-header { display: flex; align-items: center; margin-bottom: 50px; }
         .logo-header img { height: 60px; margin-right: 15px; }
         .logo-header h1 { color: #2b57a7; font-size: 2.2rem; letter-spacing: 1px; font-weight: 700; }
         .brand-section img { width: 70%; max-width: 450px; }
+        
         label { display: block; margin-bottom: 15px; font-size: 0.9rem; color: #4a66a0; font-weight: 600; }
         input { width: 100%; padding: 15px; margin-bottom: 25px; border: 1px solid #dce0e9; border-radius: 8px; font-size: 1rem; background-color: #fcfcfc; outline: none; }
-        button { width: 100%; padding: 15px; background-color: #3b66b8; color: white; border: none; border-radius: 8px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: background 0.3s; margin-top: 10px; }
-        button:hover { background-color: #2b57a7; }
+        
+        /* --- NUEVO ESTILO DE BOTÓN --- */
+        button { 
+            width: 100%; 
+            padding: 15px; 
+            background: linear-gradient(to right, #e0008f, #00aaff); /* Degradado de rosa a azul */
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            font-size: 1.1rem; 
+            font-weight: 600; 
+            cursor: pointer; 
+            transition: opacity 0.3s, transform 0.2s, box-shadow 0.3s; 
+            margin-top: 10px; 
+            box-shadow: 0 4px 15px rgba(0, 170, 255, 0.3);
+        }
+        
+        button:hover { 
+            opacity: 0.9; 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(224, 0, 143, 0.4);
+        }
+        
         .error { color: #d93025; margin-bottom: 20px; font-size: 0.9rem; text-align: left; font-weight: 600; }
+        
         @media (max-width: 768px) { .brand-section { display: none; } }
-    </style>
+</style>
 </head>
 <body>
 <div class="login-section">
