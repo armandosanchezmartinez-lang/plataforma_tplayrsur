@@ -113,7 +113,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     </div>
 </div>
 <div class="brand-section">
-    <img src="totalplay_blanco.png" alt="totalplay_Logo">
+    <img src="region_sur.png" alt="totalplay_Logo">
 </div>
 </body>
 </html>
