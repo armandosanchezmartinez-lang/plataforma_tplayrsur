@@ -449,14 +449,17 @@ $roles_labels = [
         
         .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
         .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
-        .sidebar-logo { 
-            font-size: 1.5rem; /* Si usas un emoji o icono de fuente */
-            margin-bottom: 4px; 
+        .logo-header img { 
+            height: 35px; /* Tamaño tipo icono de barra de navegación */
+            width: auto;  /* Mantiene la proporción */
+            margin-right: 12px; 
+            object-fit: contain;
         }
-        .sidebar-brand { 
-            font-size: 0.65rem; /* Texto de la marca más compacto */
-            letter-spacing: 2px;
-            opacity: 0.8;
+
+        .brand-section img { 
+            width: 40%;      /* Reduce el impacto de la imagen lateral */
+            max-width: 250px; /* Evita que crezca demasiado */
+            opacity: 0.9;    /* Le da un toque más sutil sobre el degradado */
         }
     </style>
 </head>
