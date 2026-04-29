@@ -60,6 +60,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <div class="form-container">
         <div class="logo-header">
             <img src="logo_carpeta.png" alt="Logo">
+            <img src="logotipo_xpedient.png" alt="logotipo_xpedient">
             <h1>TOTALXPEDIENT</h1>
         </div>
         <?php if ($error): ?>
