@@ -449,25 +449,12 @@ $roles_labels = [
         
         .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
         .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
-        .logo-header img { 
-            height: 35px; /* Tamaño tipo icono de barra de navegación */
-            width: auto;  /* Mantiene la proporción */
-            margin-right: 12px; 
-            object-fit: contain;
-        }
-
-        .brand-section img { 
-            width: 40%;      /* Reduce el impacto de la imagen lateral */
-            max-width: 250px; /* Evita que crezca demasiado */
-            opacity: 0.9;    /* Le da un toque más sutil sobre el degradado */
-        }
     </style>
 </head>
 <body>
 <aside class="sidebar">
      <!--<div class="sidebar-logo">📊</div></h1>L -->
-      <!-- <div class="sidebar-brand">TOTALXPEDIENT</div></h1>L -->
-    <img src="logotipo_xpedient_blanco.png" alt="logotipo_xpedient_blanco">
+    <div class="sidebar-brand">TOTALXPEDIENT</div></h1>
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
