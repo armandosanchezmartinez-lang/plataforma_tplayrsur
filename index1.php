@@ -298,6 +298,18 @@ while($row = mysqli_fetch_assoc($res_v)) {
 
 $colores_palette = ['#2b57a7', '#10b981', '#f59e0b', '#7c3aed', '#ef4444', '#06b6d4', '#ec4899'];
 
+// ── TABLA DE PARTICIPACIÓN POR CANAL ─────────────────────────────────────────
+// Calcular totales por mes para instalaciones
+$totales_inst_mes = array_fill(0, 6, 0);
+foreach ($datos_inst_stacked as $canal => $vals) {
+    foreach ($vals as $i => $v) $totales_inst_mes[$i] += $v;
+}
+// Calcular totales por mes para ventas
+$totales_vent_mes = array_fill(0, 6, 0);
+foreach ($datos_vent_stacked as $canal => $vals) {
+    foreach ($vals as $i => $v) $totales_vent_mes[$i] += $v;
+}
+
 $roles_labels = [
     'admin'              => 'Administrador',
     'director_regional'  => 'Director Regional',
@@ -319,15 +331,63 @@ $roles_labels = [
         :root { --blue:#2b57a7; --blue2:#3b66b8; --bg:#f4f6fb; --white:#ffffff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --purple:#7c3aed; --red:#ef4444; --sidebar:200px; }
         * { box-sizing:border-box; margin:0; padding:0; }
         body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
-        .sidebar { width:var(--sidebar); background:var(--blue); min-height:100vh; position:fixed; top:0; left:0; display:flex; flex-direction:column; align-items:center; padding:28px 0; z-index:100; }
+        .sidebar { 
+            width: var(--sidebar); 
+            /* Fondo oscuro con destellos rosa y cyan iguales al login */
+            background: radial-gradient(circle at bottom left, #e0008f 0%, transparent 70%), 
+                        radial-gradient(circle at bottom right, #00aaff 0%, transparent 70%), 
+                        #080414; 
+            min-height: 100vh; 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 28px 0; 
+            z-index: 100; 
+            box-shadow: 4px 0 15px rgba(0,0,0,0.05);
+        }
         .sidebar-logo { color:white; font-size:2rem; margin-bottom:6px; }
         .sidebar-brand { color:rgba(255,255,255,0.9); font-size:0.72rem; font-weight:800; letter-spacing:1px; text-transform:uppercase; margin-bottom:32px; text-align:center; padding:0 12px; }
-        .nav-item { width:100%; display:flex; flex-direction:column; align-items:center; gap:4px; padding:14px 0; color:rgba(255,255,255,0.65); text-decoration:none; font-size:0.78rem; font-weight:600; transition:all 0.2s; }
-        .nav-item:hover,.nav-item.active { color:white; background:rgba(255,255,255,0.12); }
+        .nav-item { 
+            width: 100%; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            gap: 4px; 
+            padding: 14px 0; 
+            color: rgba(255,255,255,0.65); 
+            text-decoration: none; 
+            font-size: 0.78rem; 
+            font-weight: 600; 
+            transition: all 0.2s; 
+            border-right: 4px solid transparent; /* Preparado para el hover */
+        }
+        .nav-item:hover, .nav-item.active { 
+            color: white; 
+            background: rgba(255,255,255,0.1); 
+            border-right: 4px solid #00aaff; /* Acento azul brillante */
+        }
         .nav-icon { font-size:1.3rem; }
         .sidebar-bottom { margin-top:auto; width:100%; padding:0 12px; }
-        .logout-btn { display:block; text-align:center; padding:10px; border-radius:8px; color:rgba(255,255,255,0.6); text-decoration:none; font-size:0.78rem; font-weight:600; transition:all 0.2s; }
-        .logout-btn:hover { background:rgba(255,255,255,0.1); color:white; }
+        .logout-btn { 
+            display: block; 
+            text-align: center; 
+            padding: 12px; 
+            border-radius: 8px; 
+            color: rgba(255,255,255,0.7); 
+            text-decoration: none; 
+            font-size: 0.8rem; 
+            font-weight: 600; 
+            transition: all 0.3s ease; 
+        }
+        .logout-btn:hover { 
+            background: linear-gradient(to right, #e0008f, #00aaff); 
+            color: white; 
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 170, 255, 0.3);
+        }
         .main { margin-left:var(--sidebar); flex:1; padding:32px; }
         .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:28px; }
         .page-header h2 { font-size:1.5rem; font-weight:700; letter-spacing:-0.5px; }
@@ -398,7 +458,6 @@ $roles_labels = [
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
-    <a href="detalle/reai_v2.php" class="nav-item"><span class="nav-icon">📊</span> Seguimiento</a>
     <div class="sidebar-bottom">
         <a href="logout.php" class="logout-btn">⎋ Cerrar sesión</a>
     </div>
@@ -567,13 +626,98 @@ $roles_labels = [
             </div>
         </div>
     </div>
+
+    <!-- TABLA DE PARTICIPACIÓN POR CANAL -->
+    <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked)): ?>
+    <div class="evo-card" style="margin-top:20px;">
+        <div class="chart-title">Participación por canal — Últimos 6 meses (%)</div>
+        <div class="evo-grid" style="margin-top:16px;">
+            <!-- VENTAS -->
+            <div>
+                <div class="evo-sub">Ventas por canal</div>
+                <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Canal</th>
+                            <?php foreach ($meses_labels as $ml): ?>
+                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
+                            <?php endforeach; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($datos_vent_stacked as $canal => $vals):
+                        if (array_sum($vals) == 0) continue;
+                    ?>
+                        <tr style="border-bottom:1px solid #e2e8f4;">
+                            <td style="padding:6px 10px;font-weight:600;color:#1a2540;"><?= htmlspecialchars($canal) ?></td>
+                            <?php foreach ($vals as $i => $v):
+                                $pct = $totales_vent_mes[$i] > 0 ? round(($v / $totales_vent_mes[$i]) * 100, 1) : 0;
+                            ?>
+                            <td style="text-align:center;padding:6px 8px;color:<?= $pct > 0 ? '#1a2540' : '#9ca3af' ?>;">
+                                <?= $pct > 0 ? $pct . '%' : '—' ?>
+                            </td>
+                            <?php endforeach; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                        <tr style="background:#e8f0fe;font-weight:700;">
+                            <td style="padding:6px 10px;color:#2b57a7;">Total</td>
+                            <?php foreach ($totales_vent_mes as $t): ?>
+                            <td style="text-align:center;padding:6px 8px;color:#2b57a7;"><?= number_format($t) ?></td>
+                            <?php endforeach; ?>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+            <!-- INSTALACIONES -->
+            <div>
+                <div class="evo-sub">Instalaciones por origen</div>
+                <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Origen</th>
+                            <?php foreach ($meses_labels as $ml): ?>
+                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
+                            <?php endforeach; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($datos_inst_stacked as $canal => $vals):
+                        if (array_sum($vals) == 0) continue;
+                    ?>
+                        <tr style="border-bottom:1px solid #e2e8f4;">
+                            <td style="padding:6px 10px;font-weight:600;color:#1a2540;"><?= htmlspecialchars($canal) ?></td>
+                            <?php foreach ($vals as $i => $v):
+                                $pct = $totales_inst_mes[$i] > 0 ? round(($v / $totales_inst_mes[$i]) * 100, 1) : 0;
+                            ?>
+                            <td style="text-align:center;padding:6px 8px;color:<?= $pct > 0 ? '#1a2540' : '#9ca3af' ?>;">
+                                <?= $pct > 0 ? $pct . '%' : '—' ?>
+                            </td>
+                            <?php endforeach; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                        <tr style="background:#e8f0fe;font-weight:700;">
+                            <td style="padding:6px 10px;color:#2b57a7;">Total</td>
+                            <?php foreach ($totales_inst_mes as $t): ?>
+                            <td style="text-align:center;padding:6px 8px;color:#2b57a7;"><?= number_format($t) ?></td>
+                            <?php endforeach; ?>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
 </main>
 
 <script>
 // --- DONUTS (MIX) ---
 const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
-const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>;
-
+const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>; // mostrar % en el mix
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
@@ -596,12 +740,14 @@ const donutOpts = () => ({
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
-    options: donutOpts()
+    options: donutOpts(),
+    plugins: [ChartDataLabels]
 });
 new Chart(document.getElementById('cVentMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
-    options: donutOpts()
+    options: donutOpts(),
+    plugins: [ChartDataLabels]
 });
 
 // --- EVOLUCIÓN APILADA (6 MESES) ---
