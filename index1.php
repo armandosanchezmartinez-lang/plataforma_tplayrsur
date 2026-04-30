@@ -331,63 +331,20 @@ $roles_labels = [
         :root { --blue:#2b57a7; --blue2:#3b66b8; --bg:#f4f6fb; --white:#ffffff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --purple:#7c3aed; --red:#ef4444; --sidebar:200px; }
         * { box-sizing:border-box; margin:0; padding:0; }
         body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
-        .sidebar { 
-            width: var(--sidebar); 
-            /* Fondo oscuro con destellos rosa y cyan iguales al login */
-            background: radial-gradient(circle at bottom left, #e0008f 0%, transparent 70%), 
-                        radial-gradient(circle at bottom right, #00aaff 0%, transparent 70%), 
-                        #080414; 
-            min-height: 100vh; 
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 28px 0; 
-            z-index: 100; 
-            box-shadow: 4px 0 15px rgba(0,0,0,0.05);
-        }
-        .sidebar-logo { color:white; font-size:2rem; margin-bottom:6px; }
-        .sidebar-brand { color:rgba(255,255,255,0.9); font-size:0.72rem; font-weight:800; letter-spacing:1px; text-transform:uppercase; margin-bottom:32px; text-align:center; padding:0 12px; }
-        .nav-item { 
-            width: 100%; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            gap: 4px; 
-            padding: 14px 0; 
-            color: rgba(255,255,255,0.65); 
-            text-decoration: none; 
-            font-size: 0.78rem; 
-            font-weight: 600; 
-            transition: all 0.2s; 
-            border-right: 4px solid transparent; /* Preparado para el hover */
-        }
-        .nav-item:hover, .nav-item.active { 
-            color: white; 
-            background: rgba(255,255,255,0.1); 
-            border-right: 4px solid #00aaff; /* Acento azul brillante */
-        }
-        .nav-icon { font-size:1.3rem; }
-        .sidebar-bottom { margin-top:auto; width:100%; padding:0 12px; }
-        .logout-btn { 
-            display: block; 
-            text-align: center; 
-            padding: 12px; 
-            border-radius: 8px; 
-            color: rgba(255,255,255,0.7); 
-            text-decoration: none; 
-            font-size: 0.8rem; 
-            font-weight: 600; 
-            transition: all 0.3s ease; 
-        }
-        .logout-btn:hover { 
-            background: linear-gradient(to right, #e0008f, #00aaff); 
-            color: white; 
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(0, 170, 255, 0.3);
-        }
+        
+        /* BARRA LATERAL UNIFICADA Y LOGO */
+        .sidebar { width:var(--sidebar); background:var(--blue); min-height:100vh; position:fixed; top:0; left:0; display:flex; flex-direction:column; align-items:center; padding:32px 0; z-index:100; box-shadow: 2px 0 10px rgba(0,0,0,0.05); }
+        .sidebar-logo { width:65px; height:auto; margin-bottom:12px; display:block; object-fit:contain; }
+        .sidebar-logo-text { color:white; font-size:3.5rem; margin-bottom:12px; line-height:1; }
+        .sidebar-brand { color:#ffffff; font-size:0.75rem; font-weight:800; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:36px; text-align:center; padding:0 12px; }
+        
+        .nav-item { width:100%; display:flex; flex-direction:column; align-items:center; gap:6px; padding:16px 0; color:rgba(255,255,255,0.7); text-decoration:none; font-size:0.78rem; font-weight:600; transition:all 0.3s ease; }
+        .nav-item:hover, .nav-item.active { color:white; background:rgba(255,255,255,0.15); border-left: 4px solid var(--white); padding-left: -4px; /* Para mantener centrado a pesar del borde */ }
+        .nav-icon { font-size:1.4rem; }
+        .sidebar-bottom { margin-top:auto; width:100%; padding:0 16px 20px; }
+        .logout-btn { display:block; text-align:center; padding:12px; border-radius:8px; background:rgba(0,0,0,0.15); color:rgba(255,255,255,0.85); text-decoration:none; font-size:0.78rem; font-weight:700; transition:all 0.2s; }
+        .logout-btn:hover { background:var(--red); color:white; }
+        
         .main { margin-left:var(--sidebar); flex:1; padding:32px; }
         .page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:28px; }
         .page-header h2 { font-size:1.5rem; font-weight:700; letter-spacing:-0.5px; }
@@ -453,8 +410,11 @@ $roles_labels = [
 </head>
 <body>
 <aside class="sidebar">
-     <!--<div class="sidebar-logo">📊</div></h1>L -->
-    <div class="sidebar-brand">TOTALXPEDIENT</div></h1>
+    <!-- Reemplaza "tu_logo.png" por la ruta real de la imagen de tu logotipo. Si falla, cargará el emoji de respaldo automáticamente -->
+    <img src="logotipo_xpedient_blanco.png" alt="Logo" class="sidebar-logo" onerror="this.outerHTML='<div class=\'sidebar-logo-text\'>📊</div>'">
+    
+     <!-- <div class="sidebar-brand">TOTALXPEDIENT</div> -->
+    
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
