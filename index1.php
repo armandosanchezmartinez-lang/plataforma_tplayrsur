@@ -184,7 +184,7 @@ $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
 // ── META ACUMULADA ───────────────────────────────────────────────────────────
-$dias_transcurridos = (int)date('j') - 2;
+$dias_transcurridos = (int)date('j') - 1;
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
