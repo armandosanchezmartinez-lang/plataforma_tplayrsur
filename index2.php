@@ -298,18 +298,6 @@ while($row = mysqli_fetch_assoc($res_v)) {
 
 $colores_palette = ['#2b57a7', '#10b981', '#f59e0b', '#7c3aed', '#ef4444', '#06b6d4', '#ec4899'];
 
-// ── TABLA DE PARTICIPACIÓN POR CANAL ─────────────────────────────────────────
-// Calcular totales por mes para instalaciones
-$totales_inst_mes = array_fill(0, 6, 0);
-foreach ($datos_inst_stacked as $canal => $vals) {
-    foreach ($vals as $i => $v) $totales_inst_mes[$i] += $v;
-}
-// Calcular totales por mes para ventas
-$totales_vent_mes = array_fill(0, 6, 0);
-foreach ($datos_vent_stacked as $canal => $vals) {
-    foreach ($vals as $i => $v) $totales_vent_mes[$i] += $v;
-}
-
 $roles_labels = [
     'admin'              => 'Administrador',
     'director_regional'  => 'Director Regional',
@@ -349,12 +337,8 @@ $roles_labels = [
         .user-name { font-size:0.82rem; font-weight:700; }
         .user-role { font-size:0.7rem; color:var(--text2); }
 
-        /* KPI GRID - 4 COLUMNAS PARA PRIMERA FILA */
+        /* KPI GRID - 4 COLUMNAS */
         .kpi-grid { display:grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap:20px; margin-bottom:24px; }
-        
-        /* KPI GRID - 3 COLUMNAS PARA SEGUNDA FILA (HEADCOUNT Y MIX) */
-        .kpi-grid-3cols { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px; margin-bottom: 24px; }
-
         .kpi-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: center; }
         .kpi-card.full { grid-column: 1 / -1; }
         
@@ -375,12 +359,12 @@ $roles_labels = [
         .kpi-sub { font-size:0.7rem; color:var(--text2); margin-top:4px; font-weight:600; }
         
         .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
-        .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column;}
+        .chart-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .chart-title { font-size:0.88rem; font-weight:700; margin-bottom:16px; color:var(--text); }
-        .chart-wrap { position:relative; flex: 1; min-height: 150px; }
+        .chart-wrap { position:relative; height:200px; }
         .evo-card { background:var(--white); border-radius:16px; padding:22px 24px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); }
         .evo-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:16px; }
-        .evo-wrap { position: relative; height: 400px; }
+        .evo-wrap { position: relative; height: 300px; }
         .evo-sub { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
 
         /* VELOCÍMETRO */
@@ -410,6 +394,7 @@ $roles_labels = [
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <a href="detalle/reai_v2.php" class="nav-item"><span class="nav-icon">📊</span> Seguimiento</a>
     <div class="sidebar-bottom">
         <a href="logout.php" class="logout-btn">⎋ Cerrar sesión</a>
     </div>
@@ -433,9 +418,9 @@ $roles_labels = [
     <div class="kpi-grid">
 
         <?php if ($mostrar_meta): 
-            $porcentaje_visual_aguja_meta = min((float)$kpi_meta_pct, 100); 
-            $angulo_aguja_meta = ($porcentaje_visual_aguja_meta / 100 * 180) - 90;
-            $color_porcentaje_meta = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
+            $porcentaje_visual_aguja = min((float)$kpi_meta_pct, 100); 
+            $angulo_aguja = ($porcentaje_visual_aguja / 100 * 180) - 90;
+            $color_porcentaje = ($kpi_meta_pct >= 100) ? 'var(--green)' : (($kpi_meta_pct >= 80) ? '#f59e0b' : 'var(--red)');
         ?>
         <div class="kpi-card" style="padding-right: 15px;">
             <div class="kpi-header" style="margin-bottom: 5px;">
@@ -450,8 +435,8 @@ $roles_labels = [
                         <div class="speedometer-centro-blanco"></div>
                     </div>
                     <div class="needle-pivote"></div>
-                    <div class="needle" style="transform: rotate(<?= $angulo_aguja_meta ?>deg);"></div>
-                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje_meta ?>;">
+                    <div class="needle" style="transform: rotate(<?= $angulo_aguja ?>deg);"></div>
+                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje ?>;">
                         <?= $kpi_meta_pct ?>%
                     </div>
                 </div>
@@ -506,176 +491,68 @@ $roles_labels = [
             </div>
         </div>
 
-    </div>
-
-    <div class="kpi-grid-3cols">
-        
-        <?php 
-            $porcentaje_visual_aguja_hc = min((float)$kpi_hc_pct, 100); 
-            $angulo_aguja_hc = ($porcentaje_visual_aguja_hc / 100 * 180) - 90;
-            $color_porcentaje_hc = ($kpi_hc_pct >= 100) ? 'var(--green)' : (($kpi_hc_pct >= 80) ? '#f59e0b' : 'var(--red)');
-        ?>
-        <div class="kpi-card" style="padding-right: 15px;">
-             <div class="kpi-header" style="margin-bottom: 5px;">
-                <div class="kpi-icon kpi-purple" style="width: 32px; height: 32px;">👥</div>
+        <div class="kpi-card full">
+            <div class="kpi-header">
+                <div class="kpi-icon kpi-purple">👥</div>
                 <div class="kpi-label">Headcount — Semana <?= $semana_base ?> · <?= $anio_actual ?></div>
             </div>
-
-             <div class="kpi-speed-layout">
-                <div class="speedometer-container">
-                    <div class="speedometer-arco-mascara">
-                        <div class="speedometer-gradiente"></div>
-                        <div class="speedometer-centro-blanco"></div>
-                    </div>
-                    <div class="needle-pivote"></div>
-                    <div class="needle" style="transform: rotate(<?= $angulo_aguja_hc ?>deg);"></div>
-                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje_hc ?>;">
-                        <?= $kpi_hc_pct ?>%
-                    </div>
+            <div class="kpi-numbers">
+                <div class="kpi-num">
+                    <span class="kpi-val purple"><?= number_format($kpi_hc_act) ?></span>
+                    <span class="kpi-sub">activo</span>
                 </div>
-
-                <div class="speed-numbers" style="align-items: flex-start; margin-left: 20px;">
-                    <div style="display:flex; gap: 20px;">
-                        <div class="kpi-num">
-                            <span class="kpi-val purple" style="font-size: 1.8rem;"><?= number_format($kpi_hc_act) ?></span>
-                            <span class="kpi-sub">Activo</span>
-                        </div>
-                        <div class="kpi-num">
-                            <span class="kpi-val red" style="font-size: 1.8rem;"><?= number_format($kpi_hc_vac) ?></span>
-                            <span class="kpi-sub">Vacante</span>
-                        </div>
-                    </div>
-                    <div style="margin-top: 10px;">
-                        <span class="kpi-val" style="color:var(--text); font-size: 1.2rem;"><?= number_format($kpi_hc_total) ?></span>
-                        <span class="kpi-sub">Total Plantilla</span>
-                    </div>
+                <div class="kpi-num">
+                    <span class="kpi-val red"><?= number_format($kpi_hc_vac) ?></span>
+                    <span class="kpi-sub">vacante</span>
+                </div>
+                <div class="kpi-num">
+                    <span class="kpi-val purple"><?= $kpi_hc_pct ?>%</span>
+                    <span class="kpi-sub">ocupación</span>
                 </div>
             </div>
         </div>
 
+    </div>
+
+    <div class="charts-row">
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Ventas</div>
             <div class="chart-wrap"><canvas id="cVentMix"></canvas></div>
         </div>
-
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
             <div class="chart-wrap"><canvas id="cInstMix"></canvas></div>
         </div>
-
     </div>
 
     <div class="evo-card">
-        <div class="chart-title">Evolución — Últimos 6 meses por canal</div>
+        <div class="chart-title">Instalaciones y Ventas — Últimos 6 meses</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub">Ventas por canal</div>
+                <div class="evo-sub">Ventas</div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
             </div>
             <div>
-                <div class="evo-sub">Instalaciones por origen</div>
+                <div class="evo-sub">Instalaciones</div>
                 <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
     </div>
-
-    <!-- TABLA DE PARTICIPACIÓN POR CANAL -->
-    <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked)): ?>
-    <div class="evo-card" style="margin-top:20px;">
-        <div class="chart-title">Participación por canal — Últimos 6 meses (%)</div>
-        <div class="evo-grid" style="margin-top:16px;">
-            <!-- VENTAS -->
-            <div>
-                <div class="evo-sub">Ventas por canal</div>
-                <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
-                    <thead>
-                        <tr>
-                            <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Canal</th>
-                            <?php foreach ($meses_labels as $ml): ?>
-                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
-                            <?php endforeach; ?>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php foreach ($datos_vent_stacked as $canal => $vals):
-                        if (array_sum($vals) == 0) continue;
-                    ?>
-                        <tr style="border-bottom:1px solid #e2e8f4;">
-                            <td style="padding:6px 10px;font-weight:600;color:#1a2540;"><?= htmlspecialchars($canal) ?></td>
-                            <?php foreach ($vals as $i => $v):
-                                $pct = $totales_vent_mes[$i] > 0 ? round(($v / $totales_vent_mes[$i]) * 100, 1) : 0;
-                            ?>
-                            <td style="text-align:center;padding:6px 8px;color:<?= $pct > 0 ? '#1a2540' : '#9ca3af' ?>;">
-                                <?= $pct > 0 ? $pct . '%' : '—' ?>
-                            </td>
-                            <?php endforeach; ?>
-                        </tr>
-                    <?php endforeach; ?>
-                        <tr style="background:#e8f0fe;font-weight:700;">
-                            <td style="padding:6px 10px;color:#2b57a7;">Total</td>
-                            <?php foreach ($totales_vent_mes as $t): ?>
-                            <td style="text-align:center;padding:6px 8px;color:#2b57a7;"><?= number_format($t) ?></td>
-                            <?php endforeach; ?>
-                        </tr>
-                    </tbody>
-                </table>
-                </div>
-            </div>
-            <!-- INSTALACIONES -->
-            <div>
-                <div class="evo-sub">Instalaciones por origen</div>
-                <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
-                    <thead>
-                        <tr>
-                            <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Origen</th>
-                            <?php foreach ($meses_labels as $ml): ?>
-                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
-                            <?php endforeach; ?>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php foreach ($datos_inst_stacked as $canal => $vals):
-                        if (array_sum($vals) == 0) continue;
-                    ?>
-                        <tr style="border-bottom:1px solid #e2e8f4;">
-                            <td style="padding:6px 10px;font-weight:600;color:#1a2540;"><?= htmlspecialchars($canal) ?></td>
-                            <?php foreach ($vals as $i => $v):
-                                $pct = $totales_inst_mes[$i] > 0 ? round(($v / $totales_inst_mes[$i]) * 100, 1) : 0;
-                            ?>
-                            <td style="text-align:center;padding:6px 8px;color:<?= $pct > 0 ? '#1a2540' : '#9ca3af' ?>;">
-                                <?= $pct > 0 ? $pct . '%' : '—' ?>
-                            </td>
-                            <?php endforeach; ?>
-                        </tr>
-                    <?php endforeach; ?>
-                        <tr style="background:#e8f0fe;font-weight:700;">
-                            <td style="padding:6px 10px;color:#2b57a7;">Total</td>
-                            <?php foreach ($totales_inst_mes as $t): ?>
-                            <td style="text-align:center;padding:6px 8px;color:#2b57a7;"><?= number_format($t) ?></td>
-                            <?php endforeach; ?>
-                        </tr>
-                    </tbody>
-                </table>
-                </div>
-            </div>
-        </div>
-    </div>
-    <?php endif; ?>
-
 </main>
 
 <script>
+Chart.register(ChartDataLabels);
+
 // --- DONUTS (MIX) ---
 const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
-const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>; // mostrar % en el mix
+const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>;
+
 const donutOpts = () => ({
     responsive: true, maintainAspectRatio: false,
     plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 10 } },
+        legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } },
         datalabels: {
-            color: '#fff', font: { size: 11, weight: 'bold' },
+            color: '#fff', font: { size: 13, weight: 'bold' },
             formatter: (value, ctx) => {
                 const t = ctx.dataset.data.reduce((a,b)=>a+b,0);
                 return (t === 0 || value === 0) ? '' : ((value/t)*100).toFixed(1) + '%';
@@ -692,37 +569,27 @@ const donutOpts = () => ({
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
-    options: donutOpts(),
-    plugins: [ChartDataLabels]
+    options: donutOpts()
 });
 new Chart(document.getElementById('cVentMix'), {
     type: 'doughnut',
     data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
-    options: donutOpts(),
-    plugins: [ChartDataLabels]
+    options: donutOpts()
 });
 
 // --- EVOLUCIÓN APILADA (6 MESES) ---
+const colors = <?= json_encode($colores_palette) ?>;
 const labels6 = <?= json_encode($meses_labels) ?>;
 
-const canalColores = {
-    'Cambaceo':                    '#2b57a7',
-    'Punto de Venta':              '#10b981',
-    'Call Center':                 '#f59e0b',
-    'eCommerce':                   '#7c3aed',
-    'Venta Digital':               '#06b6d4',
-    'Winback':                     '#ec4899',
-    'Desarrollos':                 '#84cc16',
-    'Distribuidor':                '#f97316',
-    'Autoempresarios Autorizados': '#6366f1',
-    'Otro':                        '#94a3b8',
-};
+const instDatasets = []; let i = 0;
+<?php foreach($datos_inst_stacked as $label => $data): ?>
+    instDatasets.push({ label: '<?= $label ?>', data: <?= json_encode($data) ?>, backgroundColor: colors[i % colors.length], borderRadius: 2 }); i++;
+<?php endforeach; ?>
 
-// ... (Obtención de datasets igual que antes) ...
-const instCanales = <?= json_encode(empty($datos_inst_stacked) ? [] : array_keys($datos_inst_stacked)) ?>;
-const instData    = <?= json_encode(empty($datos_inst_stacked) ? [] : array_values($datos_inst_stacked)) ?>;
-const ventCanales = <?= json_encode(empty($datos_vent_stacked) ? [] : array_keys($datos_vent_stacked)) ?>;
-const ventData    = <?= json_encode(empty($datos_vent_stacked) ? [] : array_values($datos_vent_stacked)) ?>;
+const ventDatasets = []; let j = 0;
+<?php foreach($datos_vent_stacked as $label => $data): ?>
+    ventDatasets.push({ label: '<?= $label ?>', data: <?= json_encode($data) ?>, backgroundColor: colors[j % colors.length], borderRadius: 2 }); j++;
+<?php endforeach; ?>
 
 // 1. PLUGIN PARA LOS TOTALES (Con ajuste de margen superior)
 const pluginTotalesArriba = {
@@ -749,26 +616,27 @@ const pluginTotalesArriba = {
             if (hasData && total > 0) {
                 ctx.save();
                 ctx.fillStyle = '#1a2540'; 
-                ctx.font = 'bold 13px "Segoe UI", sans-serif'; 
+                ctx.font = 'bold 13px "Segoe UI", sans-serif'; // Un poco más grande
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'bottom';
-                ctx.fillText(total, metaX, topY - 8); 
+                ctx.fillText(total, metaX, topY - 8); // Más separación arriba
                 ctx.restore();
             }
         });
     }
 };
 
-// 2. OPCIONES DE LAS BARRAS
+// 2. OPCIONES DE LAS BARRAS (Con mejores números internos)
 const stackOpts = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: { 
         legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
         datalabels: { 
-            display: (context) => context.dataset.data[context.dataIndex] > 0, 
+            display: (context) => context.dataset.data[context.dataIndex] > 0, // No mostrar si es 0
             color: '#ffffff',
             font: { weight: 'bold', size: 11 },
+            // Sombra para que el blanco se lea en cualquier color de fondo
             textShadowColor: 'rgba(0, 0, 0, 0.5)',
             textShadowBlur: 4,
             formatter: Math.round
@@ -781,6 +649,7 @@ const stackOpts = {
             grid: { color: '#e2e8f4' },
             ticks: { font: { size: 11 } },
             suggestedMax: (ctx) => {
+                // Forzamos un 25% de espacio extra arriba para que el total se vea claro
                 const max = ctx.chart.scales.y?.max;
                 return max ? max * 1.25 : null;
             }
@@ -793,34 +662,19 @@ const stackOpts = {
     }
 };
 
+// 3. RENDERIZADO CON EL PLUGIN AGREGADO
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
-    data: {
-        labels: labels6,
-        datasets: instCanales.map((c, i) => ({
-            label: c,
-            data: instData[i],
-            backgroundColor: canalColores[c] || '#94a3b8',
-            borderRadius: i === instCanales.length - 1 ? 4 : 0,
-        }))
-    },
+    data: { labels: labels6, datasets: instDatasets },
     options: stackOpts,
-    plugins: [pluginTotalesArriba]
+    plugins: [pluginTotalesArriba] // <- Aquí inyectamos el total arriba
 });
 
 new Chart(document.getElementById('cVentEvo'), {
     type: 'bar',
-    data: {
-        labels: labels6,
-        datasets: ventCanales.map((c, i) => ({
-            label: c,
-            data: ventData[i],
-            backgroundColor: canalColores[c] || '#94a3b8',
-            borderRadius: i === ventCanales.length - 1 ? 4 : 0,
-        }))
-    },
+    data: { labels: labels6, datasets: ventDatasets },
     options: stackOpts,
-    plugins: [pluginTotalesArriba]
+    plugins: [pluginTotalesArriba] // <- Aquí inyectamos el total arriba
 });
 </script>
 </body>

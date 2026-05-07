@@ -410,6 +410,7 @@ $roles_labels = [
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <a href="detalle/reai_v2.php" class="nav-item"><span class="nav-icon">📊</span> Seguimiento</a>
     <div class="sidebar-bottom">
         <a href="logout.php" class="logout-btn">⎋ Cerrar sesión</a>
     </div>
