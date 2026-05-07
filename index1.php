@@ -1020,12 +1020,27 @@ async function submitChangePassword() {
     btn.textContent = 'Guardando…';
 
     try {
-        const res  = await fetch('cambiar_password.php', {
+        const res = await fetch('cambiar_password.php', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ actual, nueva })
         });
-        const data = await res.json();
+
+        // Leer siempre texto crudo primero para detectar errores PHP/HTML
+        const rawText = await res.text();
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch(parseErr) {
+            // El servidor no devolvio JSON puro — mostramos la respuesta real
+            const msg = document.getElementById('msgGeneral');
+            msg.innerHTML = '<b>Error del servidor (HTTP ' + res.status + '):</b><br><code style="font-size:0.72rem;word-break:break-all;white-space:pre-wrap;">' + rawText.substring(0, 500).replace(/</g,'&lt;') + '</code>';
+            msg.className = 'modal-msg error';
+            btn.disabled = false;
+            btn.textContent = 'Guardar cambios';
+            return;
+        }
+
         if (data.ok) {
             const msg = document.getElementById('msgGeneral');
             msg.textContent = '✅ Contraseña actualizada correctamente';
@@ -1041,7 +1056,7 @@ async function submitChangePassword() {
         }
     } catch(err) {
         const msg = document.getElementById('msgGeneral');
-        msg.textContent = 'Error de conexión. Intenta de nuevo.';
+        msg.textContent = 'Error de red: ' + err.message;
         msg.className = 'modal-msg error';
         btn.disabled = false;
         btn.textContent = 'Guardar cambios';
