@@ -1,11 +1,8 @@
 <?php
 ob_start();
-
-ini_set('display_errors', 1);
-error_reporting(E_ALL);
-
+ini_set('display_errors', 0);
+error_reporting(0);
 session_start();
-
 ob_clean();
 header('Content-Type: application/json; charset=utf-8');
 
@@ -22,7 +19,6 @@ if (!isset($_SESSION['usuario'])) {
 include 'conexion.php';
 
 $body = json_decode(file_get_contents('php://input'), true);
-
 if (!is_array($body)) {
     jsonOut(['ok' => false, 'error' => 'Cuerpo de solicitud inválido']);
 }
@@ -30,19 +26,15 @@ if (!is_array($body)) {
 $pwd_actual = trim($body['actual'] ?? '');
 $pwd_nueva  = trim($body['nueva']  ?? '');
 
-if ($pwd_actual === '') {
-    jsonOut(['ok' => false, 'error' => 'La contraseña actual es requerida']);
-}
-if (strlen($pwd_nueva) < 8) {
-    jsonOut(['ok' => false, 'error' => 'La nueva contraseña debe tener al menos 8 caracteres']);
-}
+if ($pwd_actual === '') jsonOut(['ok' => false, 'error' => 'La contraseña actual es requerida']);
+if (strlen($pwd_nueva) < 8) jsonOut(['ok' => false, 'error' => 'Mínimo 8 caracteres']);
 
+// El valor guardado en sesión al hacer login
 $usuario = $_SESSION['usuario'];
 
-$stmt = mysqli_prepare($conexion, "SELECT password FROM usuarios WHERE usuario = ? LIMIT 1");
-if (!$stmt) {
-    jsonOut(['ok' => false, 'error' => 'Error de BD: ' . mysqli_error($conexion)]);
-}
+// Buscar por columna correcta: username
+$stmt = mysqli_prepare($conexion, "SELECT password FROM usuarios WHERE username = ? LIMIT 1");
+if (!$stmt) jsonOut(['ok' => false, 'error' => 'Error BD: ' . mysqli_error($conexion)]);
 mysqli_stmt_bind_param($stmt, 's', $usuario);
 mysqli_stmt_execute($stmt);
 $res = mysqli_stmt_get_result($stmt);
@@ -50,36 +42,25 @@ $row = mysqli_fetch_assoc($res);
 mysqli_stmt_close($stmt);
 
 if (!$row) {
-    jsonOut(['ok' => false, 'error' => 'Usuario no encontrado en la base de datos']);
+    jsonOut(['ok' => false, 'error' => "Usuario '$usuario' no encontrado"]);
 }
 
-$hash_guardado = $row['password'];
-$pwd_correcta  = false;
+// Verificar contraseña actual — soporta bcrypt, MD5, SHA1 y texto plano
+$hash = $row['password'];
+$ok   = false;
+if (password_verify($pwd_actual, $hash))  $ok = true;
+elseif ($hash === md5($pwd_actual))        $ok = true;
+elseif ($hash === sha1($pwd_actual))       $ok = true;
+elseif ($hash === $pwd_actual)             $ok = true;
 
-if (password_verify($pwd_actual, $hash_guardado)) {
-    $pwd_correcta = true;
-} elseif ($hash_guardado === md5($pwd_actual)) {
-    $pwd_correcta = true;
-} elseif ($hash_guardado === $pwd_actual) {
-    $pwd_correcta = true;
-}
+if (!$ok) jsonOut(['ok' => false, 'error' => 'La contraseña actual es incorrecta']);
 
-if (!$pwd_correcta) {
-    jsonOut(['ok' => false, 'error' => 'La contraseña actual es incorrecta']);
-}
-
+// Guardar nueva contraseña con bcrypt
 $nuevo_hash = password_hash($pwd_nueva, PASSWORD_BCRYPT);
-$stmt2 = mysqli_prepare($conexion, "UPDATE usuarios SET password = ? WHERE usuario = ?");
-if (!$stmt2) {
-    jsonOut(['ok' => false, 'error' => 'Error preparando UPDATE: ' . mysqli_error($conexion)]);
-}
+$stmt2 = mysqli_prepare($conexion, "UPDATE usuarios SET password = ? WHERE username = ?");
+if (!$stmt2) jsonOut(['ok' => false, 'error' => 'Error UPDATE: ' . mysqli_error($conexion)]);
 mysqli_stmt_bind_param($stmt2, 'ss', $nuevo_hash, $usuario);
-$actualizado = mysqli_stmt_execute($stmt2);
-$filas = mysqli_stmt_affected_rows($stmt2);
+mysqli_stmt_execute($stmt2);
 mysqli_stmt_close($stmt2);
 
-if ($actualizado) {
-    jsonOut(['ok' => true, 'filas' => $filas]);
-} else {
-    jsonOut(['ok' => false, 'error' => 'No se pudo actualizar: ' . mysqli_error($conexion)]);
-}
+jsonOut(['ok' => true]);
