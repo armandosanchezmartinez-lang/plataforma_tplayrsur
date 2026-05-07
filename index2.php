@@ -401,71 +401,6 @@ $roles_labels = [
         
         .speed-numbers { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
         .speed-val { font-size: 2.2rem; font-weight: 800; line-height: 1; margin: 0; color: var(--blue2); letter-spacing: -1px; }
-
-        /* ── USER BADGE DROPDOWN ── */
-        .user-badge { cursor:pointer; position:relative; user-select:none; }
-        .user-caret { font-size:0.7rem; color:var(--text2); margin-left:2px; transition:transform 0.2s; }
-        .user-badge.open .user-caret { transform:rotate(180deg); }
-        .user-dropdown {
-            display:none; position:absolute; top:calc(100% + 10px); right:0;
-            background:var(--white); border:1px solid var(--border); border-radius:12px;
-            box-shadow:0 8px 24px rgba(0,0,0,0.12); min-width:200px; z-index:999;
-            overflow:hidden; animation:dropFade 0.15s ease;
-        }
-        .user-badge.open .user-dropdown { display:block; }
-        @keyframes dropFade { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
-        .user-dropdown-item {
-            display:flex; align-items:center; gap:10px; width:100%; padding:12px 16px;
-            background:none; border:none; cursor:pointer; font-size:0.83rem; font-weight:600;
-            color:var(--text); text-decoration:none; transition:background 0.15s;
-        }
-        .user-dropdown-item:hover { background:var(--bg); }
-        .user-dropdown-divider { height:1px; background:var(--border); margin:2px 0; }
-        .user-dropdown-logout { color:var(--red) !important; }
-        .user-dropdown-logout:hover { background:#fff1f1 !important; }
-
-        /* ── MODAL CAMBIAR CONTRASEÑA ── */
-        .modal-overlay {
-            display:none; position:fixed; inset:0; background:rgba(26,37,64,0.45);
-            z-index:2000; align-items:center; justify-content:center; backdrop-filter:blur(3px);
-        }
-        .modal-overlay.active { display:flex; }
-        .modal-box {
-            background:var(--white); border-radius:20px; padding:36px 32px;
-            width:100%; max-width:420px; box-shadow:0 20px 60px rgba(0,0,0,0.2);
-            animation:modalIn 0.2s ease;
-        }
-        @keyframes modalIn { from{opacity:0;transform:scale(0.94)} to{opacity:1;transform:scale(1)} }
-        .modal-title { font-size:1.1rem; font-weight:800; color:var(--text); margin-bottom:4px; }
-        .modal-subtitle { font-size:0.8rem; color:var(--text2); margin-bottom:24px; }
-        .modal-field { margin-bottom:16px; }
-        .modal-field label { display:block; font-size:0.78rem; font-weight:700; color:var(--text2); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.4px; }
-        .modal-field input {
-            width:100%; padding:11px 14px; border:1.5px solid var(--border); border-radius:10px;
-            font-size:0.9rem; font-family:inherit; color:var(--text); background:var(--bg);
-            transition:border-color 0.2s, box-shadow 0.2s; outline:none;
-        }
-        .modal-field input:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(43,87,167,0.12); background:var(--white); }
-        .modal-field input.error { border-color:var(--red); }
-        .modal-msg { font-size:0.78rem; margin-top:4px; min-height:18px; }
-        .modal-msg.error { color:var(--red); }
-        .modal-msg.success { color:var(--green); }
-        .modal-actions { display:flex; gap:10px; margin-top:24px; }
-        .btn-cancel {
-            flex:1; padding:11px; border:1.5px solid var(--border); border-radius:10px;
-            background:var(--white); color:var(--text2); font-size:0.88rem; font-weight:700;
-            cursor:pointer; transition:all 0.15s;
-        }
-        .btn-cancel:hover { background:var(--bg); border-color:#c5cde0; }
-        .btn-save {
-            flex:2; padding:11px; border:none; border-radius:10px;
-            background:var(--blue); color:#fff; font-size:0.88rem; font-weight:700;
-            cursor:pointer; transition:background 0.15s;
-        }
-        .btn-save:hover { background:var(--blue2); }
-        .btn-save:disabled { background:#a0b3d6; cursor:not-allowed; }
-        .pwd-strength { height:4px; border-radius:2px; background:var(--border); margin-top:8px; overflow:hidden; }
-        .pwd-strength-bar { height:100%; width:0; border-radius:2px; transition:width 0.3s, background 0.3s; }
     </style>
 </head>
 <body>
@@ -475,7 +410,9 @@ $roles_labels = [
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
-    <div class="sidebar-bottom"></div>
+    <div class="sidebar-bottom">
+        <a href="logout.php" class="logout-btn">⎋ Cerrar sesión</a>
+    </div>
 </aside>
 
 <main class="main">
@@ -484,21 +421,11 @@ $roles_labels = [
             <h2><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?></h2>
             <p><?= date('d \d\e F Y', strtotime('-1 day')) ?></p>
         </div>
-        <div class="user-badge" id="userBadge" onclick="toggleUserMenu(event)">
+        <div class="user-badge">
             <div class="user-avatar"><?= strtoupper(substr($nombre_completo, 0, 1)) ?></div>
             <div>
                 <div class="user-name"><?= htmlspecialchars($nombre_completo) ?></div>
                 <div class="user-role"><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?></div>
-            </div>
-            <span class="user-caret">▾</span>
-            <div class="user-dropdown" id="userDropdown">
-                <button class="user-dropdown-item" onclick="openChangePassword(event)">
-                    <span>🔑</span> Cambiar contraseña
-                </button>
-                <div class="user-dropdown-divider"></div>
-                <a class="user-dropdown-item user-dropdown-logout" href="logout.php" onclick="event.stopPropagation()">
-                    <span>⎋</span> Cerrar sesión
-                </a>
             </div>
         </div>
     </div>
@@ -895,173 +822,6 @@ new Chart(document.getElementById('cVentEvo'), {
     options: stackOpts,
     plugins: [pluginTotalesArriba]
 });
-</script>
-
-<!-- ── MODAL CAMBIAR CONTRASEÑA ── -->
-<div class="modal-overlay" id="modalPassword">
-    <div class="modal-box" onclick="event.stopPropagation()">
-        <div class="modal-title">🔑 Cambiar contraseña</div>
-        <div class="modal-subtitle">La nueva contraseña debe tener al menos 8 caracteres</div>
-
-        <div class="modal-field">
-            <label for="pwdActual">Contraseña actual</label>
-            <input type="password" id="pwdActual" placeholder="••••••••" autocomplete="current-password">
-            <div class="modal-msg" id="msgActual"></div>
-        </div>
-
-        <div class="modal-field">
-            <label for="pwdNueva">Nueva contraseña</label>
-            <input type="password" id="pwdNueva" placeholder="••••••••" autocomplete="new-password" oninput="checkStrength()">
-            <div class="pwd-strength"><div class="pwd-strength-bar" id="strengthBar"></div></div>
-            <div class="modal-msg" id="msgNueva"></div>
-        </div>
-
-        <div class="modal-field">
-            <label for="pwdConfirm">Confirmar nueva contraseña</label>
-            <input type="password" id="pwdConfirm" placeholder="••••••••" autocomplete="new-password">
-            <div class="modal-msg" id="msgConfirm"></div>
-        </div>
-
-        <div class="modal-msg" id="msgGeneral" style="font-size:0.85rem;margin-top:4px;"></div>
-
-        <div class="modal-actions">
-            <button class="btn-cancel" onclick="closeChangePassword()">Cancelar</button>
-            <button class="btn-save" id="btnGuardar" onclick="submitChangePassword()">Guardar cambios</button>
-        </div>
-    </div>
-</div>
-
-<script>
-/* ── DROPDOWN USER BADGE ── */
-function toggleUserMenu(e) {
-    e.stopPropagation();
-    const badge = document.getElementById('userBadge');
-    badge.classList.toggle('open');
-}
-document.addEventListener('click', () => {
-    document.getElementById('userBadge').classList.remove('open');
-});
-
-/* ── MODAL CONTRASEÑA ── */
-function openChangePassword(e) {
-    e.stopPropagation();
-    document.getElementById('userBadge').classList.remove('open');
-    resetPasswordModal();
-    document.getElementById('modalPassword').classList.add('active');
-    setTimeout(() => document.getElementById('pwdActual').focus(), 150);
-}
-function closeChangePassword() {
-    document.getElementById('modalPassword').classList.remove('active');
-}
-document.getElementById('modalPassword').addEventListener('click', closeChangePassword);
-
-function resetPasswordModal() {
-    ['pwdActual','pwdNueva','pwdConfirm'].forEach(id => {
-        const el = document.getElementById(id);
-        el.value = '';
-        el.classList.remove('error');
-    });
-    ['msgActual','msgNueva','msgConfirm','msgGeneral'].forEach(id => {
-        const el = document.getElementById(id);
-        el.textContent = '';
-        el.className = 'modal-msg';
-    });
-    document.getElementById('strengthBar').style.width = '0';
-    document.getElementById('strengthBar').style.background = '';
-    document.getElementById('btnGuardar').disabled = false;
-}
-
-function checkStrength() {
-    const pwd = document.getElementById('pwdNueva').value;
-    const bar = document.getElementById('strengthBar');
-    let score = 0;
-    if (pwd.length >= 8)  score++;
-    if (/[A-Z]/.test(pwd)) score++;
-    if (/[0-9]/.test(pwd)) score++;
-    if (/[^A-Za-z0-9]/.test(pwd)) score++;
-    const colors = ['#ef4444','#f59e0b','#10b981','#2b57a7'];
-    const widths = ['25%','50%','75%','100%'];
-    bar.style.width  = pwd.length ? widths[score - 1] || '10%' : '0';
-    bar.style.background = pwd.length ? colors[score - 1] || '#ef4444' : '';
-}
-
-async function submitChangePassword() {
-    const actual  = document.getElementById('pwdActual').value.trim();
-    const nueva   = document.getElementById('pwdNueva').value.trim();
-    const confirm = document.getElementById('pwdConfirm').value.trim();
-    let ok = true;
-
-    // Reset
-    ['pwdActual','pwdNueva','pwdConfirm'].forEach(id => document.getElementById(id).classList.remove('error'));
-    ['msgActual','msgNueva','msgConfirm','msgGeneral'].forEach(id => { document.getElementById(id).textContent=''; document.getElementById(id).className='modal-msg'; });
-
-    if (!actual) {
-        document.getElementById('pwdActual').classList.add('error');
-        document.getElementById('msgActual').textContent = 'Ingresa tu contraseña actual';
-        document.getElementById('msgActual').className = 'modal-msg error';
-        ok = false;
-    }
-    if (nueva.length < 8) {
-        document.getElementById('pwdNueva').classList.add('error');
-        document.getElementById('msgNueva').textContent = 'Mínimo 8 caracteres';
-        document.getElementById('msgNueva').className = 'modal-msg error';
-        ok = false;
-    }
-    if (nueva !== confirm) {
-        document.getElementById('pwdConfirm').classList.add('error');
-        document.getElementById('msgConfirm').textContent = 'Las contraseñas no coinciden';
-        document.getElementById('msgConfirm').className = 'modal-msg error';
-        ok = false;
-    }
-    if (!ok) return;
-
-    const btn = document.getElementById('btnGuardar');
-    btn.disabled = true;
-    btn.textContent = 'Guardando…';
-
-    try {
-        const res = await fetch('cambiar_password.php', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ actual, nueva })
-        });
-
-        // Leer siempre texto crudo primero para detectar errores PHP/HTML
-        const rawText = await res.text();
-        let data;
-        try {
-            data = JSON.parse(rawText);
-        } catch(parseErr) {
-            // El servidor no devolvio JSON puro — mostramos la respuesta real
-            const msg = document.getElementById('msgGeneral');
-            msg.innerHTML = '<b>Error del servidor (HTTP ' + res.status + '):</b><br><code style="font-size:0.72rem;word-break:break-all;white-space:pre-wrap;">' + rawText.substring(0, 500).replace(/</g,'&lt;') + '</code>';
-            msg.className = 'modal-msg error';
-            btn.disabled = false;
-            btn.textContent = 'Guardar cambios';
-            return;
-        }
-
-        if (data.ok) {
-            const msg = document.getElementById('msgGeneral');
-            msg.textContent = '✅ Contraseña actualizada correctamente';
-            msg.className = 'modal-msg success';
-            setTimeout(closeChangePassword, 2000);
-        } else {
-            document.getElementById('pwdActual').classList.add('error');
-            const msg = document.getElementById('msgActual');
-            msg.textContent = data.error || 'Contraseña actual incorrecta';
-            msg.className = 'modal-msg error';
-            btn.disabled = false;
-            btn.textContent = 'Guardar cambios';
-        }
-    } catch(err) {
-        const msg = document.getElementById('msgGeneral');
-        msg.textContent = 'Error de red: ' + err.message;
-        msg.className = 'modal-msg error';
-        btn.disabled = false;
-        btn.textContent = 'Guardar cambios';
-    }
-}
 </script>
 </body>
 </html>
