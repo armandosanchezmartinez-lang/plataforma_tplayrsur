@@ -56,6 +56,12 @@ function table_has_column($conexion, $table, $column) {
     $res = mysqli_query($conexion, "SHOW COLUMNS FROM `$table` LIKE '$column'");
     return $res && mysqli_num_rows($res) > 0;
 }
+function first_existing_column($conexion, $table, $candidates) {
+    foreach ($candidates as $c) {
+        if (table_has_column($conexion, $table, $c)) return $c;
+    }
+    return null;
+}
 
 function base_metrics_totals($rows) {
     $keys = [
@@ -126,14 +132,32 @@ $coach_sql     = esc($conexion, $coach_param);
 $coach_pos_sql = esc($conexion, $coach_pos_param);
 $folio_sql     = esc($conexion, $folio_param);
 
-$antiguedad_expr = "'-'";
-if (table_has_column($conexion, 'hc', 'antiguedad')) {
-    $antiguedad_expr = "h.antiguedad";
-} elseif (table_has_column($conexion, 'hc', 'fecha_ingreso')) {
-    $antiguedad_expr = "TIMESTAMPDIFF(MONTH, h.fecha_ingreso, CURDATE())";
-} elseif (table_has_column($conexion, 'hc', 'fecha_alta')) {
-    $antiguedad_expr = "TIMESTAMPDIFF(MONTH, h.fecha_alta, CURDATE())";
-}
+$antiguedad_expr = "
+    CASE
+        WHEN h.fecha_alta IS NULL OR h.fecha_alta = '' OR h.fecha_alta = '0000-00-00' THEN '-'
+        WHEN TIMESTAMPDIFF(MONTH, h.fecha_alta, CURDATE()) < 12
+            THEN CONCAT(TIMESTAMPDIFF(MONTH, h.fecha_alta, CURDATE()), ' meses')
+        ELSE CONCAT(
+            FLOOR(TIMESTAMPDIFF(MONTH, h.fecha_alta, CURDATE()) / 12),
+            ' años ',
+            MOD(TIMESTAMPDIFF(MONTH, h.fecha_alta, CURDATE()), 12),
+            ' meses'
+        )
+    END
+";
+
+$segmento_col = first_existing_column($conexion, 'instalaciones', [
+    'segmento',
+    'tipo_cliente',
+    'tipo_venta',
+    'mercado',
+    'unidad_negocio',
+    'negocio',
+    'linea_negocio',
+    'canal_segmento'
+]);
+
+$segmento_select_expr = $segmento_col ? "i.`$segmento_col`" : "''";
 
 $lideres_cte = "
 lideres_activos AS (
@@ -404,7 +428,11 @@ ventas_vendedor AS (
         vb.folio_empleado,
         vb.antiguedad,
         WEEK(i.fecha,1) AS semana,
-        COUNT(i.cuenta) AS ventas
+        COUNT(i.cuenta) AS ventas,
+        SUM(CASE WHEN UPPER(COALESCE(i.plan,'')) LIKE '%TV%' THEN 1 ELSE 0 END) AS triple_play,
+        SUM(CASE WHEN UPPER(COALESCE(i.plan,'')) NOT LIKE '%TV%' THEN 1 ELSE 0 END) AS doble_play,
+        SUM(CASE WHEN UPPER(COALESCE({$segmento_select_expr},'')) LIKE '%NEGOC%' THEN 1 ELSE 0 END) AS negocios,
+        SUM(CASE WHEN UPPER(COALESCE({$segmento_select_expr},'')) NOT LIKE '%NEGOC%' THEN 1 ELSE 0 END) AS residencial
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
         ON i.folio_empleado = vb.folio_empleado
@@ -429,7 +457,11 @@ SELECT
     folio_empleado,
     antiguedad,
     semana,
-    ventas
+    ventas,
+    triple_play,
+    doble_play,
+    negocios,
+    residencial
 FROM ventas_vendedor
 ORDER BY vendedor ASC, semana ASC
 ";
@@ -467,7 +499,11 @@ if (!$res) {
                     'folio_empleado' => $folio,
                     'antiguedad' => $r['antiguedad'] ?? '-',
                     'semanas' => array_fill(1, $semana_actual, 0),
-                    'total' => 0
+                    'total' => 0,
+                    'triple_play' => 0,
+                    'doble_play' => 0,
+                    'negocios' => 0,
+                    'residencial' => 0
                 ];
             }
             $sem = (int)($r['semana'] ?? 0);
@@ -475,6 +511,10 @@ if (!$res) {
             if ($sem >= 1 && $sem <= $semana_actual) {
                 $coach_matrix[$folio]['semanas'][$sem] = $ventas;
                 $coach_matrix[$folio]['total'] += $ventas;
+                $coach_matrix[$folio]['triple_play'] += (int)($r['triple_play'] ?? 0);
+                $coach_matrix[$folio]['doble_play'] += (int)($r['doble_play'] ?? 0);
+                $coach_matrix[$folio]['negocios'] += (int)($r['negocios'] ?? 0);
+                $coach_matrix[$folio]['residencial'] += (int)($r['residencial'] ?? 0);
             }
         }
         uasort($coach_matrix, function($a, $b) {
@@ -738,11 +778,23 @@ foreach ($coach_matrix as $v) {
         <span>Ventas desde SEM1 hasta SEM<?= h($semana_actual) ?></span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table" style="min-width:<?= max(900, 320 + ($semana_actual * 72)) ?>px">
+        <table class="sales-table" style="min-width:<?= max(1700, 980 + ($semana_actual * 72)) ?>px">
             <thead>
                 <tr>
                     <th>Nombre vendedor</th>
                     <th class="center">Antigüedad</th>
+                    <th class="num">INS<br>SEM<?= h($semana_base) ?></th>
+                    <th class="num">INS<br>SEM<?= h($semana_actual) ?></th>
+                    <th class="num">Dif.</th>
+                    <th class="center">% Dif.</th>
+                    <th class="num">2P</th>
+                    <th class="center">% 2P</th>
+                    <th class="num">3P</th>
+                    <th class="center">% 3P</th>
+                    <th class="num">Residencial</th>
+                    <th class="center">% Resid.</th>
+                    <th class="num">Negocios</th>
+                    <th class="center">% Neg.</th>
                     <?php for ($w=1; $w <= $semana_actual; $w++): ?>
                         <th class="num">SEM<?= h($w) ?></th>
                     <?php endfor; ?>
@@ -752,8 +804,35 @@ foreach ($coach_matrix as $v) {
             <tbody>
                 <?php foreach ($coach_matrix as $v): ?>
                 <tr>
+                    <?php
+                        $ins_base_v = (int)($v['semanas'][$semana_base] ?? 0);
+                        $ins_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
+                        $dif_v = $ins_actual_v - $ins_base_v;
+                        $pct_v = $ins_base_v > 0 ? round(($dif_v / $ins_base_v) * 100, 0) : null;
+                        $total_v = (int)$v['total'];
+                        $doble_v = (int)$v['doble_play'];
+                        $triple_v = (int)$v['triple_play'];
+                        $resid_v = (int)$v['residencial'];
+                        $neg_v = (int)$v['negocios'];
+                        $pct_doble = $total_v > 0 ? round(($doble_v / $total_v) * 100, 0) : null;
+                        $pct_triple = $total_v > 0 ? round(($triple_v / $total_v) * 100, 0) : null;
+                        $pct_resid = $total_v > 0 ? round(($resid_v / $total_v) * 100, 0) : null;
+                        $pct_neg = $total_v > 0 ? round(($neg_v / $total_v) * 100, 0) : null;
+                    ?>
                     <td class="entity"><?= h($v['vendedor']) ?></td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
+                    <td class="num"><?= fmt_num($ins_base_v) ?></td>
+                    <td class="num"><?= fmt_num($ins_actual_v) ?></td>
+                    <td class="num"><?= fmt_num($dif_v) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '-' : fmt_num($pct_v).'%' ?></span></td>
+                    <td class="num"><?= fmt_num($doble_v) ?></td>
+                    <td class="center"><?= $pct_doble === null ? '-' : fmt_num($pct_doble).'%' ?></td>
+                    <td class="num"><?= fmt_num($triple_v) ?></td>
+                    <td class="center"><?= $pct_triple === null ? '-' : fmt_num($pct_triple).'%' ?></td>
+                    <td class="num"><?= fmt_num($resid_v) ?></td>
+                    <td class="center"><?= $pct_resid === null ? '-' : fmt_num($pct_resid).'%' ?></td>
+                    <td class="num"><?= fmt_num($neg_v) ?></td>
+                    <td class="center"><?= $pct_neg === null ? '-' : fmt_num($pct_neg).'%' ?></td>
                     <?php for ($w=1; $w <= $semana_actual; $w++): 
                         $vv = (int)($v['semanas'][$w] ?? 0);
                     ?>
@@ -763,8 +842,33 @@ foreach ($coach_matrix as $v) {
                 </tr>
                 <?php endforeach; ?>
                 <tr class="total-row">
+                    <?php
+                        $t_base = 0; $t_actual = 0; $t_doble = 0; $t_triple = 0; $t_resid = 0; $t_neg = 0;
+                        foreach ($coach_matrix as $v) {
+                            $t_base += (int)($v['semanas'][$semana_base] ?? 0);
+                            $t_actual += (int)($v['semanas'][$semana_actual] ?? 0);
+                            $t_doble += (int)($v['doble_play'] ?? 0);
+                            $t_triple += (int)($v['triple_play'] ?? 0);
+                            $t_resid += (int)($v['residencial'] ?? 0);
+                            $t_neg += (int)($v['negocios'] ?? 0);
+                        }
+                        $t_dif = $t_actual - $t_base;
+                        $t_pct = $t_base > 0 ? round(($t_dif / $t_base) * 100, 0) : null;
+                    ?>
                     <td>TOTAL</td>
                     <td></td>
+                    <td class="num"><?= fmt_num($t_base) ?></td>
+                    <td class="num"><?= fmt_num($t_actual) ?></td>
+                    <td class="num"><?= fmt_num($t_dif) ?></td>
+                    <td class="center"><?= $t_pct === null ? '-' : fmt_num($t_pct).'%' ?></td>
+                    <td class="num"><?= fmt_num($t_doble) ?></td>
+                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_doble/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="num"><?= fmt_num($t_triple) ?></td>
+                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_triple/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="num"><?= fmt_num($t_resid) ?></td>
+                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_resid/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="num"><?= fmt_num($t_neg) ?></td>
+                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_neg/$total_coach)*100,0)).'%' : '-' ?></td>
                     <?php for ($w=1; $w <= $semana_actual; $w++): 
                         $tw = 0;
                         foreach ($coach_matrix as $v) $tw += (int)($v['semanas'][$w] ?? 0);
