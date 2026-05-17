@@ -774,11 +774,11 @@ foreach ($coach_matrix as $v) {
 
 <section class="table-card">
     <div class="table-head">
-        <strong>Matriz semanal por vendedor</strong>
-        <span>Ventas desde SEM1 hasta SEM<?= h($semana_actual) ?></span>
+        <strong>Resumen por vendedor del coach</strong>
+        <span>Resumen acumulado hasta SEM<?= h($semana_actual) ?></span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table" style="min-width:<?= max(1700, 980 + ($semana_actual * 72)) ?>px">
+        <table class="sales-table" style="min-width:1280px">
             <thead>
                 <tr>
                     <th>Nombre vendedor</th>
@@ -791,13 +791,10 @@ foreach ($coach_matrix as $v) {
                     <th class="center">% 2P</th>
                     <th class="num">3P</th>
                     <th class="center">% 3P</th>
-                    <th class="num">Residencial</th>
+                    <th class="num">Resid.</th>
                     <th class="center">% Resid.</th>
-                    <th class="num">Negocios</th>
+                    <th class="num">Neg.</th>
                     <th class="center">% Neg.</th>
-                    <?php for ($w=1; $w <= $semana_actual; $w++): ?>
-                        <th class="num">SEM<?= h($w) ?></th>
-                    <?php endfor; ?>
                     <th class="num">Total</th>
                 </tr>
             </thead>
@@ -833,11 +830,6 @@ foreach ($coach_matrix as $v) {
                     <td class="center"><?= $pct_resid === null ? '-' : fmt_num($pct_resid).'%' ?></td>
                     <td class="num"><?= fmt_num($neg_v) ?></td>
                     <td class="center"><?= $pct_neg === null ? '-' : fmt_num($pct_neg).'%' ?></td>
-                    <?php for ($w=1; $w <= $semana_actual; $w++): 
-                        $vv = (int)($v['semanas'][$w] ?? 0);
-                    ?>
-                        <td class="num <?= $vv > 0 ? 'sales-hit' : 'sales-zero' ?>"><?= fmt_num($vv) ?></td>
-                    <?php endfor; ?>
                     <td class="num"><span class="prod <?= prod_class($v['total']) ?>"><?= fmt_num($v['total']) ?></span></td>
                 </tr>
                 <?php endforeach; ?>
@@ -869,13 +861,7 @@ foreach ($coach_matrix as $v) {
                     <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_resid/$total_coach)*100,0)).'%' : '-' ?></td>
                     <td class="num"><?= fmt_num($t_neg) ?></td>
                     <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_neg/$total_coach)*100,0)).'%' : '-' ?></td>
-                    <?php for ($w=1; $w <= $semana_actual; $w++): 
-                        $tw = 0;
-                        foreach ($coach_matrix as $v) $tw += (int)($v['semanas'][$w] ?? 0);
-                    ?>
-                        <td class="num"><?= fmt_num($tw) ?></td>
-                    <?php endfor; ?>
-                    <td class="num"><?= fmt_num($total_coach) ?></td>
+                    <td class="num"><span class="prod <?= prod_class($total_coach) ?>"><?= fmt_num($total_coach) ?></span></td>
                 </tr>
             </tbody>
         </table>
