@@ -890,14 +890,24 @@ foreach ($coach_matrix as $v) {
                     <td class="num"><?= fmt_num($t_actual) ?></td>
                     <td class="num"><?= fmt_num($t_dif) ?></td>
                     <td class="center"><span class="badge <?= pct_class($t_pct) ?>"><?= $t_pct === null ? '-' : fmt_num($t_pct).'%' ?></span></td>
+                    <?php
+                        $t_mix = $t_doble + $t_triple;
+                        $t_segmento = $t_resid + $t_neg;
+
+                        $pct_t_doble = $t_mix > 0 ? round(($t_doble / $t_mix) * 100, 0) : null;
+                        $pct_t_triple = $t_mix > 0 ? round(($t_triple / $t_mix) * 100, 0) : null;
+
+                        $pct_t_resid = $t_segmento > 0 ? round(($t_resid / $t_segmento) * 100, 0) : null;
+                        $pct_t_neg = $t_segmento > 0 ? round(($t_neg / $t_segmento) * 100, 0) : null;
+                    ?>
                     <td class="num"><?= fmt_num($t_doble) ?></td>
-                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_doble/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="center"><?= $pct_t_doble === null ? '-' : fmt_num($pct_t_doble).'%' ?></td>
                     <td class="num"><?= fmt_num($t_triple) ?></td>
-                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_triple/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="center"><?= $pct_t_triple === null ? '-' : fmt_num($pct_t_triple).'%' ?></td>
                     <td class="num"><?= fmt_num($t_resid) ?></td>
-                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_resid/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="center"><?= $pct_t_resid === null ? '-' : fmt_num($pct_t_resid).'%' ?></td>
                     <td class="num"><?= fmt_num($t_neg) ?></td>
-                    <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_neg/$total_coach)*100,0)).'%' : '-' ?></td>
+                    <td class="center"><?= $pct_t_neg === null ? '-' : fmt_num($pct_t_neg).'%' ?></td>
                 </tr>
             </tbody>
         </table>
