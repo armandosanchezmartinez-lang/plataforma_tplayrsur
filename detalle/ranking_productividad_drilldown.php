@@ -531,9 +531,15 @@ if (!$res) {
                 $coach_matrix[$folio]['residencial'] += (int)($r['residencial'] ?? 0);
             }
         }
-        uasort($coach_matrix, function($a, $b) {
-            if ($a['total'] == $b['total']) return strcmp($a['vendedor'], $b['vendedor']);
-            return $b['total'] <=> $a['total'];
+        uasort($coach_matrix, function($a, $b) use ($semana_actual) {
+            $a_actual = (int)($a['semanas'][$semana_actual] ?? 0);
+            $b_actual = (int)($b['semanas'][$semana_actual] ?? 0);
+
+            if ($a_actual === $b_actual) {
+                return strcmp($a['vendedor'], $b['vendedor']);
+            }
+
+            return $b_actual <=> $a_actual;
         });
     } else {
         while ($r = mysqli_fetch_assoc($res)) $rows[] = $r;
