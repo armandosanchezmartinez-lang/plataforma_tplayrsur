@@ -87,17 +87,21 @@ $has_prev = isset($semanas_key[$prev_anio.'-'.$prev_semana]);
 $has_next = isset($semanas_key[$next_anio.'-'.$next_semana]);
 
 $view = $_GET['view'] ?? 'lideres';
-if (!in_array($view, ['lideres','coaches','vendedores'], true)) $view = 'lideres';
+if (!in_array($view, ['lideres','coaches','vendedores','ventas'], true)) $view = 'lideres';
 
 $lider_param = $_GET['lider'] ?? '';
 $distrito_param = $_GET['distrito'] ?? '';
 $coach_param = $_GET['coach'] ?? '';
 $coach_pos_param = $_GET['coach_pos'] ?? '';
+$vendedor_param = $_GET['vendedor'] ?? '';
+$folio_param = $_GET['folio'] ?? '';
 
 $lider_sql = mysqli_real_escape_string($conexion, $lider_param);
 $distrito_sql = mysqli_real_escape_string($conexion, $distrito_param);
 $coach_sql = mysqli_real_escape_string($conexion, $coach_param);
 $coach_pos_sql = mysqli_real_escape_string($conexion, $coach_pos_param);
+$vendedor_sql = mysqli_real_escape_string($conexion, $vendedor_param);
+$folio_sql = mysqli_real_escape_string($conexion, $folio_param);
 
 $lideres_cte = "
 lideres_activos AS (
@@ -280,7 +284,7 @@ resumen AS (
     GROUP BY vhc.distrito, vhc.lider, vhc.entidad, vhc.coach, vhc.coach_pos
 )
 SELECT
-    distrito, entidad, lider, coach, coach_pos,
+    distrito, entidad, lider, coach, coach_pos, folio_empleado,
     ins_sem_base, ins_sem_actual,
     ins_sem_actual - ins_sem_base AS dif,
     ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base, 0)) * 100, 0) AS pct_dif,
@@ -294,7 +298,7 @@ SELECT
 FROM resumen
 ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
-} else {
+} elseif ($view === 'vendedores') {
 $sql = "
 WITH vendedores AS (
     SELECT DISTINCT
@@ -340,7 +344,7 @@ resumen AS (
     GROUP BY v.distrito, v.lider, entidad, v.coach, v.coach_pos, v.folio_empleado, v.id_posicion
 )
 SELECT
-    distrito, entidad, lider, coach, coach_pos,
+    distrito, entidad, lider, coach, coach_pos, folio_empleado,
     ins_sem_base, ins_sem_actual,
     ins_sem_actual - ins_sem_base AS dif,
     ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base, 0)) * 100, 0) AS pct_dif,
@@ -354,6 +358,35 @@ SELECT
 FROM resumen
 ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
+} else {
+$sql = "
+WITH RECURSIVE semanas AS (
+    SELECT 1 AS semana
+    UNION ALL SELECT semana + 1 FROM semanas WHERE semana < {$semana_actual}
+),
+ventas_semana AS (
+    SELECT
+        WEEK(i.fecha, 1) AS semana,
+        COUNT(*) AS ventas
+    FROM instalaciones i
+    WHERE i.folio_empleado = '{$folio_sql}'
+      AND YEAR(i.fecha) = {$anio_actual}
+      AND WEEK(i.fecha, 1) BETWEEN 1 AND {$semana_actual}
+    GROUP BY WEEK(i.fecha, 1)
+)
+SELECT
+    '' AS distrito,
+    CONCAT('SEM ', s.semana) AS entidad,
+    '{$lider_sql}' AS lider,
+    '{$coach_sql}' AS coach,
+    '{$coach_pos_sql}' AS coach_pos,
+    s.semana,
+    COALESCE(v.ventas, 0) AS ventas
+FROM semanas s
+LEFT JOIN ventas_semana v
+    ON s.semana = v.semana
+ORDER BY s.semana ASC
+";
 }
 
 $res = mysqli_query($conexion, $sql);
@@ -364,6 +397,32 @@ if (!$res) {
 } else {
     while ($row = mysqli_fetch_assoc($res)) $rows[] = $row;
 }
+
+if ($view === 'ventas') {
+    foreach ($rows as &$vr) {
+        $vr['distrito'] = $distrito_param;
+        $vr['ins_sem_base'] = 0;
+        $vr['ins_sem_actual'] = (float)($vr['ventas'] ?? 0);
+        $vr['dif'] = (float)($vr['ventas'] ?? 0);
+        $vr['pct_dif'] = null;
+        $vr['hc_activo_base'] = 0;
+        $vr['hc_activo_actual'] = 0;
+        $vr['hc_con_ins_base'] = 0;
+        $vr['hc_con_ins_actual'] = 0;
+        $vr['hc_sin_venta_base'] = 0;
+        $vr['hc_sin_venta_actual'] = 0;
+        $vr['prod_base'] = null;
+        $vr['prod_actual'] = null;
+        $vr['activo_base'] = 0;
+        $vr['vacante_base'] = 0;
+        $vr['hc_total_base'] = 0;
+        $vr['activo_actual'] = 0;
+        $vr['vacante_actual'] = 0;
+        $vr['hc_total_actual'] = 0;
+    }
+    unset($vr);
+}
+
 
 $tot_keys = [
     'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
@@ -383,11 +442,12 @@ foreach ($rows as $r) if (!in_array($r['distrito'], $districts, true)) $district
 sort($districts);
 
 $fecha_label = date('d/m/Y');
-$entity_label = $view === 'lideres' ? 'Líder' : ($view === 'coaches' ? 'Coach' : 'Vendedor');
-$title_label = $view === 'lideres' ? 'Ranking de Productividad' : ($view === 'coaches' ? 'Ranking por Coach' : 'Ranking por Vendedor');
+$entity_label = $view === 'lideres' ? 'Líder' : ($view === 'coaches' ? 'Coach' : ($view === 'vendedores' ? 'Vendedor' : 'Semana'));
+$title_label = $view === 'lideres' ? 'Ranking de Productividad' : ($view === 'coaches' ? 'Ranking por Coach' : ($view === 'vendedores' ? 'Vendedores del Coach' : 'Ventas por Semana'));
 $subtitle_bits = [];
 if ($view !== 'lideres') $subtitle_bits[] = "Líder: " . $lider_param;
-if ($view === 'vendedores') $subtitle_bits[] = "Coach: " . $coach_param;
+if ($view === 'vendedores' || $view === 'ventas') $subtitle_bits[] = "Coach: " . $coach_param;
+if ($view === 'ventas') $subtitle_bits[] = "Vendedor: " . $vendedor_param;
 $subtitle_context = implode(' · ', $subtitle_bits);
 
 $base_link = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual]);
@@ -537,6 +597,8 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
             <a class="back-btn" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual]) ?>">← Volver a líderes</a>
         <?php elseif ($view === 'vendedores'): ?>
             <a class="back-btn" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'coaches','distrito'=>$distrito_param,'lider'=>$lider_param]) ?>">← Volver a coaches</a>
+        <?php elseif ($view === 'ventas'): ?>
+            <a class="back-btn" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'vendedores','distrito'=>$distrito_param,'lider'=>$lider_param,'coach'=>$coach_param,'coach_pos'=>$coach_pos_param]) ?>">← Volver a vendedores</a>
         <?php endif; ?>
         <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
         <span class="week-current">Semana <?= h($semana_actual) ?></span>
@@ -557,10 +619,16 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <span class="breadcrumb-sep">›</span>
                     <?php if ($view === 'coaches'): ?>
                         <span class="breadcrumb-current">👤 <?= h($lider_param) ?></span>
-                    <?php else: ?>
+                    <?php elseif ($view === 'vendedores'): ?>
                         <a class="breadcrumb-link" href="<?= h($lider_link) ?>">👤 <?= h($lider_param) ?></a>
                         <span class="breadcrumb-sep">›</span>
                         <span class="breadcrumb-current">🧭 <?= h($coach_param) ?></span>
+                    <?php else: ?>
+                        <a class="breadcrumb-link" href="<?= h($lider_link) ?>">👤 <?= h($lider_param) ?></a>
+                        <span class="breadcrumb-sep">›</span>
+                        <a class="breadcrumb-link" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'vendedores','distrito'=>$distrito_param,'lider'=>$lider_param,'coach'=>$coach_param,'coach_pos'=>$coach_pos_param]) ?>">🧭 <?= h($coach_param) ?></a>
+                        <span class="breadcrumb-sep">›</span>
+                        <span class="breadcrumb-current">🧑‍💼 <?= h($vendedor_param) ?></span>
                     <?php endif; ?>
                 <?php endif; ?>
             </div>
@@ -575,6 +643,8 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
             <?php endif; ?>
             <?php if ($view === 'vendedores'): ?>
                 <a class="level-action primary" href="<?= h($lider_link) ?>">← Ver coaches de este líder</a>
+            <?php elseif ($view === 'ventas'): ?>
+                <a class="level-action primary" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'vendedores','distrito'=>$distrito_param,'lider'=>$lider_param,'coach'=>$coach_param,'coach_pos'=>$coach_pos_param]) ?>">← Ver vendedores del coach</a>
             <?php endif; ?>
         </div>
     </div>
@@ -605,6 +675,22 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 </section>
 <?php endif; ?>
 
+<?php if ($view === 'ventas'): ?>
+<section class="table-card">
+    <div class="table-head"><strong>Ventas semanales del vendedor</strong><span>Semana 1 a Semana <?= h($semana_actual) ?></span></div>
+    <div class="table-wrap">
+        <table style="min-width:620px">
+            <thead><tr><th class="center">Semana</th><th class="num">Ventas / Instalaciones</th></tr></thead>
+            <tbody>
+                <?php $totalVentas=0; foreach($rows as $r): $totalVentas += (float)($r['ventas'] ?? 0); ?>
+                <tr class="data-row"><td class="center"><span class="rank">SEM <?= h($r['semana'] ?? '') ?></span></td><td class="num"><span class="prod <?= prod_class($r['ventas'] ?? 0) ?>"><?= fmt_num($r['ventas'] ?? 0) ?></span></td></tr>
+                <?php endforeach; ?>
+                <tr class="total-row"><td>TOTAL</td><td class="num"><?= fmt_num($totalVentas) ?></td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+<?php else: ?>
 <section class="table-card">
     <div class="table-head">
         <strong><?= h($view === 'lideres' ? 'Ranking por Líder' : ($view === 'coaches' ? 'Ranking por Coach' : 'Ranking por Vendedor')) ?></strong>
@@ -644,6 +730,8 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                         $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
                     } elseif ($view === 'coaches') {
                         $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
+                    } elseif ($view === 'vendedores' && ($r['activo_actual'] > 0 || $r['activo_base'] > 0)) {
+                        $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado'] ?? '']);
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>"
@@ -701,10 +789,13 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
         </table>
     </div>
 </section>
+<?php endif; ?>
+
 </main>
 
 <script>
 const table = document.getElementById('rankingTable');
+if (table) {
 const tbody = table.querySelector('tbody');
 const dataRows = () => [...tbody.querySelectorAll('tr.data-row')];
 const totalRow = document.getElementById('totalRow');
@@ -841,6 +932,7 @@ dataRows().forEach(r => {
 });
 
 recalcRankAndTotals();
+}
 </script>
 </body>
 </html>
