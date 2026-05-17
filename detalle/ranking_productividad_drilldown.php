@@ -50,6 +50,13 @@ function hc_sin_venta_class($v) {
 function qs($arr) { return http_build_query($arr); }
 function esc($conexion, $v) { return mysqli_real_escape_string($conexion, (string)$v); }
 
+function table_has_column($conexion, $table, $column) {
+    $table = mysqli_real_escape_string($conexion, $table);
+    $column = mysqli_real_escape_string($conexion, $column);
+    $res = mysqli_query($conexion, "SHOW COLUMNS FROM `$table` LIKE '$column'");
+    return $res && mysqli_num_rows($res) > 0;
+}
+
 function base_metrics_totals($rows) {
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
@@ -118,6 +125,15 @@ $lider_sql     = esc($conexion, $lider_param);
 $coach_sql     = esc($conexion, $coach_param);
 $coach_pos_sql = esc($conexion, $coach_pos_param);
 $folio_sql     = esc($conexion, $folio_param);
+
+$antiguedad_expr = "'-'";
+if (table_has_column($conexion, 'hc', 'antiguedad')) {
+    $antiguedad_expr = "h.antiguedad";
+} elseif (table_has_column($conexion, 'hc', 'fecha_ingreso')) {
+    $antiguedad_expr = "TIMESTAMPDIFF(MONTH, h.fecha_ingreso, CURDATE())";
+} elseif (table_has_column($conexion, 'hc', 'fecha_alta')) {
+    $antiguedad_expr = "TIMESTAMPDIFF(MONTH, h.fecha_alta, CURDATE())";
+}
 
 $lideres_cte = "
 lideres_activos AS (
@@ -356,13 +372,15 @@ ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'vendedores') {
 $sql = "
-WITH RECURSIVE semanas AS (
-    SELECT 1 AS semana
-    UNION ALL SELECT semana + 1 FROM semanas WHERE semana < {$semana_actual}
-),
-vendedores_base AS (
+WITH vendedores_base AS (
     SELECT DISTINCT
-        h.numero_talento_gs AS folio_empleado
+        h.distrito,
+        '{$lider_sql}' AS lider,
+        '{$coach_sql}' AS coach,
+        '{$coach_pos_sql}' AS coach_pos,
+        h.nombre_colaborador AS vendedor,
+        h.numero_talento_gs AS folio_empleado,
+        {$antiguedad_expr} AS antiguedad
     FROM hc h
     WHERE h.distrito = '{$distrito_sql}'
       AND h.puesto_lr LIKE '%COACH%'
@@ -376,23 +394,44 @@ vendedores_base AS (
       AND h.anio = {$anio_actual}
       AND h.semana = {$semana_actual}
 ),
-ventas_semana AS (
+ventas_vendedor AS (
     SELECT
+        vb.distrito,
+        vb.lider,
+        vb.coach,
+        vb.coach_pos,
+        vb.vendedor,
+        vb.folio_empleado,
+        vb.antiguedad,
         WEEK(i.fecha,1) AS semana,
-        COUNT(*) AS ventas
-    FROM instalaciones i
-    INNER JOIN vendedores_base vb
+        COUNT(i.cuenta) AS ventas
+    FROM vendedores_base vb
+    LEFT JOIN instalaciones i
         ON i.folio_empleado = vb.folio_empleado
-    WHERE YEAR(i.fecha) = {$anio_actual}
-      AND WEEK(i.fecha,1) BETWEEN 1 AND {$semana_actual}
-    GROUP BY WEEK(i.fecha,1)
+       AND YEAR(i.fecha) = {$anio_actual}
+       AND WEEK(i.fecha,1) BETWEEN 1 AND {$semana_actual}
+    GROUP BY
+        vb.distrito,
+        vb.lider,
+        vb.coach,
+        vb.coach_pos,
+        vb.vendedor,
+        vb.folio_empleado,
+        vb.antiguedad,
+        WEEK(i.fecha,1)
 )
 SELECT
-    s.semana,
-    COALESCE(v.ventas,0) AS ventas
-FROM semanas s
-LEFT JOIN ventas_semana v ON s.semana = v.semana
-ORDER BY s.semana ASC
+    distrito,
+    lider,
+    coach,
+    coach_pos,
+    vendedor,
+    folio_empleado,
+    antiguedad,
+    semana,
+    ventas
+FROM ventas_vendedor
+ORDER BY vendedor ASC, semana ASC
 ";
 } else {
 $sql = "
@@ -409,15 +448,39 @@ ORDER BY semana ASC
 }
 
 $res = mysqli_query($conexion, $sql);
+$coach_matrix = [];
 if (!$res) {
     $query_error = mysqli_error($conexion);
 } else {
-    if ($view === 'ventas' || $view === 'vendedores') {
+    if ($view === 'ventas') {
         $map = [];
         while ($r = mysqli_fetch_assoc($res)) $map[(int)$r['semana']] = (int)$r['ventas'];
         for ($w = 1; $w <= $semana_actual; $w++) {
             $ventas_hist[] = ['semana' => $w, 'ventas' => $map[$w] ?? 0];
         }
+    } elseif ($view === 'vendedores') {
+        while ($r = mysqli_fetch_assoc($res)) {
+            $folio = $r['folio_empleado'] ?? '';
+            if (!isset($coach_matrix[$folio])) {
+                $coach_matrix[$folio] = [
+                    'vendedor' => $r['vendedor'] ?? '',
+                    'folio_empleado' => $folio,
+                    'antiguedad' => $r['antiguedad'] ?? '-',
+                    'semanas' => array_fill(1, $semana_actual, 0),
+                    'total' => 0
+                ];
+            }
+            $sem = (int)($r['semana'] ?? 0);
+            $ventas = (int)($r['ventas'] ?? 0);
+            if ($sem >= 1 && $sem <= $semana_actual) {
+                $coach_matrix[$folio]['semanas'][$sem] = $ventas;
+                $coach_matrix[$folio]['total'] += $ventas;
+            }
+        }
+        uasort($coach_matrix, function($a, $b) {
+            if ($a['total'] == $b['total']) return strcmp($a['vendedor'], $b['vendedor']);
+            return $b['total'] <=> $a['total'];
+        });
     } else {
         while ($r = mysqli_fetch_assoc($res)) $rows[] = $r;
     }
@@ -649,6 +712,72 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
         </table>
     </div>
 </section>
+<?php elseif ($view === 'vendedores'): ?>
+<?php
+$total_coach = 0;
+$mejor_vendedor = '';
+$mejor_total = -1;
+foreach ($coach_matrix as $v) {
+    $total_coach += (int)$v['total'];
+    if ((int)$v['total'] > $mejor_total) {
+        $mejor_total = (int)$v['total'];
+        $mejor_vendedor = $v['vendedor'];
+    }
+}
+?>
+<section class="cards">
+    <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Vendedores activos</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Con estructura en SEM <?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> ventas</div></div>
+    <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
+</section>
+
+<section class="table-card">
+    <div class="table-head">
+        <strong>Matriz semanal por vendedor</strong>
+        <span>Ventas desde SEM1 hasta SEM<?= h($semana_actual) ?></span>
+    </div>
+    <div class="table-wrap">
+        <table class="sales-table" style="min-width:<?= max(900, 320 + ($semana_actual * 72)) ?>px">
+            <thead>
+                <tr>
+                    <th>Nombre vendedor</th>
+                    <th class="center">Antigüedad</th>
+                    <?php for ($w=1; $w <= $semana_actual; $w++): ?>
+                        <th class="num">SEM<?= h($w) ?></th>
+                    <?php endfor; ?>
+                    <th class="num">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($coach_matrix as $v): ?>
+                <tr>
+                    <td class="entity"><?= h($v['vendedor']) ?></td>
+                    <td class="center"><?= h($v['antiguedad']) ?></td>
+                    <?php for ($w=1; $w <= $semana_actual; $w++): 
+                        $vv = (int)($v['semanas'][$w] ?? 0);
+                    ?>
+                        <td class="num <?= $vv > 0 ? 'sales-hit' : 'sales-zero' ?>"><?= fmt_num($vv) ?></td>
+                    <?php endfor; ?>
+                    <td class="num"><span class="prod <?= prod_class($v['total']) ?>"><?= fmt_num($v['total']) ?></span></td>
+                </tr>
+                <?php endforeach; ?>
+                <tr class="total-row">
+                    <td>TOTAL</td>
+                    <td></td>
+                    <?php for ($w=1; $w <= $semana_actual; $w++): 
+                        $tw = 0;
+                        foreach ($coach_matrix as $v) $tw += (int)($v['semanas'][$w] ?? 0);
+                    ?>
+                        <td class="num"><?= fmt_num($tw) ?></td>
+                    <?php endfor; ?>
+                    <td class="num"><?= fmt_num($total_coach) ?></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
 <?php else: ?>
 <?php
 $total_ventas_hist = 0;
@@ -660,14 +789,14 @@ foreach ($ventas_hist as $vh) {
 }
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_ventas_hist) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Ventas acumuladas</div><div class="value"><?= fmt_num($total_ventas_hist) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
     <div class="card"><div class="label">Mejor semana</div><div class="value">SEM <?= h($best_week) ?></div><div class="hint"><?= fmt_num($best_sales) ?> ventas</div></div>
     <div class="card"><div class="label">Promedio semanal</div><div class="value"><?= $semana_actual > 0 ? fmt_prod($total_ventas_hist / $semana_actual) : '-' ?></div><div class="hint">Año <?= h($anio_actual) ?></div></div>
-    <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
+    <div class="card"><div class="label">Folio empleado</div><div class="value" style="font-size:1.05rem"><?= h($folio_param) ?></div><div class="hint"><?= h($vendedor_param) ?></div></div>
 </section>
 <section class="table-card">
     <div class="table-head">
-        <strong>Ventas semanales del coach</strong>
+        <strong>Ventas semanales del vendedor</strong>
         <span>Semana 1 de <?= h($anio_actual) ?> a Semana <?= h($semana_actual) ?></span>
     </div>
     <div class="table-wrap">
