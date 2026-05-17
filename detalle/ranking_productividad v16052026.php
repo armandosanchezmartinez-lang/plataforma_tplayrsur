@@ -331,12 +331,6 @@ $fecha_label = date('d/m/Y');
         th.num, td.num { text-align:right; }
         th.center, td.center { text-align:center; }
         th.group { background:#cfcfd2; color:#111827; text-align:center; border-right:2px solid #0f172a; }
-        th.sortable { cursor:pointer; user-select:none; position:sticky; }
-        th.sortable:hover { background:var(--blue-dark); }
-        th.sortable .sort-label { display:inline-flex; align-items:center; gap:5px; justify-content:flex-end; width:100%; }
-        th.sortable.center .sort-label { justify-content:center; }
-        .sort-indicator { font-size:.68rem; opacity:.55; min-width:10px; }
-        th.sortable.active-sort .sort-indicator { opacity:1; }
         th.sub-gray { background:#d9d9dc; color:#111827; }
         td { padding:9px 8px; border-bottom:1px solid var(--border); border-right:1px solid #eef2f7; white-space:nowrap; }
         tbody tr:hover td { background:#f8fbff; }
@@ -435,18 +429,18 @@ $fecha_label = date('d/m/Y');
                         <th rowspan="2" class="center">#</th>
                         <th rowspan="2">Distrito</th>
                         <th rowspan="2">Líder</th>
-                        <th rowspan="2" class="num sortable" data-sort-col="3" data-sort-type="num"><span class="sort-label">INS<br>SEM<?= h($semana_base) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="4" data-sort-type="num"><span class="sort-label">INS<br>SEM<?= h($semana_actual) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="5" data-sort-type="num"><span class="sort-label">Dif. <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="center sortable" data-sort-col="6" data-sort-type="num"><span class="sort-label">% Dif. <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="7" data-sort-type="num"><span class="sort-label">HC Activo<br>SEM<?= h($semana_base) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="8" data-sort-type="num"><span class="sort-label">HC Activo<br>SEM<?= h($semana_actual) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="9" data-sort-type="num"><span class="sort-label">HC con INS<br>SEM<?= h($semana_base) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="10" data-sort-type="num"><span class="sort-label">HC con INS<br>SEM<?= h($semana_actual) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="11" data-sort-type="num"><span class="sort-label">HC sin Venta<br>SEM<?= h($semana_base) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="num sortable" data-sort-col="12" data-sort-type="num"><span class="sort-label">HC sin Venta<br>SEM<?= h($semana_actual) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="center sortable" data-sort-col="13" data-sort-type="num"><span class="sort-label">Prod.<br>SEM<?= h($semana_base) ?> <span class="sort-indicator">↕</span></span></th>
-                        <th rowspan="2" class="center sortable" data-sort-col="14" data-sort-type="num"><span class="sort-label">Prod.<br>SEM<?= h($semana_actual) ?> <span class="sort-indicator">↕</span></span></th>
+                        <th rowspan="2" class="num">INS<br>SEM<?= h($semana_base) ?></th>
+                        <th rowspan="2" class="num">INS<br>SEM<?= h($semana_actual) ?></th>
+                        <th rowspan="2" class="num">Dif.</th>
+                        <th rowspan="2" class="center">% Dif.</th>
+                        <th rowspan="2" class="num">HC Activo<br>SEM<?= h($semana_base) ?></th>
+                        <th rowspan="2" class="num">HC Activo<br>SEM<?= h($semana_actual) ?></th>
+                        <th rowspan="2" class="num">HC con INS<br>SEM<?= h($semana_base) ?></th>
+                        <th rowspan="2" class="num">HC con INS<br>SEM<?= h($semana_actual) ?></th>
+                        <th rowspan="2" class="num">HC sin Venta<br>SEM<?= h($semana_base) ?></th>
+                        <th rowspan="2" class="num">HC sin Venta<br>SEM<?= h($semana_actual) ?></th>
+                        <th rowspan="2" class="center">Prod.<br>SEM<?= h($semana_base) ?></th>
+                        <th rowspan="2" class="center">Prod.<br>SEM<?= h($semana_actual) ?></th>
                         <th colspan="3" class="group">Head Count SEM <?= h($semana_base) ?></th>
                         <th colspan="3" class="group">Head Count SEM <?= h($semana_actual) ?></th>
                     </tr>
@@ -459,7 +453,7 @@ $fecha_label = date('d/m/Y');
                         <th class="num sub-gray">HC</th>
                     </tr>
                 </thead>
-                <tbody id="rankingBody">
+                <tbody>
                     <?php $rank = 1; foreach ($rows as $r): ?>
                     <tr>
                         <td class="center"><span class="rank"><?= $rank++ ?></span></td>
@@ -513,79 +507,5 @@ $fecha_label = date('d/m/Y');
         </div>
     </section>
 </main>
-
-<script>
-(function () {
-    const tableBody = document.getElementById('rankingBody');
-    if (!tableBody) return;
-
-    const sortableHeaders = document.querySelectorAll('th.sortable[data-sort-col]');
-    let currentSort = { col: 14, dir: 'desc' };
-
-    function parseNumericValue(text) {
-        const cleaned = (text || '')
-            .replace(/,/g, '')
-            .replace(/%/g, '')
-            .replace(/[^0-9.\-]/g, '')
-            .trim();
-        if (cleaned === '' || cleaned === '-') return Number.NEGATIVE_INFINITY;
-        const value = parseFloat(cleaned);
-        return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
-    }
-
-    function updateIndicators(activeHeader, direction) {
-        sortableHeaders.forEach(header => {
-            header.classList.remove('active-sort');
-            const indicator = header.querySelector('.sort-indicator');
-            if (indicator) indicator.textContent = '↕';
-        });
-        activeHeader.classList.add('active-sort');
-        const indicator = activeHeader.querySelector('.sort-indicator');
-        if (indicator) indicator.textContent = direction === 'asc' ? '↑' : '↓';
-    }
-
-    function refreshRanks() {
-        const rows = Array.from(tableBody.querySelectorAll('tr:not(.total-row)'));
-        rows.forEach((row, index) => {
-            const rank = row.querySelector('.rank');
-            if (rank) rank.textContent = index + 1;
-        });
-    }
-
-    function sortTable(colIndex, direction, header) {
-        const totalRow = tableBody.querySelector('tr.total-row');
-        const rows = Array.from(tableBody.querySelectorAll('tr:not(.total-row)'));
-
-        rows.sort((a, b) => {
-            const aValue = parseNumericValue(a.children[colIndex]?.innerText);
-            const bValue = parseNumericValue(b.children[colIndex]?.innerText);
-            if (aValue === bValue) {
-                const aLeader = a.children[2]?.innerText || '';
-                const bLeader = b.children[2]?.innerText || '';
-                return aLeader.localeCompare(bLeader, 'es');
-            }
-            return direction === 'asc' ? aValue - bValue : bValue - aValue;
-        });
-
-        rows.forEach(row => tableBody.appendChild(row));
-        if (totalRow) tableBody.appendChild(totalRow);
-        refreshRanks();
-        updateIndicators(header, direction);
-    }
-
-    sortableHeaders.forEach(header => {
-        header.addEventListener('click', () => {
-            const colIndex = Number(header.dataset.sortCol);
-            const nextDirection = currentSort.col === colIndex && currentSort.dir === 'desc' ? 'asc' : 'desc';
-            currentSort = { col: colIndex, dir: nextDirection };
-            sortTable(colIndex, nextDirection, header);
-        });
-    });
-
-    const defaultHeader = document.querySelector('th.sortable[data-sort-col="14"]');
-    if (defaultHeader) updateIndicators(defaultHeader, 'desc');
-})();
-</script>
-
 </body>
 </html>
