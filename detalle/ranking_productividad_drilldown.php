@@ -574,6 +574,10 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 .prod{font-weight:900;border-radius:8px;padding:4px 8px;display:inline-block;min-width:48px;text-align:center}.prod.tier-1{background:#bbf7d0;color:#065f46}.prod.tier-2{background:#fde68a;color:#78350f}.prod.tier-3{background:#fed7aa;color:#9a3412}.prod.tier-4{background:#fecaca;color:#991b1b}.prod.muted{background:#f1f5f9;color:#94a3b8}.hc-indicator{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.hc-good{background:#bbf7d0;color:#166534}.hc-mid{background:#fde68a;color:#78350f}.hc-bad{background:#fecaca;color:#991b1b}.gray-cell{background:#f1f1f3}.total-row td{background:#f3f4f6!important;color:#111827!important;font-weight:900!important;border-top:2px solid #9ca3af!important}.error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:14px;padding:14px 16px;margin-bottom:16px;font-weight:700}
 .sales-table{min-width:640px}.sales-table .sales-zero{color:#94a3b8}.sales-table .sales-hit{font-weight:900;color:#065f46}
 @media(max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{flex-direction:column}.week-nav{justify-content:flex-start}.counter{margin-left:0;width:100%}}@media(max-width:760px){:root{--sidebar:0}.sidebar{display:none}.main{margin-left:0;padding:20px}.cards{grid-template-columns:1fr}}
+
+.matrix-sortable{cursor:pointer;user-select:none}
+.matrix-sortable .sort-icon{opacity:.65;margin-left:4px;font-size:.72rem}
+
 </style>
 </head>
 <body>
@@ -782,26 +786,24 @@ foreach ($coach_matrix as $v) {
             <thead>
                 <tr>
                     <th>Nombre vendedor</th>
-                    <th class="center">Antigüedad</th>
-                    <th class="num">INS<br>SEM<?= h($semana_base) ?></th>
-                    <th class="num">INS<br>SEM<?= h($semana_actual) ?></th>
-                    <th class="num">Dif.</th>
-                    <th class="center">% Dif.</th>
-                    <th class="num">2P</th>
-                    <th class="center">% 2P</th>
-                    <th class="num">3P</th>
-                    <th class="center">% 3P</th>
-                    <th class="num">Resid.</th>
-                    <th class="center">% Resid.</th>
-                    <th class="num">Neg.</th>
-                    <th class="center">% Neg.</th>
-                    <th class="num">Total</th>
+                    <th class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="ins_base">INS<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="ins_actual">INS<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="doble">2P <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_doble">% 2P <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="triple">3P <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_triple">% 3P <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="resid">Resid. <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_resid">% Resid. <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="neg">Neg. <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_neg">% Neg. <span class="sort-icon">↕</span></th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($coach_matrix as $v): ?>
-                <tr>
-                    <?php
+                <?php
                         $ins_base_v = (int)($v['semanas'][$semana_base] ?? 0);
                         $ins_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
                         $dif_v = $ins_actual_v - $ins_base_v;
@@ -815,7 +817,29 @@ foreach ($coach_matrix as $v) {
                         $pct_triple = $total_v > 0 ? round(($triple_v / $total_v) * 100, 0) : null;
                         $pct_resid = $total_v > 0 ? round(($resid_v / $total_v) * 100, 0) : null;
                         $pct_neg = $total_v > 0 ? round(($neg_v / $total_v) * 100, 0) : null;
+                        $antig_meses = 0;
+                        if (is_numeric($v['antiguedad'])) {
+                            $antig_meses = (float)$v['antiguedad'];
+                        } elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) {
+                            $antig_meses = ((int)$m[1] * 12) + (int)$m[2];
+                        } elseif (preg_match('/(\d+) meses/', (string)$v['antiguedad'], $m)) {
+                            $antig_meses = (int)$m[1];
+                        }
                     ?>
+                <tr class="matrix-row"
+                    data-antiguedad="<?= h($antig_meses) ?>"
+                    data-ins_base="<?= h($ins_base_v) ?>"
+                    data-ins_actual="<?= h($ins_actual_v) ?>"
+                    data-dif="<?= h($dif_v) ?>"
+                    data-pct_dif="<?= h($pct_v ?? 0) ?>"
+                    data-doble="<?= h($doble_v) ?>"
+                    data-pct_doble="<?= h($pct_doble ?? 0) ?>"
+                    data-triple="<?= h($triple_v) ?>"
+                    data-pct_triple="<?= h($pct_triple ?? 0) ?>"
+                    data-resid="<?= h($resid_v) ?>"
+                    data-pct_resid="<?= h($pct_resid ?? 0) ?>"
+                    data-neg="<?= h($neg_v) ?>"
+                    data-pct_neg="<?= h($pct_neg ?? 0) ?>">
                     <td class="entity"><?= h($v['vendedor']) ?></td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
                     <td class="num"><?= fmt_num($ins_base_v) ?></td>
@@ -830,7 +854,6 @@ foreach ($coach_matrix as $v) {
                     <td class="center"><?= $pct_resid === null ? '-' : fmt_num($pct_resid).'%' ?></td>
                     <td class="num"><?= fmt_num($neg_v) ?></td>
                     <td class="center"><?= $pct_neg === null ? '-' : fmt_num($pct_neg).'%' ?></td>
-                    <td class="num"><span class="prod <?= prod_class($v['total']) ?>"><?= fmt_num($v['total']) ?></span></td>
                 </tr>
                 <?php endforeach; ?>
                 <tr class="total-row">
@@ -852,7 +875,7 @@ foreach ($coach_matrix as $v) {
                     <td class="num"><?= fmt_num($t_base) ?></td>
                     <td class="num"><?= fmt_num($t_actual) ?></td>
                     <td class="num"><?= fmt_num($t_dif) ?></td>
-                    <td class="center"><?= $t_pct === null ? '-' : fmt_num($t_pct).'%' ?></td>
+                    <td class="center"><span class="badge <?= pct_class($t_pct) ?>"><?= $t_pct === null ? '-' : fmt_num($t_pct).'%' ?></span></td>
                     <td class="num"><?= fmt_num($t_doble) ?></td>
                     <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_doble/$total_coach)*100,0)).'%' : '-' ?></td>
                     <td class="num"><?= fmt_num($t_triple) ?></td>
@@ -861,7 +884,6 @@ foreach ($coach_matrix as $v) {
                     <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_resid/$total_coach)*100,0)).'%' : '-' ?></td>
                     <td class="num"><?= fmt_num($t_neg) ?></td>
                     <td class="center"><?= $total_coach > 0 ? fmt_num(round(($t_neg/$total_coach)*100,0)).'%' : '-' ?></td>
-                    <td class="num"><span class="prod <?= prod_class($total_coach) ?>"><?= fmt_num($total_coach) ?></span></td>
                 </tr>
             </tbody>
         </table>
@@ -969,5 +991,32 @@ dataRows().forEach(r=>r.addEventListener('click',()=>{const href=r.dataset.href;
 recalc();
 </script>
 <?php endif; ?>
+
+<?php if ($view === 'vendedores'): ?>
+<script>
+(function(){
+  const tbody = document.querySelector('.sales-table tbody');
+  if(!tbody) return;
+  const totalRow = tbody.querySelector('.total-row');
+  let state = {key:null, dir:'desc'};
+  function n(v){ const x=parseFloat(v); return isNaN(x)?0:x; }
+  function rows(){ return [...tbody.querySelectorAll('tr.matrix-row')]; }
+  document.querySelectorAll('.matrix-sortable').forEach(th=>{
+    th.addEventListener('click',()=>{
+      const key = th.dataset.sort;
+      const dir = (state.key === key && state.dir === 'desc') ? 'asc' : 'desc';
+      state = {key,dir};
+      const rs = rows();
+      rs.sort((a,b)=> dir === 'desc' ? n(b.dataset[key])-n(a.dataset[key]) : n(a.dataset[key])-n(b.dataset[key]));
+      rs.forEach(r=>tbody.insertBefore(r,totalRow));
+      document.querySelectorAll('.matrix-sortable .sort-icon').forEach(i=>i.textContent='↕');
+      const icon = th.querySelector('.sort-icon');
+      if(icon) icon.textContent = dir === 'desc' ? '↓' : '↑';
+    });
+  });
+})();
+</script>
+<?php endif; ?>
+
 </body>
 </html>
