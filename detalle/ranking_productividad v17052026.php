@@ -50,21 +50,11 @@ function prod_class($prod) {
     return 'tier-4';
 }
 
-
-function hc_sin_class($value) {
-    $v = (int)$value;
-    if ($v <= 2) return 'risk-ok';
-    if ($v <= 5) return 'risk-mid';
-    return 'risk-high';
-}
-
-function row_perf_class($prod) {
-    if ($prod === null) return 'perf-muted';
-    $p = (float)$prod;
-    if ($p >= 4.0) return 'perf-good';
-    if ($p >= 3.0) return 'perf-ok';
-    if ($p >= 2.0) return 'perf-risk';
-    return 'perf-bad';
+function hc_sin_venta_class($value) {
+    $n = (float)$value;
+    if ($n <= 2) return 'hc-good';
+    if ($n <= 5) return 'hc-mid';
+    return 'hc-bad';
 }
 
 /* Semanas disponibles */
@@ -356,42 +346,23 @@ $fecha_label = date('d/m/Y');
         th.sortable.active-sort .sort-indicator { opacity:1; }
         th.sub-gray { background:#d9d9dc; color:#111827; }
         td { padding:9px 8px; border-bottom:1px solid var(--border); border-right:1px solid #eef2f7; white-space:nowrap; }
-        tbody tr { transition:transform .14s ease, box-shadow .14s ease, filter .14s ease; }
-        tbody tr:hover:not(.total-row) { transform:translateY(-1px); box-shadow:0 8px 18px rgba(15,23,42,.10); }
-        tbody tr:hover td { filter:brightness(.98); }
-        tbody tr.perf-good td:first-child { border-left:6px solid #16a34a; }
-        tbody tr.perf-ok td:first-child { border-left:6px solid #eab308; }
-        tbody tr.perf-risk td:first-child { border-left:6px solid #f97316; }
-        tbody tr.perf-bad td:first-child { border-left:6px solid #dc2626; }
-        tbody tr.top-1 td { background:#dcfce7; }
-        tbody tr.top-2 td { background:#dbeafe; }
-        tbody tr.top-3 td { background:#fef3c7; }
-        tbody tr.bottom-alert td { background:#fee2e2; }
+        tbody tr:hover td { background:#f8fbff; }
         .rank { display:inline-flex; justify-content:center; align-items:center; width:24px; height:24px; border-radius:999px; background:#e8f0fe; color:var(--blue); font-weight:900; }
-        .top-1 .rank { background:#16a34a; color:#fff; }
-        .top-2 .rank { background:#2563eb; color:#fff; }
-        .top-3 .rank { background:#d97706; color:#fff; }
-        .bottom-alert .rank { background:#dc2626; color:#fff; }
         .leader { font-weight:800; color:#0f1f3d; }
         .district { font-weight:800; color:#334155; }
-        .badge { display:inline-block; min-width:36px; padding:4px 9px; border-radius:999px; text-align:center; font-weight:900; box-shadow:inset 0 -1px 0 rgba(0,0,0,.12); }
-        .badge.up { background:#16a34a; color:#fff; }
-        .badge.down { background:#f97316; color:#fff; }
-        .badge.down-hard { background:#dc2626; color:#fff; }
-        .badge.flat { background:#2563eb; color:#fff; }
-        .prod { font-weight:950; border-radius:9px; padding:5px 9px; display:inline-block; min-width:52px; text-align:center; box-shadow:0 2px 6px rgba(15,23,42,.16); }
-        .prod.tier-1 { background:#16a34a; color:#fff; }
-        .prod.tier-2 { background:#eab308; color:#111827; }
-        .prod.tier-3 { background:#f97316; color:#fff; }
-        .prod.tier-4 { background:#dc2626; color:#fff; }
-        .prod.muted { background:#94a3b8; color:#fff; }
-        .risk-pill { display:inline-block; min-width:36px; padding:4px 9px; border-radius:999px; text-align:center; font-weight:900; }
-        .risk-pill.risk-ok { background:#16a34a; color:#fff; }
-        .risk-pill.risk-mid { background:#eab308; color:#111827; }
-        .risk-pill.risk-high { background:#dc2626; color:#fff; }
+        .badge { display:inline-block; min-width:36px; padding:3px 8px; border-radius:999px; text-align:center; font-weight:900; }
+        .badge.up { background:var(--green-bg); color:#065f46; }
+        .badge.down { background:var(--yellow-bg); color:#92400e; }
+        .badge.down-hard { background:var(--red-bg); color:#991b1b; }
+        .badge.flat { background:#e2e8f0; color:#334155; }
+        .prod { font-weight:900; border-radius:8px; padding:4px 8px; display:inline-block; min-width:48px; text-align:center; }
+        .prod.tier-1 { background:var(--green-bg); color:#065f46; }
+        .prod.tier-2 { background:#fde68a; color:#78350f; }
+        .prod.tier-3 { background:var(--orange-bg); color:#9a3412; }
+        .prod.tier-4 { background:var(--red-bg); color:#991b1b; }
+        .prod.muted { background:#f1f5f9; color:#94a3b8; }
         .gray-cell { background:#f1f1f3; }
-        .total-row td { background:#0f172a !important; color:#fff; font-weight:900; border-top:3px solid #020617; }
-        .total-row .badge, .total-row .prod, .total-row .risk-pill { box-shadow:none; }
+        .total-row td { background:#f8fafc; font-weight:900; border-top:2px solid #0f172a; }
         .error { background:var(--red-bg); color:#991b1b; border:1px solid #fecaca; border-radius:14px; padding:14px 16px; margin-bottom:16px; font-weight:700; }
         @media (max-width: 1100px) {
             .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -404,7 +375,42 @@ $fecha_label = date('d/m/Y');
             .main { margin-left:0; padding:20px; }
             .cards { grid-template-columns:1fr; }
         }
-    </style>
+    
+/* Refinamiento visual: color solo en indicadores clave */
+.badge.up { background:#bbf7d0 !important; color:#166534 !important; }
+.badge.flat { background:#dbeafe !important; color:#1d4ed8 !important; }
+.badge.down { background:#fed7aa !important; color:#9a3412 !important; }
+.badge.down-hard { background:#fecaca !important; color:#991b1b !important; }
+
+.prod.tier-1 { background:#bbf7d0 !important; color:#065f46 !important; box-shadow:none !important; }
+.prod.tier-2 { background:#fde68a !important; color:#78350f !important; box-shadow:none !important; }
+.prod.tier-3 { background:#fed7aa !important; color:#9a3412 !important; box-shadow:none !important; }
+.prod.tier-4 { background:#fecaca !important; color:#991b1b !important; box-shadow:none !important; }
+.prod.muted { background:#f1f5f9 !important; color:#94a3b8 !important; }
+
+.hc-indicator {
+    display:inline-block;
+    min-width:36px;
+    padding:3px 8px;
+    border-radius:999px;
+    text-align:center;
+    font-weight:900;
+}
+.hc-good { background:#bbf7d0 !important; color:#166534 !important; }
+.hc-mid { background:#fde68a !important; color:#78350f !important; }
+.hc-bad { background:#fecaca !important; color:#991b1b !important; }
+
+tbody tr td { background:inherit; }
+tbody tr:hover td { background:#f8fbff !important; }
+tr.total-row td,
+.total-row td {
+    background:#f3f4f6 !important;
+    color:#111827 !important;
+    font-weight:900 !important;
+    border-top:2px solid #9ca3af !important;
+}
+
+</style>
 </head>
 <body>
 <aside class="sidebar">
@@ -497,7 +503,7 @@ $fecha_label = date('d/m/Y');
                 </thead>
                 <tbody id="rankingBody">
                     <?php $rank = 1; foreach ($rows as $r): ?>
-                    <tr class="<?= row_perf_class($r['prod_actual']) ?>">
+                    <tr>
                         <td class="center"><span class="rank"><?= $rank++ ?></span></td>
                         <td class="district"><?= h($r['distrito']) ?></td>
                         <td class="leader"><?= h($r['lider']) ?></td>
@@ -509,8 +515,8 @@ $fecha_label = date('d/m/Y');
                         <td class="num"><?= fmt_num($r['hc_activo_actual']) ?></td>
                         <td class="num"><?= fmt_num($r['hc_con_ins_base']) ?></td>
                         <td class="num"><?= fmt_num($r['hc_con_ins_actual']) ?></td>
-                        <td class="num"><span class="risk-pill <?= hc_sin_class($r['hc_sin_venta_base']) ?>"><?= fmt_num($r['hc_sin_venta_base']) ?></span></td>
-                        <td class="num"><span class="risk-pill <?= hc_sin_class($r['hc_sin_venta_actual']) ?>"><?= fmt_num($r['hc_sin_venta_actual']) ?></span></td>
+                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_base']) ?>"><?= fmt_num($r['hc_sin_venta_base']) ?></span></td>
+                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_actual']) ?>"><?= fmt_num($r['hc_sin_venta_actual']) ?></span></td>
                         <td class="center"><span class="prod <?= prod_class($r['prod_base']) ?>"><?= fmt_prod($r['prod_base']) ?></span></td>
                         <td class="center"><span class="prod <?= prod_class($r['prod_actual']) ?>"><?= fmt_prod($r['prod_actual']) ?></span></td>
                         <td class="num gray-cell"><?= fmt_num($r['activo_base']) ?></td>
@@ -533,8 +539,8 @@ $fecha_label = date('d/m/Y');
                         <td class="num"><?= fmt_num($tot['hc_activo_actual']) ?></td>
                         <td class="num"><?= fmt_num($tot['hc_con_ins_base']) ?></td>
                         <td class="num"><?= fmt_num($tot['hc_con_ins_actual']) ?></td>
-                        <td class="num"><span class="risk-pill <?= hc_sin_class($tot['hc_sin_venta_base']) ?>"><?= fmt_num($tot['hc_sin_venta_base']) ?></span></td>
-                        <td class="num"><span class="risk-pill <?= hc_sin_class($tot['hc_sin_venta_actual']) ?>"><?= fmt_num($tot['hc_sin_venta_actual']) ?></span></td>
+                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_base']) ?>"><?= fmt_num($tot['hc_sin_venta_base']) ?></span></td>
+                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_actual']) ?>"><?= fmt_num($tot['hc_sin_venta_actual']) ?></span></td>
                         <td class="center"><span class="prod <?= prod_class($tot['prod_base']) ?>"><?= fmt_prod($tot['prod_base']) ?></span></td>
                         <td class="center"><span class="prod <?= prod_class($tot['prod_actual']) ?>"><?= fmt_prod($tot['prod_actual']) ?></span></td>
                         <td class="num gray-cell"><?= fmt_num($tot['activo_base']) ?></td>
@@ -586,18 +592,6 @@ $fecha_label = date('d/m/Y');
             const rank = row.querySelector('.rank');
             if (rank) rank.textContent = index + 1;
         });
-        applyVisualRanking();
-    }
-
-    function applyVisualRanking() {
-        const rows = Array.from(tableBody.querySelectorAll('tr:not(.total-row)'));
-        rows.forEach(row => row.classList.remove('top-1', 'top-2', 'top-3', 'bottom-alert'));
-        rows.forEach((row, index) => {
-            if (index === 0) row.classList.add('top-1');
-            if (index === 1) row.classList.add('top-2');
-            if (index === 2) row.classList.add('top-3');
-            if (rows.length > 4 && index >= rows.length - 2) row.classList.add('bottom-alert');
-        });
     }
 
     function sortTable(colIndex, direction, header) {
@@ -632,7 +626,6 @@ $fecha_label = date('d/m/Y');
 
     const defaultHeader = document.querySelector('th.sortable[data-sort-col="14"]');
     if (defaultHeader) updateIndicators(defaultHeader, 'desc');
-    applyVisualRanking();
 })();
 </script>
 
