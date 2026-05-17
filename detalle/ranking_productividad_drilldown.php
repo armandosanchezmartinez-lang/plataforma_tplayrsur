@@ -389,6 +389,9 @@ $subtitle_bits = [];
 if ($view !== 'lideres') $subtitle_bits[] = "Líder: " . $lider_param;
 if ($view === 'vendedores') $subtitle_bits[] = "Coach: " . $coach_param;
 $subtitle_context = implode(' · ', $subtitle_bits);
+
+$base_link = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual]);
+$lider_link = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'coaches','distrito'=>$distrito_param,'lider'=>$lider_param]);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -412,6 +415,104 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 .prod{font-weight:900;border-radius:8px;padding:4px 8px;display:inline-block;min-width:48px;text-align:center}.prod.tier-1{background:#bbf7d0;color:#065f46}.prod.tier-2{background:#fde68a;color:#78350f}.prod.tier-3{background:#fed7aa;color:#9a3412}.prod.tier-4{background:#fecaca;color:#991b1b}.prod.muted{background:#f1f5f9;color:#94a3b8}
 .hc-indicator{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.hc-good{background:#bbf7d0;color:#166534}.hc-mid{background:#fde68a;color:#78350f}.hc-bad{background:#fecaca;color:#991b1b}.gray-cell{background:#f1f1f3}.total-row td{background:#f3f4f6!important;color:#111827!important;font-weight:900!important;border-top:2px solid #9ca3af!important}.error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:14px;padding:14px 16px;margin-bottom:16px;font-weight:700}
 @media(max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{flex-direction:column}.week-nav{justify-content:flex-start}.counter{margin-left:0;width:100%}}@media(max-width:760px){:root{--sidebar:0px}.sidebar{display:none}.main{margin-left:0;padding:20px}.cards{grid-template-columns:1fr}}
+
+.breadcrumb-card{
+    background:linear-gradient(135deg,#ffffff,#f8fbff);
+    border:1px solid var(--border);
+    border-left:5px solid var(--blue);
+    border-radius:16px;
+    padding:14px 16px;
+    margin-bottom:16px;
+    box-shadow:0 2px 8px rgba(15,23,42,.04);
+}
+.breadcrumb-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+}
+.breadcrumb-title{
+    font-size:.78rem;
+    font-weight:900;
+    color:var(--text2);
+    text-transform:uppercase;
+    letter-spacing:.5px;
+    margin-bottom:6px;
+}
+.breadcrumb-path{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+    font-size:.92rem;
+    font-weight:900;
+    color:#0f1f3d;
+}
+.breadcrumb-link,
+.breadcrumb-current{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    border-radius:999px;
+    padding:7px 11px;
+    text-decoration:none;
+    border:1px solid #dbe3f0;
+}
+.breadcrumb-link{
+    background:#f8fafc;
+    color:var(--blue);
+}
+.breadcrumb-link:hover{
+    background:#e8f0fe;
+    border-color:#bcd0f5;
+}
+.breadcrumb-current{
+    background:var(--blue);
+    color:white;
+    border-color:var(--blue);
+}
+.breadcrumb-sep{
+    color:#94a3b8;
+    font-weight:900;
+}
+.level-actions{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+}
+.level-action{
+    border:1px solid var(--border);
+    background:white;
+    color:#334155;
+    text-decoration:none;
+    border-radius:12px;
+    padding:8px 11px;
+    font-size:.78rem;
+    font-weight:900;
+    box-shadow:0 1px 3px rgba(15,23,42,.05);
+}
+.level-action.primary{
+    background:#e8f0fe;
+    color:var(--blue);
+    border-color:#bcd0f5;
+}
+.level-action:hover{
+    filter:brightness(.97);
+}
+.context-chip{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    margin-top:8px;
+    padding:6px 10px;
+    border-radius:999px;
+    background:#eef2ff;
+    color:#1e3a8a;
+    font-size:.78rem;
+    font-weight:800;
+}
+
 </style>
 </head>
 <body>
@@ -440,6 +541,42 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
         <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
         <span class="week-current">Semana <?= h($semana_actual) ?></span>
         <a class="week-btn <?= $has_next ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
+    </div>
+
+</section>
+
+<section class="breadcrumb-card">
+    <div class="breadcrumb-top">
+        <div>
+            <div class="breadcrumb-title">Nivel de análisis</div>
+            <div class="breadcrumb-path">
+                <?php if ($view === 'lideres'): ?>
+                    <span class="breadcrumb-current">🏆 Ranking General</span>
+                <?php else: ?>
+                    <a class="breadcrumb-link" href="<?= h($base_link) ?>">🏆 Ranking General</a>
+                    <span class="breadcrumb-sep">›</span>
+                    <?php if ($view === 'coaches'): ?>
+                        <span class="breadcrumb-current">👤 <?= h($lider_param) ?></span>
+                    <?php else: ?>
+                        <a class="breadcrumb-link" href="<?= h($lider_link) ?>">👤 <?= h($lider_param) ?></a>
+                        <span class="breadcrumb-sep">›</span>
+                        <span class="breadcrumb-current">🧭 <?= h($coach_param) ?></span>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
+            <?php if ($view !== 'lideres'): ?>
+                <div class="context-chip">Distrito: <?= h($distrito_param) ?></div>
+            <?php endif; ?>
+        </div>
+
+        <div class="level-actions">
+            <?php if ($view !== 'lideres'): ?>
+                <a class="level-action" href="<?= h($base_link) ?>">← Ver líderes</a>
+            <?php endif; ?>
+            <?php if ($view === 'vendedores'): ?>
+                <a class="level-action primary" href="<?= h($lider_link) ?>">← Ver coaches de este líder</a>
+            <?php endif; ?>
+        </div>
     </div>
 </section>
 
