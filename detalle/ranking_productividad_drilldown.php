@@ -1,0 +1,709 @@
+<?php
+ini_set('display_errors', 0);
+error_reporting(0);
+header("Cache-Control: no-cache, no-store, must-revalidate");
+session_start();
+
+if (!isset($_SESSION['usuario'])) {
+    header("Location: ../login.php");
+    exit();
+}
+
+include '../conexion.php';
+
+$rol = $_SESSION['rol'] ?? 'vendedor';
+$roles_labels = [
+    'admin'              => 'Administrador',
+    'director_regional'  => 'Director Regional',
+    'director_distrital' => 'Director Distrital',
+    'lider'              => 'Líder',
+    'coach'              => 'Coach',
+    'vendedor'           => 'Vendedor',
+];
+
+function h($value) { return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8'); }
+function fmt_num($value, $decimals = 0) {
+    if ($value === null || $value === '') return '0';
+    return number_format((float)$value, $decimals);
+}
+function fmt_prod($value) { return $value === null ? '-' : number_format((float)$value, 2); }
+function pct_class($pct) {
+    if ($pct === null || $pct === '') return 'flat';
+    $n = (float)$pct;
+    if ($n >= 5) return 'up';
+    if ($n <= -10) return 'down-hard';
+    if ($n < 0) return 'down';
+    return 'flat';
+}
+function prod_class($prod) {
+    if ($prod === null || $prod === '') return 'muted';
+    $p = (float)$prod;
+    if ($p >= 4.0) return 'tier-1';
+    if ($p >= 3.0) return 'tier-2';
+    if ($p >= 2.5) return 'tier-3';
+    return 'tier-4';
+}
+function hc_sin_venta_class($value) {
+    $n = (float)$value;
+    if ($n <= 2) return 'hc-good';
+    if ($n <= 5) return 'hc-mid';
+    return 'hc-bad';
+}
+function qs($arr) { return http_build_query($arr); }
+
+/* Semanas disponibles */
+$semanas = [];
+$res_sem = mysqli_query($conexion, "
+    SELECT DISTINCT anio, semana
+    FROM hc
+    WHERE anio IS NOT NULL AND semana IS NOT NULL
+    ORDER BY anio DESC, semana DESC
+");
+while ($res_sem && $row = mysqli_fetch_assoc($res_sem)) {
+    $semanas[] = ['anio' => (int)$row['anio'], 'semana' => (int)$row['semana']];
+}
+
+$anio_actual = $semanas[0]['anio'] ?? (int)date('Y');
+$semana_actual = $semanas[0]['semana'] ?? (int)date('W');
+
+if (isset($_GET['anio'])) $anio_actual = max(2020, min(2100, (int)$_GET['anio']));
+if (isset($_GET['semana'])) $semana_actual = max(1, min(53, (int)$_GET['semana']));
+
+$semana_base = $semana_actual - 1;
+$anio_base = $anio_actual;
+if ($semana_base < 1) {
+    $semana_base = 52;
+    $anio_base = $anio_actual - 1;
+}
+
+$semanas_key = [];
+foreach ($semanas as $s) $semanas_key[$s['anio'].'-'.$s['semana']] = true;
+
+$prev_semana = $semana_actual - 1; $prev_anio = $anio_actual;
+if ($prev_semana < 1) { $prev_semana = 52; $prev_anio--; }
+$next_semana = $semana_actual + 1; $next_anio = $anio_actual;
+if ($next_semana > 53) { $next_semana = 1; $next_anio++; }
+$has_prev = isset($semanas_key[$prev_anio.'-'.$prev_semana]);
+$has_next = isset($semanas_key[$next_anio.'-'.$next_semana]);
+
+$view = $_GET['view'] ?? 'lideres';
+if (!in_array($view, ['lideres','coaches','vendedores'], true)) $view = 'lideres';
+
+$lider_param = $_GET['lider'] ?? '';
+$distrito_param = $_GET['distrito'] ?? '';
+$coach_param = $_GET['coach'] ?? '';
+$coach_pos_param = $_GET['coach_pos'] ?? '';
+
+$lider_sql = mysqli_real_escape_string($conexion, $lider_param);
+$distrito_sql = mysqli_real_escape_string($conexion, $distrito_param);
+$coach_sql = mysqli_real_escape_string($conexion, $coach_param);
+$coach_pos_sql = mysqli_real_escape_string($conexion, $coach_pos_param);
+
+$lideres_cte = "
+lideres_activos AS (
+    SELECT 'CANCUN' AS distrito_reporte, 'CANCUN' AS distrito_hc, 'COTO FELIX ERICK DANIEL' AS lider_hc, 'COTO FELIX ERICK DANIEL' AS lider_instalaciones
+    UNION ALL SELECT 'CANCUN', 'CANCUN', 'GAMBOA LARA LUIS ANTONIO', 'GAMBOA LARA LUIS ANTONIO'
+    UNION ALL SELECT 'COATZA-MINA', 'COATZA MINA', 'HECTOR ANDRES PALMA HERNANDEZ', 'HECTOR ANDRES PALMA HERNANDEZ'
+    UNION ALL SELECT 'MERIDA', 'MERIDA', 'PARAMO AVILA JOVANY DAMIAN', 'JOVANY DAMIAN PARAMO AVILA'
+    UNION ALL SELECT 'MERIDA', 'MERIDA', 'PAREDES ROCHEL MARIA JOSE', 'PAREDES ROCHEL MARIA JOSE'
+    UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'LOPEZ MANCILLA JOSE ALBERTO', 'JOSE ALBERTO LOPEZ MANCILLA'
+    UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL', 'CHRISTIANNE MIGUEL SANCHEZ SANCHEZ'
+    UNION ALL SELECT 'VILLAHERMOSA', 'VILLAHERMOSA', 'HERNANDEZ PALMA MIRIAN GABRIELA', 'MIRIAN GABRIELA HERNANDEZ PALMA'
+)";
+
+if ($view === 'lideres') {
+$sql = "
+WITH {$lideres_cte},
+ventas_lider AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS entidad,
+        la.lider_hc AS lider,
+        NULL AS coach,
+        NULL AS coach_pos,
+        SUM(CASE WHEN YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha, 1) = {$semana_base} THEN 1 ELSE 0 END) AS ins_sem_base,
+        SUM(CASE WHEN YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha, 1) = {$semana_actual} THEN 1 ELSE 0 END) AS ins_sem_actual
+    FROM lideres_activos la
+    LEFT JOIN instalaciones i
+        ON i.lider = la.lider_instalaciones
+       AND (
+            (YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha, 1) = {$semana_base})
+         OR (YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha, 1) = {$semana_actual})
+       )
+    GROUP BY la.distrito_reporte, la.lider_hc
+),
+coaches AS (
+    SELECT DISTINCT
+        la.distrito_reporte AS distrito,
+        la.distrito_hc,
+        la.lider_hc AS lider,
+        h.nombre_colaborador AS coach,
+        h.id_posicion,
+        h.semana,
+        h.anio
+    FROM lideres_activos la
+    INNER JOIN hc h
+        ON h.nombre_linea_reporte = la.lider_hc
+       AND h.distrito = la.distrito_hc
+       AND (
+            (h.anio = {$anio_base} AND h.semana = {$semana_base})
+         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+       )
+       AND h.puesto_lr LIKE '%LIDER%'
+),
+vendedores_hc AS (
+    SELECT DISTINCT
+        c.distrito,
+        c.lider,
+        h.numero_talento_gs AS folio_empleado,
+        h.nombre_colaborador,
+        h.id_posicion,
+        h.posicion_lr,
+        h.semana,
+        h.anio
+    FROM coaches c
+    INNER JOIN hc h
+        ON (
+            (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
+            OR
+            (c.coach = 'VACANTE' AND h.posicion_lr = c.id_posicion)
+        )
+       AND h.distrito = c.distrito_hc
+       AND h.semana = c.semana
+       AND h.anio = c.anio
+       AND h.puesto_lr LIKE '%COACH%'
+),
+hc_resumen AS (
+    SELECT
+        vhc.distrito,
+        vhc.lider,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_base} AND vhc.semana = {$semana_base} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' THEN vhc.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_actual} AND vhc.semana = {$semana_actual} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' THEN vhc.folio_empleado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_base} AND vhc.semana = {$semana_base} AND (vhc.folio_empleado = 'VACANTE' OR vhc.nombre_colaborador = 'VACANTE') THEN vhc.posicion_lr END) AS vacante_base,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_actual} AND vhc.semana = {$semana_actual} AND (vhc.folio_empleado = 'VACANTE' OR vhc.nombre_colaborador = 'VACANTE') THEN vhc.posicion_lr END) AS vacante_actual,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_base} AND vhc.semana = {$semana_base} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN vhc.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_actual} AND vhc.semana = {$semana_actual} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN vhc.folio_empleado END) AS hc_con_ins_actual
+    FROM vendedores_hc vhc
+    LEFT JOIN instalaciones ibase ON vhc.folio_empleado = ibase.folio_empleado AND YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha, 1) = {$semana_base}
+    LEFT JOIN instalaciones iactual ON vhc.folio_empleado = iactual.folio_empleado AND YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha, 1) = {$semana_actual}
+    GROUP BY vhc.distrito, vhc.lider
+)
+SELECT
+    v.distrito, v.entidad, v.lider, v.coach, v.coach_pos,
+    v.ins_sem_base, v.ins_sem_actual,
+    v.ins_sem_actual - v.ins_sem_base AS dif,
+    ROUND(((v.ins_sem_actual - v.ins_sem_base) / NULLIF(v.ins_sem_base, 0)) * 100, 0) AS pct_dif,
+    COALESCE(h.hc_activo_base, 0) AS hc_activo_base,
+    COALESCE(h.hc_activo_actual, 0) AS hc_activo_actual,
+    COALESCE(h.hc_con_ins_base, 0) AS hc_con_ins_base,
+    COALESCE(h.hc_con_ins_actual, 0) AS hc_con_ins_actual,
+    COALESCE(h.hc_activo_base, 0) - COALESCE(h.hc_con_ins_base, 0) AS hc_sin_venta_base,
+    COALESCE(h.hc_activo_actual, 0) - COALESCE(h.hc_con_ins_actual, 0) AS hc_sin_venta_actual,
+    ROUND(v.ins_sem_base / NULLIF(h.hc_activo_base, 0), 2) AS prod_base,
+    ROUND(v.ins_sem_actual / NULLIF(h.hc_activo_actual, 0), 2) AS prod_actual,
+    COALESCE(h.hc_activo_base, 0) AS activo_base,
+    COALESCE(h.vacante_base, 0) AS vacante_base,
+    COALESCE(h.hc_activo_base, 0) + COALESCE(h.vacante_base, 0) AS hc_total_base,
+    COALESCE(h.hc_activo_actual, 0) AS activo_actual,
+    COALESCE(h.vacante_actual, 0) AS vacante_actual,
+    COALESCE(h.hc_activo_actual, 0) + COALESCE(h.vacante_actual, 0) AS hc_total_actual
+FROM ventas_lider v
+LEFT JOIN hc_resumen h ON v.distrito = h.distrito AND v.lider = h.lider
+ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
+";
+} elseif ($view === 'coaches') {
+$sql = "
+WITH {$lideres_cte},
+selected_lider AS (
+    SELECT * FROM lideres_activos
+    WHERE lider_hc = '{$lider_sql}' AND distrito_reporte = '{$distrito_sql}'
+),
+coaches AS (
+    SELECT DISTINCT
+        la.distrito_reporte AS distrito,
+        la.distrito_hc,
+        la.lider_hc AS lider,
+        h.nombre_colaborador AS entidad,
+        h.nombre_colaborador AS coach,
+        h.id_posicion AS coach_pos,
+        h.semana,
+        h.anio
+    FROM selected_lider la
+    INNER JOIN hc h
+        ON h.nombre_linea_reporte = la.lider_hc
+       AND h.distrito = la.distrito_hc
+       AND (
+            (h.anio = {$anio_base} AND h.semana = {$semana_base})
+         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+       )
+       AND h.puesto_lr LIKE '%LIDER%'
+),
+vendedores_hc AS (
+    SELECT DISTINCT
+        c.distrito,
+        c.lider,
+        c.entidad,
+        c.coach,
+        c.coach_pos,
+        h.numero_talento_gs AS folio_empleado,
+        h.nombre_colaborador,
+        h.id_posicion,
+        h.posicion_lr,
+        h.semana,
+        h.anio
+    FROM coaches c
+    INNER JOIN hc h
+        ON (
+            (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
+            OR
+            (c.coach = 'VACANTE' AND h.posicion_lr = c.coach_pos)
+        )
+       AND h.distrito = c.distrito_hc
+       AND h.semana = c.semana
+       AND h.anio = c.anio
+       AND h.puesto_lr LIKE '%COACH%'
+),
+resumen AS (
+    SELECT
+        vhc.distrito, vhc.lider, vhc.entidad, vhc.coach, vhc.coach_pos,
+        COUNT(CASE WHEN YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha, 1) = {$semana_base} THEN 1 END) AS ins_sem_base,
+        COUNT(CASE WHEN YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha, 1) = {$semana_actual} THEN 1 END) AS ins_sem_actual,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_base} AND vhc.semana = {$semana_base} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' THEN vhc.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_actual} AND vhc.semana = {$semana_actual} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' THEN vhc.folio_empleado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_base} AND vhc.semana = {$semana_base} AND (vhc.folio_empleado = 'VACANTE' OR vhc.nombre_colaborador = 'VACANTE') THEN vhc.posicion_lr END) AS vacante_base,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_actual} AND vhc.semana = {$semana_actual} AND (vhc.folio_empleado = 'VACANTE' OR vhc.nombre_colaborador = 'VACANTE') THEN vhc.posicion_lr END) AS vacante_actual,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_base} AND vhc.semana = {$semana_base} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN vhc.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN vhc.anio = {$anio_actual} AND vhc.semana = {$semana_actual} AND vhc.folio_empleado <> 'VACANTE' AND vhc.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN vhc.folio_empleado END) AS hc_con_ins_actual
+    FROM vendedores_hc vhc
+    LEFT JOIN instalaciones ibase ON vhc.folio_empleado = ibase.folio_empleado AND YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha, 1) = {$semana_base}
+    LEFT JOIN instalaciones iactual ON vhc.folio_empleado = iactual.folio_empleado AND YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha, 1) = {$semana_actual}
+    GROUP BY vhc.distrito, vhc.lider, vhc.entidad, vhc.coach, vhc.coach_pos
+)
+SELECT
+    distrito, entidad, lider, coach, coach_pos,
+    ins_sem_base, ins_sem_actual,
+    ins_sem_actual - ins_sem_base AS dif,
+    ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base, 0)) * 100, 0) AS pct_dif,
+    hc_activo_base, hc_activo_actual, hc_con_ins_base, hc_con_ins_actual,
+    hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
+    hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
+    ROUND(ins_sem_base / NULLIF(hc_activo_base, 0), 2) AS prod_base,
+    ROUND(ins_sem_actual / NULLIF(hc_activo_actual, 0), 2) AS prod_actual,
+    hc_activo_base AS activo_base, vacante_base, hc_activo_base + vacante_base AS hc_total_base,
+    hc_activo_actual AS activo_actual, vacante_actual, hc_activo_actual + vacante_actual AS hc_total_actual
+FROM resumen
+ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
+";
+} else {
+$sql = "
+WITH vendedores AS (
+    SELECT DISTINCT
+        h.distrito,
+        '{$lider_sql}' AS lider,
+        h.nombre_colaborador AS entidad,
+        '{$coach_sql}' AS coach,
+        '{$coach_pos_sql}' AS coach_pos,
+        h.numero_talento_gs AS folio_empleado,
+        h.nombre_colaborador,
+        h.id_posicion,
+        h.posicion_lr,
+        h.semana,
+        h.anio
+    FROM hc h
+    WHERE h.distrito = '{$distrito_sql}'
+      AND h.posicion_lr = '{$coach_pos_sql}'
+      AND (
+            (h.anio = {$anio_base} AND h.semana = {$semana_base})
+         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+      )
+      AND h.puesto_lr LIKE '%COACH%'
+),
+resumen AS (
+    SELECT
+        v.distrito, v.lider,
+        CASE WHEN v.nombre_colaborador = 'VACANTE' OR v.folio_empleado = 'VACANTE'
+             THEN CONCAT('VACANTE · POS ', v.id_posicion)
+             ELSE v.entidad
+        END AS entidad,
+        v.coach, v.coach_pos, v.folio_empleado, v.id_posicion,
+        COUNT(CASE WHEN YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha, 1) = {$semana_base} THEN 1 END) AS ins_sem_base,
+        COUNT(CASE WHEN YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha, 1) = {$semana_actual} THEN 1 END) AS ins_sem_actual,
+        MAX(CASE WHEN v.anio = {$anio_base} AND v.semana = {$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN 1 ELSE 0 END) AS hc_activo_base,
+        MAX(CASE WHEN v.anio = {$anio_actual} AND v.semana = {$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN 1 ELSE 0 END) AS hc_activo_actual,
+        MAX(CASE WHEN v.anio = {$anio_base} AND v.semana = {$semana_base} AND (v.folio_empleado = 'VACANTE' OR v.nombre_colaborador = 'VACANTE') THEN 1 ELSE 0 END) AS vacante_base,
+        MAX(CASE WHEN v.anio = {$anio_actual} AND v.semana = {$semana_actual} AND (v.folio_empleado = 'VACANTE' OR v.nombre_colaborador = 'VACANTE') THEN 1 ELSE 0 END) AS vacante_actual,
+        MAX(CASE WHEN v.anio = {$anio_base} AND v.semana = {$semana_base} AND v.folio_empleado <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN 1 ELSE 0 END) AS hc_con_ins_base,
+        MAX(CASE WHEN v.anio = {$anio_actual} AND v.semana = {$semana_actual} AND v.folio_empleado <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN 1 ELSE 0 END) AS hc_con_ins_actual
+    FROM vendedores v
+    LEFT JOIN instalaciones ibase ON v.folio_empleado = ibase.folio_empleado AND YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha, 1) = {$semana_base}
+    LEFT JOIN instalaciones iactual ON v.folio_empleado = iactual.folio_empleado AND YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha, 1) = {$semana_actual}
+    GROUP BY v.distrito, v.lider, entidad, v.coach, v.coach_pos, v.folio_empleado, v.id_posicion
+)
+SELECT
+    distrito, entidad, lider, coach, coach_pos,
+    ins_sem_base, ins_sem_actual,
+    ins_sem_actual - ins_sem_base AS dif,
+    ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base, 0)) * 100, 0) AS pct_dif,
+    hc_activo_base, hc_activo_actual, hc_con_ins_base, hc_con_ins_actual,
+    hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
+    hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
+    ROUND(ins_sem_base / NULLIF(hc_activo_base, 0), 2) AS prod_base,
+    ROUND(ins_sem_actual / NULLIF(hc_activo_actual, 0), 2) AS prod_actual,
+    hc_activo_base AS activo_base, vacante_base, hc_activo_base + vacante_base AS hc_total_base,
+    hc_activo_actual AS activo_actual, vacante_actual, hc_activo_actual + vacante_actual AS hc_total_actual
+FROM resumen
+ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
+";
+}
+
+$res = mysqli_query($conexion, $sql);
+$rows = [];
+$query_error = '';
+if (!$res) {
+    $query_error = mysqli_error($conexion);
+} else {
+    while ($row = mysqli_fetch_assoc($res)) $rows[] = $row;
+}
+
+$tot_keys = [
+    'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
+    'hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual',
+    'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'
+];
+$tot = array_fill_keys($tot_keys, 0);
+foreach ($rows as $r) {
+    foreach ($tot_keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
+}
+$tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
+$tot['prod_base'] = $tot['hc_activo_base'] > 0 ? round($tot['ins_sem_base'] / $tot['hc_activo_base'], 2) : null;
+$tot['prod_actual'] = $tot['hc_activo_actual'] > 0 ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'], 2) : null;
+
+$districts = [];
+foreach ($rows as $r) if (!in_array($r['distrito'], $districts, true)) $districts[] = $r['distrito'];
+sort($districts);
+
+$fecha_label = date('d/m/Y');
+$entity_label = $view === 'lideres' ? 'Líder' : ($view === 'coaches' ? 'Coach' : 'Vendedor');
+$title_label = $view === 'lideres' ? 'Ranking de Productividad' : ($view === 'coaches' ? 'Ranking por Coach' : 'Ranking por Vendedor');
+$subtitle_bits = [];
+if ($view !== 'lideres') $subtitle_bits[] = "Líder: " . $lider_param;
+if ($view === 'vendedores') $subtitle_bits[] = "Coach: " . $coach_param;
+$subtitle_context = implode(' · ', $subtitle_bits);
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= h($title_label) ?> — TOTALXPEDIENT</title>
+<style>
+:root{--blue:#2b57a7;--blue-dark:#153b82;--bg:#f4f6fb;--white:#fff;--text:#111827;--text2:#64748b;--border:#e2e8f0;--sidebar:200px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh}
+.sidebar{width:var(--sidebar);background:linear-gradient(180deg,var(--blue),var(--blue-dark));min-height:100vh;position:fixed;inset:0 auto 0 0;display:flex;flex-direction:column;align-items:center;padding:28px 0;z-index:100}
+.sidebar-logo{color:white;font-size:2rem;margin-bottom:6px}.sidebar-brand{color:rgba(255,255,255,.92);font-size:.72rem;font-weight:900;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:32px;text-align:center;padding:0 12px}
+.nav-item{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;padding:14px 0;color:rgba(255,255,255,.68);text-decoration:none;font-size:.78rem;font-weight:700;transition:all .2s}.nav-item:hover,.nav-item.active{color:white;background:rgba(255,255,255,.14)}.nav-icon{font-size:1.25rem}.sidebar-bottom{margin-top:auto;width:100%;padding:0 12px}.logout-btn{display:block;text-align:center;padding:10px;border-radius:8px;color:rgba(255,255,255,.65);text-decoration:none;font-size:.78rem;font-weight:700}.logout-btn:hover{background:rgba(255,255,255,.12);color:white}
+.main{margin-left:var(--sidebar);flex:1;padding:30px 32px 40px;min-width:0}.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:18px}.page-title h1{font-size:1.55rem;line-height:1.15;color:#0f1f3d}.page-title p{margin-top:5px;color:var(--text2);font-size:.86rem}.week-pill{display:inline-flex;align-items:center;gap:6px;margin-left:10px;background:#e8f0fe;color:var(--blue);border-radius:999px;padding:5px 12px;font-size:.82rem;font-weight:800}.week-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.week-btn,.week-current,.back-btn{border:1px solid var(--border);background:var(--white);color:var(--blue);text-decoration:none;border-radius:12px;padding:9px 12px;font-size:.82rem;font-weight:800;box-shadow:0 1px 3px rgba(15,23,42,.05)}.week-btn.disabled{opacity:.45;pointer-events:none;color:#94a3b8}.week-current{background:var(--blue);color:white;border-color:var(--blue)}.back-btn{color:#334155}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}.card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.04)}.card .label{color:var(--text2);font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.4px}.card .value{margin-top:4px;font-size:1.45rem;font-weight:900;color:#0f1f3d}.card .hint{margin-top:2px;color:var(--text2);font-size:.78rem}
+.filters{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;background:var(--white);border:1px solid var(--border);border-radius:16px;padding:10px 12px;box-shadow:0 2px 8px rgba(15,23,42,.04)}.filter-label{font-size:.8rem;font-weight:900;color:#334155;margin-right:4px}.filter-btn{border:1px solid #dbe3f0;background:#f8fafc;color:#334155;border-radius:999px;padding:7px 12px;font-size:.78rem;font-weight:900;cursor:pointer}.filter-btn.active,.filter-btn:hover{background:#e8f0fe;color:var(--blue);border-color:#bcd0f5}.counter{margin-left:auto;color:var(--text2);font-size:.78rem;font-weight:800}
+.table-card{background:var(--white);border-radius:18px;border:1px solid var(--border);box-shadow:0 2px 10px rgba(15,23,42,.05);overflow:hidden}.table-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border)}.table-head strong{font-size:.95rem;color:#0f1f3d}.table-head span{color:var(--text2);font-size:.8rem}.table-wrap{overflow:auto}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:.78rem;min-width:1360px}th{position:sticky;top:0;z-index:2;background:var(--blue);color:white;padding:10px 8px;text-align:left;font-weight:900;text-transform:uppercase;letter-spacing:.35px;border-right:1px solid rgba(255,255,255,.25);vertical-align:bottom}th.num,td.num{text-align:right}th.center,td.center{text-align:center}th.group{background:#cfcfd2;color:#111827;text-align:center;border-right:2px solid #0f172a}th.sub-gray{background:#d9d9dc;color:#111827}th.sortable{cursor:pointer;user-select:none}th.sortable .sort-icon{opacity:.65;margin-left:4px;font-size:.72rem}
+td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid #eef2f7;white-space:nowrap}tbody tr:hover td{background:#f8fbff}.clickable{cursor:pointer}.clickable:hover td{background:#eef6ff!important}.rank{display:inline-flex;justify-content:center;align-items:center;width:24px;height:24px;border-radius:999px;background:#e8f0fe;color:var(--blue);font-weight:900}.entity{font-weight:800;color:#0f1f3d}.district{font-weight:800;color:#334155}.badge{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.badge.up{background:#bbf7d0;color:#166534}.badge.flat{background:#dbeafe;color:#1d4ed8}.badge.down{background:#fed7aa;color:#9a3412}.badge.down-hard{background:#fecaca;color:#991b1b}
+.prod{font-weight:900;border-radius:8px;padding:4px 8px;display:inline-block;min-width:48px;text-align:center}.prod.tier-1{background:#bbf7d0;color:#065f46}.prod.tier-2{background:#fde68a;color:#78350f}.prod.tier-3{background:#fed7aa;color:#9a3412}.prod.tier-4{background:#fecaca;color:#991b1b}.prod.muted{background:#f1f5f9;color:#94a3b8}
+.hc-indicator{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.hc-good{background:#bbf7d0;color:#166534}.hc-mid{background:#fde68a;color:#78350f}.hc-bad{background:#fecaca;color:#991b1b}.gray-cell{background:#f1f1f3}.total-row td{background:#f3f4f6!important;color:#111827!important;font-weight:900!important;border-top:2px solid #9ca3af!important}.error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:14px;padding:14px 16px;margin-bottom:16px;font-weight:700}
+@media(max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{flex-direction:column}.week-nav{justify-content:flex-start}.counter{margin-left:0;width:100%}}@media(max-width:760px){:root{--sidebar:0px}.sidebar{display:none}.main{margin-left:0;padding:20px}.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+    <div class="sidebar-logo">📊</div>
+    <div class="sidebar-brand">TOTALXPEDIENT</div>
+    <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="ranking_productividad.php" class="nav-item active"><span class="nav-icon">🏆</span> Ranking</a>
+    <a href="hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
+    <a href="reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <div class="sidebar-bottom"><a href="../logout.php" class="logout-btn">⎋ Cerrar sesión</a></div>
+</aside>
+
+<main class="main">
+<section class="topbar">
+    <div class="page-title">
+        <h1><?= h($title_label) ?> <span class="week-pill">Semana <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span></h1>
+        <p>Comparativo Semana <?= h($semana_base) ?> vs Semana <?= h($semana_actual) ?> · <?= h($fecha_label) ?> · <?= h($roles_labels[$rol] ?? $rol) ?><?= $subtitle_context ? ' · '.h($subtitle_context) : '' ?></p>
+    </div>
+    <div class="week-nav">
+        <?php if ($view === 'coaches'): ?>
+            <a class="back-btn" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual]) ?>">← Volver a líderes</a>
+        <?php elseif ($view === 'vendedores'): ?>
+            <a class="back-btn" href="?<?= qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'coaches','distrito'=>$distrito_param,'lider'=>$lider_param]) ?>">← Volver a coaches</a>
+        <?php endif; ?>
+        <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
+        <span class="week-current">Semana <?= h($semana_actual) ?></span>
+        <a class="week-btn <?= $has_next ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
+    </div>
+</section>
+
+<?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
+
+<section class="cards">
+    <div class="card"><div class="label">Instalaciones Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint">Semana <?= h($semana_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
+    <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
+    <div class="card"><div class="label">Productividad Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-prod-actual"><?= fmt_prod($tot['prod_actual']) ?></div><div class="hint">Semana <?= h($semana_base) ?>: <span id="kpi-prod-base"><?= fmt_prod($tot['prod_base']) ?></span></div></div>
+    <div class="card"><div class="label">Headcount Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-hc-total"><?= fmt_num($tot['hc_total_actual']) ?></div><div class="hint">Activos <span id="kpi-activo"><?= fmt_num($tot['activo_actual']) ?></span> · Vacantes <span id="kpi-vacante"><?= fmt_num($tot['vacante_actual']) ?></span></div></div>
+</section>
+
+<?php if ($view === 'lideres' && count($districts) > 1): ?>
+<section class="filters">
+    <span class="filter-label">Distrito:</span>
+    <button class="filter-btn active" data-district="ALL">Todos</button>
+    <?php foreach ($districts as $d): ?>
+        <button class="filter-btn" data-district="<?= h($d) ?>"><?= h($d) ?></button>
+    <?php endforeach; ?>
+    <span class="counter" id="visibleCounter">Mostrando <?= count($rows) ?> de <?= count($rows) ?> líderes</span>
+</section>
+<?php else: ?>
+<section class="filters">
+    <span class="filter-label"><?= h($view === 'lideres' ? 'Vista' : 'Profundización') ?>:</span>
+    <span class="counter" id="visibleCounter">Mostrando <?= count($rows) ?> registros</span>
+</section>
+<?php endif; ?>
+
+<section class="table-card">
+    <div class="table-head">
+        <strong><?= h($view === 'lideres' ? 'Ranking por Líder' : ($view === 'coaches' ? 'Ranking por Coach' : 'Ranking por Vendedor')) ?></strong>
+        <span><?= $view === 'vendedores' ? 'Detalle del coach seleccionado' : 'Click en un renglón para profundizar' ?></span>
+    </div>
+    <div class="table-wrap">
+        <table id="rankingTable">
+            <thead>
+                <tr>
+                    <th rowspan="2" class="center">#</th>
+                    <th rowspan="2">Distrito</th>
+                    <th rowspan="2"><?= h($entity_label) ?></th>
+                    <th rowspan="2" class="num sortable" data-key="ins_sem_base">INS<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="ins_sem_actual">INS<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="dif">Dif. <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_activo_base">HC Activo<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_activo_actual">HC Activo<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_base">HC con INS<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_actual">HC con INS<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin Venta<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin Venta<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="prod_base">Prod.<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="prod_actual">Prod.<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th colspan="3" class="group">Head Count SEM <?= h($semana_base) ?></th>
+                    <th colspan="3" class="group">Head Count SEM <?= h($semana_actual) ?></th>
+                </tr>
+                <tr>
+                    <th class="num sub-gray">Activo</th><th class="num sub-gray">Vacante</th><th class="num sub-gray">HC</th>
+                    <th class="num sub-gray">Activo</th><th class="num sub-gray">Vacante</th><th class="num sub-gray">HC</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php $rank=1; foreach($rows as $r):
+                    $href = '';
+                    if ($view === 'lideres') {
+                        $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
+                    } elseif ($view === 'coaches') {
+                        $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
+                    }
+                ?>
+                <tr class="data-row <?= $href ? 'clickable' : '' ?>"
+                    data-href="<?= h($href) ?>"
+                    data-district="<?= h($r['distrito']) ?>"
+                    <?php foreach($tot_keys as $k): ?> data-<?= h($k) ?>="<?= h((float)($r[$k] ?? 0)) ?>"<?php endforeach; ?>
+                    data-pct_dif="<?= h($r['pct_dif'] === null ? '' : (float)$r['pct_dif']) ?>"
+                    data-prod_base="<?= h($r['prod_base'] === null ? '' : (float)$r['prod_base']) ?>"
+                    data-prod_actual="<?= h($r['prod_actual'] === null ? '' : (float)$r['prod_actual']) ?>">
+                    <td class="center"><span class="rank"><?= $rank++ ?></span></td>
+                    <td class="district"><?= h($r['distrito']) ?></td>
+                    <td class="entity"><?= h($r['entidad']) ?></td>
+                    <td class="num"><?= fmt_num($r['ins_sem_base']) ?></td>
+                    <td class="num"><?= fmt_num($r['ins_sem_actual']) ?></td>
+                    <td class="num"><?= fmt_num($r['dif']) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($r['pct_dif']) ?>"><?= $r['pct_dif'] === null ? '-' : fmt_num($r['pct_dif']).'%' ?></span></td>
+                    <td class="num"><?= fmt_num($r['hc_activo_base']) ?></td>
+                    <td class="num"><?= fmt_num($r['hc_activo_actual']) ?></td>
+                    <td class="num"><?= fmt_num($r['hc_con_ins_base']) ?></td>
+                    <td class="num"><?= fmt_num($r['hc_con_ins_actual']) ?></td>
+                    <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_base']) ?>"><?= fmt_num($r['hc_sin_venta_base']) ?></span></td>
+                    <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_actual']) ?>"><?= fmt_num($r['hc_sin_venta_actual']) ?></span></td>
+                    <td class="center"><span class="prod <?= prod_class($r['prod_base']) ?>"><?= fmt_prod($r['prod_base']) ?></span></td>
+                    <td class="center"><span class="prod <?= prod_class($r['prod_actual']) ?>"><?= fmt_prod($r['prod_actual']) ?></span></td>
+                    <td class="num gray-cell"><?= fmt_num($r['activo_base']) ?></td>
+                    <td class="num gray-cell"><?= fmt_num($r['vacante_base']) ?></td>
+                    <td class="num gray-cell"><?= fmt_num($r['hc_total_base']) ?></td>
+                    <td class="num gray-cell"><?= fmt_num($r['activo_actual']) ?></td>
+                    <td class="num gray-cell"><?= fmt_num($r['vacante_actual']) ?></td>
+                    <td class="num gray-cell"><?= fmt_num($r['hc_total_actual']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+                <tr class="total-row" id="totalRow">
+                    <td></td><td></td><td>TOTAL</td>
+                    <td class="num" data-total-key="ins_sem_base"><?= fmt_num($tot['ins_sem_base']) ?></td>
+                    <td class="num" data-total-key="ins_sem_actual"><?= fmt_num($tot['ins_sem_actual']) ?></td>
+                    <td class="num" data-total-key="dif"><?= fmt_num($tot['dif']) ?></td>
+                    <td class="center"><span id="total-pct" class="badge <?= pct_class($tot['pct_dif']) ?>"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span></td>
+                    <td class="num" data-total-key="hc_activo_base"><?= fmt_num($tot['hc_activo_base']) ?></td>
+                    <td class="num" data-total-key="hc_activo_actual"><?= fmt_num($tot['hc_activo_actual']) ?></td>
+                    <td class="num" data-total-key="hc_con_ins_base"><?= fmt_num($tot['hc_con_ins_base']) ?></td>
+                    <td class="num" data-total-key="hc_con_ins_actual"><?= fmt_num($tot['hc_con_ins_actual']) ?></td>
+                    <td class="num"><span id="total-hc-sin-base" class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_base']) ?>"><?= fmt_num($tot['hc_sin_venta_base']) ?></span></td>
+                    <td class="num"><span id="total-hc-sin-actual" class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_actual']) ?>"><?= fmt_num($tot['hc_sin_venta_actual']) ?></span></td>
+                    <td class="center"><span id="total-prod-base" class="prod <?= prod_class($tot['prod_base']) ?>"><?= fmt_prod($tot['prod_base']) ?></span></td>
+                    <td class="center"><span id="total-prod-actual" class="prod <?= prod_class($tot['prod_actual']) ?>"><?= fmt_prod($tot['prod_actual']) ?></span></td>
+                    <td class="num gray-cell" data-total-key="activo_base"><?= fmt_num($tot['activo_base']) ?></td>
+                    <td class="num gray-cell" data-total-key="vacante_base"><?= fmt_num($tot['vacante_base']) ?></td>
+                    <td class="num gray-cell" data-total-key="hc_total_base"><?= fmt_num($tot['hc_total_base']) ?></td>
+                    <td class="num gray-cell" data-total-key="activo_actual"><?= fmt_num($tot['activo_actual']) ?></td>
+                    <td class="num gray-cell" data-total-key="vacante_actual"><?= fmt_num($tot['vacante_actual']) ?></td>
+                    <td class="num gray-cell" data-total-key="hc_total_actual"><?= fmt_num($tot['hc_total_actual']) ?></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+</main>
+
+<script>
+const table = document.getElementById('rankingTable');
+const tbody = table.querySelector('tbody');
+const dataRows = () => [...tbody.querySelectorAll('tr.data-row')];
+const totalRow = document.getElementById('totalRow');
+let activeDistrict = 'ALL';
+let sortState = { key:'prod_actual', dir:'desc' };
+
+function num(v){ const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+function fmt0(n){ return Math.round(n).toLocaleString('en-US'); }
+function fmt2(n){ return (Math.round(n*100)/100).toFixed(2); }
+
+function classPct(n){
+    if(n >= 5) return 'badge up';
+    if(n <= -10) return 'badge down-hard';
+    if(n < 0) return 'badge down';
+    return 'badge flat';
+}
+function classProd(n){
+    if(n >= 4) return 'prod tier-1';
+    if(n >= 3) return 'prod tier-2';
+    if(n >= 2.5) return 'prod tier-3';
+    return 'prod tier-4';
+}
+function classHC(n){
+    if(n <= 2) return 'hc-indicator hc-good';
+    if(n <= 5) return 'hc-indicator hc-mid';
+    return 'hc-indicator hc-bad';
+}
+
+function visibleRows(){
+    return dataRows().filter(r => r.style.display !== 'none');
+}
+
+function applyFilter(){
+    dataRows().forEach(r => {
+        const show = activeDistrict === 'ALL' || r.dataset.district === activeDistrict;
+        r.style.display = show ? '' : 'none';
+    });
+    recalcRankAndTotals();
+}
+
+function recalcRankAndTotals(){
+    const rows = visibleRows();
+    rows.forEach((r,i) => {
+        const rank = r.querySelector('.rank');
+        if(rank) rank.textContent = i + 1;
+    });
+
+    const t = {
+        ins_sem_base:0, ins_sem_actual:0, dif:0,
+        hc_activo_base:0, hc_activo_actual:0,
+        hc_con_ins_base:0, hc_con_ins_actual:0,
+        hc_sin_venta_base:0, hc_sin_venta_actual:0,
+        activo_base:0, vacante_base:0, hc_total_base:0,
+        activo_actual:0, vacante_actual:0, hc_total_actual:0
+    };
+
+    rows.forEach(r => Object.keys(t).forEach(k => t[k] += num(r.dataset[k])));
+
+    const pct = t.ins_sem_base > 0 ? Math.round(((t.ins_sem_actual - t.ins_sem_base) / t.ins_sem_base) * 100) : null;
+    const prodBase = t.hc_activo_base > 0 ? t.ins_sem_base / t.hc_activo_base : null;
+    const prodActual = t.hc_activo_actual > 0 ? t.ins_sem_actual / t.hc_activo_actual : null;
+
+    document.querySelectorAll('[data-total-key]').forEach(td => {
+        const k = td.dataset.totalKey;
+        td.textContent = fmt0(t[k] || 0);
+    });
+
+    const pctEl = document.getElementById('total-pct');
+    pctEl.textContent = pct === null ? '-' : fmt0(pct) + '%';
+    pctEl.className = pct === null ? 'badge flat' : classPct(pct);
+
+    const hb = document.getElementById('total-hc-sin-base');
+    hb.textContent = fmt0(t.hc_sin_venta_base); hb.className = classHC(t.hc_sin_venta_base);
+    const ha = document.getElementById('total-hc-sin-actual');
+    ha.textContent = fmt0(t.hc_sin_venta_actual); ha.className = classHC(t.hc_sin_venta_actual);
+
+    const pb = document.getElementById('total-prod-base');
+    pb.textContent = prodBase === null ? '-' : fmt2(prodBase);
+    pb.className = prodBase === null ? 'prod muted' : classProd(prodBase);
+    const pa = document.getElementById('total-prod-actual');
+    pa.textContent = prodActual === null ? '-' : fmt2(prodActual);
+    pa.className = prodActual === null ? 'prod muted' : classProd(prodActual);
+
+    document.getElementById('kpi-ins-actual').textContent = fmt0(t.ins_sem_actual);
+    document.getElementById('kpi-ins-base').textContent = fmt0(t.ins_sem_base);
+    document.getElementById('kpi-dif').textContent = fmt0(t.dif);
+    document.getElementById('kpi-pct').textContent = pct === null ? '-' : fmt0(pct) + '%';
+    document.getElementById('kpi-prod-actual').textContent = prodActual === null ? '-' : fmt2(prodActual);
+    document.getElementById('kpi-prod-base').textContent = prodBase === null ? '-' : fmt2(prodBase);
+    document.getElementById('kpi-hc-total').textContent = fmt0(t.hc_total_actual);
+    document.getElementById('kpi-activo').textContent = fmt0(t.activo_actual);
+    document.getElementById('kpi-vacante').textContent = fmt0(t.vacante_actual);
+
+    const counter = document.getElementById('visibleCounter');
+    if(counter){
+        const label = activeDistrict === 'ALL' ? '' : ' · ' + activeDistrict;
+        counter.textContent = 'Mostrando ' + rows.length + ' de ' + dataRows().length + ' registros' + label;
+    }
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeDistrict = btn.dataset.district || 'ALL';
+        applyFilter();
+    });
+});
+
+document.querySelectorAll('th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+        const key = th.dataset.key;
+        const dir = (sortState.key === key && sortState.dir === 'desc') ? 'asc' : 'desc';
+        sortState = {key, dir};
+        const rows = dataRows();
+        rows.sort((a,b) => {
+            const av = num(a.dataset[key]);
+            const bv = num(b.dataset[key]);
+            return dir === 'desc' ? bv - av : av - bv;
+        });
+        rows.forEach(r => tbody.insertBefore(r, totalRow));
+        document.querySelectorAll('.sort-icon').forEach(i => i.textContent = '↕');
+        const icon = th.querySelector('.sort-icon');
+        if(icon) icon.textContent = dir === 'desc' ? '↓' : '↑';
+        applyFilter();
+    });
+});
+
+dataRows().forEach(r => {
+    r.addEventListener('click', () => {
+        const href = r.dataset.href;
+        if(href) window.location.href = href;
+    });
+});
+
+recalcRankAndTotals();
+</script>
+</body>
+</html>
