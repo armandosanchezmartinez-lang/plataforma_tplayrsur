@@ -356,43 +356,112 @@ ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'vendedores') {
 $sql = "
-WITH RECURSIVE semanas AS (
-    SELECT 1 AS semana
-    UNION ALL SELECT semana + 1 FROM semanas WHERE semana < {$semana_actual}
-),
-vendedores_base AS (
+WITH vendedor_base AS (
     SELECT DISTINCT
-        h.numero_talento_gs AS folio_empleado
+        h.distrito,
+        '{$lider_sql}' AS lider,
+        '{$coach_sql}' AS coach,
+        '{$coach_pos_sql}' AS coach_pos,
+        h.nombre_colaborador,
+        h.numero_talento_gs AS folio_empleado,
+        h.id_posicion,
+        h.posicion_lr,
+        h.semana,
+        h.anio
     FROM hc h
     WHERE h.distrito = '{$distrito_sql}'
       AND h.puesto_lr LIKE '%COACH%'
-      AND h.numero_talento_gs <> 'VACANTE'
-      AND h.nombre_colaborador <> 'VACANTE'
       AND (
           ('{$coach_sql}' <> 'VACANTE' AND h.nombre_linea_reporte = '{$coach_sql}')
           OR
           ('{$coach_sql}' = 'VACANTE' AND h.posicion_lr = '{$coach_pos_sql}')
       )
-      AND h.anio = {$anio_actual}
-      AND h.semana = {$semana_actual}
+      AND (
+            (h.anio = {$anio_base} AND h.semana = {$semana_base})
+         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+      )
 ),
-ventas_semana AS (
+vendedores_unicos AS (
     SELECT
-        WEEK(i.fecha,1) AS semana,
-        COUNT(*) AS ventas
-    FROM instalaciones i
-    INNER JOIN vendedores_base vb
-        ON i.folio_empleado = vb.folio_empleado
-    WHERE YEAR(i.fecha) = {$anio_actual}
-      AND WEEK(i.fecha,1) BETWEEN 1 AND {$semana_actual}
-    GROUP BY WEEK(i.fecha,1)
+        distrito,
+        lider,
+        coach,
+        coach_pos,
+        CASE
+            WHEN folio_empleado = 'VACANTE' OR nombre_colaborador = 'VACANTE'
+            THEN CONCAT('VACANTE · POS ', id_posicion)
+            ELSE nombre_colaborador
+        END AS entidad,
+        CASE
+            WHEN folio_empleado = 'VACANTE' OR nombre_colaborador = 'VACANTE'
+            THEN CONCAT('VACANTE_', id_posicion)
+            ELSE folio_empleado
+        END AS folio_key,
+        MAX(CASE WHEN folio_empleado <> 'VACANTE' THEN folio_empleado ELSE '' END) AS folio_empleado,
+        MAX(id_posicion) AS id_posicion
+    FROM vendedor_base
+    GROUP BY distrito, lider, coach, coach_pos, entidad, folio_key
+),
+resumen AS (
+    SELECT
+        vu.distrito,
+        vu.lider,
+        vu.coach,
+        vu.coach_pos,
+        vu.entidad,
+        vu.folio_empleado,
+        COUNT(ibase.cuenta) AS ins_sem_base,
+        COUNT(iactual.cuenta) AS ins_sem_actual,
+        MAX(CASE WHEN vb.anio={$anio_base} AND vb.semana={$semana_base} AND vb.folio_empleado <> 'VACANTE' AND vb.nombre_colaborador <> 'VACANTE' THEN 1 ELSE 0 END) AS hc_activo_base,
+        MAX(CASE WHEN vb.anio={$anio_actual} AND vb.semana={$semana_actual} AND vb.folio_empleado <> 'VACANTE' AND vb.nombre_colaborador <> 'VACANTE' THEN 1 ELSE 0 END) AS hc_activo_actual,
+        MAX(CASE WHEN vb.anio={$anio_base} AND vb.semana={$semana_base} AND (vb.folio_empleado='VACANTE' OR vb.nombre_colaborador='VACANTE') THEN 1 ELSE 0 END) AS vacante_base,
+        MAX(CASE WHEN vb.anio={$anio_actual} AND vb.semana={$semana_actual} AND (vb.folio_empleado='VACANTE' OR vb.nombre_colaborador='VACANTE') THEN 1 ELSE 0 END) AS vacante_actual,
+        MAX(CASE WHEN vb.anio={$anio_base} AND vb.semana={$semana_base} AND vb.folio_empleado <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN 1 ELSE 0 END) AS hc_con_ins_base,
+        MAX(CASE WHEN vb.anio={$anio_actual} AND vb.semana={$semana_actual} AND vb.folio_empleado <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN 1 ELSE 0 END) AS hc_con_ins_actual
+    FROM vendedores_unicos vu
+    LEFT JOIN vendedor_base vb
+        ON vu.folio_key = CASE WHEN vb.folio_empleado = 'VACANTE' OR vb.nombre_colaborador = 'VACANTE' THEN CONCAT('VACANTE_', vb.id_posicion) ELSE vb.folio_empleado END
+    LEFT JOIN instalaciones ibase
+        ON vb.folio_empleado = ibase.folio_empleado
+       AND YEAR(ibase.fecha)={$anio_base}
+       AND WEEK(ibase.fecha,1)={$semana_base}
+       AND vb.anio={$anio_base}
+       AND vb.semana={$semana_base}
+    LEFT JOIN instalaciones iactual
+        ON vb.folio_empleado = iactual.folio_empleado
+       AND YEAR(iactual.fecha)={$anio_actual}
+       AND WEEK(iactual.fecha,1)={$semana_actual}
+       AND vb.anio={$anio_actual}
+       AND vb.semana={$semana_actual}
+    GROUP BY vu.distrito, vu.lider, vu.coach, vu.coach_pos, vu.entidad, vu.folio_empleado, vu.folio_key
 )
 SELECT
-    s.semana,
-    COALESCE(v.ventas,0) AS ventas
-FROM semanas s
-LEFT JOIN ventas_semana v ON s.semana = v.semana
-ORDER BY s.semana ASC
+    distrito,
+    entidad,
+    lider,
+    coach,
+    coach_pos,
+    folio_empleado,
+    ins_sem_base,
+    ins_sem_actual,
+    ins_sem_actual - ins_sem_base AS dif,
+    ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
+    hc_activo_base,
+    hc_activo_actual,
+    hc_con_ins_base,
+    hc_con_ins_actual,
+    hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
+    hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
+    ROUND(ins_sem_base / NULLIF(hc_activo_base,0),2) AS prod_base,
+    ROUND(ins_sem_actual / NULLIF(hc_activo_actual,0),2) AS prod_actual,
+    hc_activo_base AS activo_base,
+    vacante_base,
+    hc_activo_base + vacante_base AS hc_total_base,
+    hc_activo_actual AS activo_actual,
+    vacante_actual,
+    hc_activo_actual + vacante_actual AS hc_total_actual
+FROM resumen
+ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } else {
 $sql = "
@@ -412,7 +481,7 @@ $res = mysqli_query($conexion, $sql);
 if (!$res) {
     $query_error = mysqli_error($conexion);
 } else {
-    if ($view === 'ventas' || $view === 'vendedores') {
+    if ($view === 'ventas') {
         $map = [];
         while ($r = mysqli_fetch_assoc($res)) $map[(int)$r['semana']] = (int)$r['ventas'];
         for ($w = 1; $w <= $semana_actual; $w++) {
@@ -431,11 +500,11 @@ if ($view === 'lideres') {
 }
 
 $fecha_label = date('d/m/Y');
-$entity_label = $view === 'lideres' ? 'Líder' : ($view === 'coaches' ? 'Coach' : 'Semana');
+$entity_label = $view === 'lideres' ? 'Líder' : ($view === 'coaches' ? 'Coach' : 'Vendedor');
 $title_label = [
     'lideres'    => 'Ranking de Productividad',
     'coaches'    => 'Ranking por Coach',
-    'vendedores' => 'Ventas Semanales del Coach',
+    'vendedores' => 'Vendedores del Coach',
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
@@ -534,7 +603,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
 
-<?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
+<?php if ($view !== 'ventas'): ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint">Semana <?= h($semana_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
     <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
@@ -660,14 +729,14 @@ foreach ($ventas_hist as $vh) {
 }
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_ventas_hist) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Ventas acumuladas</div><div class="value"><?= fmt_num($total_ventas_hist) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
     <div class="card"><div class="label">Mejor semana</div><div class="value">SEM <?= h($best_week) ?></div><div class="hint"><?= fmt_num($best_sales) ?> ventas</div></div>
     <div class="card"><div class="label">Promedio semanal</div><div class="value"><?= $semana_actual > 0 ? fmt_prod($total_ventas_hist / $semana_actual) : '-' ?></div><div class="hint">Año <?= h($anio_actual) ?></div></div>
-    <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
+    <div class="card"><div class="label">Folio empleado</div><div class="value" style="font-size:1.05rem"><?= h($folio_param) ?></div><div class="hint"><?= h($vendedor_param) ?></div></div>
 </section>
 <section class="table-card">
     <div class="table-head">
-        <strong>Ventas semanales del coach</strong>
+        <strong>Ventas semanales del vendedor</strong>
         <span>Semana 1 de <?= h($anio_actual) ?> a Semana <?= h($semana_actual) ?></span>
     </div>
     <div class="table-wrap">
@@ -688,7 +757,7 @@ foreach ($ventas_hist as $vh) {
 <?php endif; ?>
 </main>
 
-<?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
+<?php if ($view !== 'ventas'): ?>
 <script>
 const table=document.getElementById('rankingTable');
 const tbody=table.querySelector('tbody');
