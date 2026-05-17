@@ -50,13 +50,6 @@ function prod_class($prod) {
     return 'tier-4';
 }
 
-function hc_sin_venta_class($value) {
-    $n = (float)$value;
-    if ($n <= 2) return 'hc-good';
-    if ($n <= 5) return 'hc-mid';
-    return 'hc-bad';
-}
-
 /* Semanas disponibles */
 $semanas = [];
 $res_sem = mysqli_query($conexion, "
@@ -375,42 +368,7 @@ $fecha_label = date('d/m/Y');
             .main { margin-left:0; padding:20px; }
             .cards { grid-template-columns:1fr; }
         }
-    
-/* Refinamiento visual: color solo en indicadores clave */
-.badge.up { background:#bbf7d0 !important; color:#166534 !important; }
-.badge.flat { background:#dbeafe !important; color:#1d4ed8 !important; }
-.badge.down { background:#fed7aa !important; color:#9a3412 !important; }
-.badge.down-hard { background:#fecaca !important; color:#991b1b !important; }
-
-.prod.tier-1 { background:#bbf7d0 !important; color:#065f46 !important; box-shadow:none !important; }
-.prod.tier-2 { background:#fde68a !important; color:#78350f !important; box-shadow:none !important; }
-.prod.tier-3 { background:#fed7aa !important; color:#9a3412 !important; box-shadow:none !important; }
-.prod.tier-4 { background:#fecaca !important; color:#991b1b !important; box-shadow:none !important; }
-.prod.muted { background:#f1f5f9 !important; color:#94a3b8 !important; }
-
-.hc-indicator {
-    display:inline-block;
-    min-width:36px;
-    padding:3px 8px;
-    border-radius:999px;
-    text-align:center;
-    font-weight:900;
-}
-.hc-good { background:#bbf7d0 !important; color:#166534 !important; }
-.hc-mid { background:#fde68a !important; color:#78350f !important; }
-.hc-bad { background:#fecaca !important; color:#991b1b !important; }
-
-tbody tr td { background:inherit; }
-tbody tr:hover td { background:#f8fbff !important; }
-tr.total-row td,
-.total-row td {
-    background:#f3f4f6 !important;
-    color:#111827 !important;
-    font-weight:900 !important;
-    border-top:2px solid #9ca3af !important;
-}
-
-</style>
+    </style>
 </head>
 <body>
 <aside class="sidebar">
@@ -515,8 +473,8 @@ tr.total-row td,
                         <td class="num"><?= fmt_num($r['hc_activo_actual']) ?></td>
                         <td class="num"><?= fmt_num($r['hc_con_ins_base']) ?></td>
                         <td class="num"><?= fmt_num($r['hc_con_ins_actual']) ?></td>
-                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_base']) ?>"><?= fmt_num($r['hc_sin_venta_base']) ?></span></td>
-                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_actual']) ?>"><?= fmt_num($r['hc_sin_venta_actual']) ?></span></td>
+                        <td class="num"><?= fmt_num($r['hc_sin_venta_base']) ?></td>
+                        <td class="num"><?= fmt_num($r['hc_sin_venta_actual']) ?></td>
                         <td class="center"><span class="prod <?= prod_class($r['prod_base']) ?>"><?= fmt_prod($r['prod_base']) ?></span></td>
                         <td class="center"><span class="prod <?= prod_class($r['prod_actual']) ?>"><?= fmt_prod($r['prod_actual']) ?></span></td>
                         <td class="num gray-cell"><?= fmt_num($r['activo_base']) ?></td>
@@ -539,8 +497,8 @@ tr.total-row td,
                         <td class="num"><?= fmt_num($tot['hc_activo_actual']) ?></td>
                         <td class="num"><?= fmt_num($tot['hc_con_ins_base']) ?></td>
                         <td class="num"><?= fmt_num($tot['hc_con_ins_actual']) ?></td>
-                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_base']) ?>"><?= fmt_num($tot['hc_sin_venta_base']) ?></span></td>
-                        <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_actual']) ?>"><?= fmt_num($tot['hc_sin_venta_actual']) ?></span></td>
+                        <td class="num"><?= fmt_num($tot['hc_sin_venta_base']) ?></td>
+                        <td class="num"><?= fmt_num($tot['hc_sin_venta_actual']) ?></td>
                         <td class="center"><span class="prod <?= prod_class($tot['prod_base']) ?>"><?= fmt_prod($tot['prod_base']) ?></span></td>
                         <td class="center"><span class="prod <?= prod_class($tot['prod_actual']) ?>"><?= fmt_prod($tot['prod_actual']) ?></span></td>
                         <td class="num gray-cell"><?= fmt_num($tot['activo_base']) ?></td>
