@@ -415,8 +415,10 @@ WITH vendedores_base AS (
           OR
           ('{$coach_sql}' = 'VACANTE' AND h.posicion_lr = '{$coach_pos_sql}')
       )
-      AND h.anio = {$anio_actual}
-      AND h.semana = {$semana_actual}
+      AND (
+            (h.anio = {$anio_base} AND h.semana = {$semana_base})
+         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+      )
 ),
 ventas_vendedor AS (
     SELECT
@@ -783,7 +785,7 @@ foreach ($coach_matrix as $v) {
 ?>
 <section class="cards">
     <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
-    <div class="card"><div class="label">Vendedores activos</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Con estructura en SEM <?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura SEM<?= h($semana_base) ?> o SEM<?= h($semana_actual) ?></div></div>
     <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> ventas</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
 </section>
