@@ -429,10 +429,22 @@ ventas_vendedor AS (
         vb.antiguedad,
         WEEK(i.fecha,1) AS semana,
         COUNT(i.cuenta) AS ventas,
-        SUM(CASE WHEN UPPER(COALESCE(i.plan,'')) LIKE '%TV%' THEN 1 ELSE 0 END) AS triple_play,
-        SUM(CASE WHEN UPPER(COALESCE(i.plan,'')) NOT LIKE '%TV%' THEN 1 ELSE 0 END) AS doble_play,
-        SUM(CASE WHEN UPPER(COALESCE({$segmento_select_expr},'')) LIKE '%NEGOC%' THEN 1 ELSE 0 END) AS negocios,
-        SUM(CASE WHEN UPPER(COALESCE({$segmento_select_expr},'')) NOT LIKE '%NEGOC%' THEN 1 ELSE 0 END) AS residencial
+        SUM(CASE 
+                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                 AND UPPER(COALESCE(i.plan,'')) LIKE '%TV%' 
+                THEN 1 ELSE 0 END) AS triple_play,
+        SUM(CASE 
+                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                 AND UPPER(COALESCE(i.plan,'')) NOT LIKE '%TV%' 
+                THEN 1 ELSE 0 END) AS doble_play,
+        SUM(CASE 
+                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                 AND UPPER(COALESCE({$segmento_select_expr},'')) LIKE '%NEGOC%' 
+                THEN 1 ELSE 0 END) AS negocios,
+        SUM(CASE 
+                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                 AND UPPER(COALESCE({$segmento_select_expr},'')) NOT LIKE '%NEGOC%' 
+                THEN 1 ELSE 0 END) AS residencial
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
         ON i.folio_empleado = vb.folio_empleado
@@ -779,7 +791,7 @@ foreach ($coach_matrix as $v) {
 <section class="table-card">
     <div class="table-head">
         <strong>Resumen por vendedor del coach</strong>
-        <span>Resumen acumulado hasta SEM<?= h($semana_actual) ?></span>
+        <span>Comparativo SEM<?= h($semana_base) ?> vs SEM<?= h($semana_actual) ?> · Mix comercial SEM<?= h($semana_actual) ?></span>
     </div>
     <div class="table-wrap">
         <table class="sales-table" style="min-width:1280px">
