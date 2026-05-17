@@ -473,7 +473,6 @@ $roles_labels = [
     <div class="sidebar-logo">📊</div>
     <div class="sidebar-brand">TOTALXPEDIENT</div>
     <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
-    <a href="detalle/ranking_productividad.php?anio=<?= $anio_actual ?>&semana=<?= $semana_base ?>" class="nav-item"><span class="nav-icon">🏆</span> Ranking</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
     <div class="sidebar-bottom"></div>
