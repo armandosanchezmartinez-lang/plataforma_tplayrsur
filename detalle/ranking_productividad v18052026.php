@@ -241,8 +241,8 @@ hc_resumen AS (
         v.lider,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.posicion_lr END) AS vacante_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.posicion_lr END) AS vacante_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual
     FROM vendedores v
@@ -344,8 +344,8 @@ resumen AS (
         c.coach_key,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.posicion_lr END) AS vacante_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.posicion_lr END) AS vacante_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
         COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
         COUNT(ibase.cuenta) AS ins_sem_base,
