@@ -130,23 +130,6 @@ $meses_es = [
 $mes_actual = isset($_GET['mes']) ? max(1, min(12, (int)$_GET['mes'])) : (int)date('n');
 $anio_mes_actual = isset($_GET['anio_mes']) ? max(2020, min(2100, (int)$_GET['anio_mes'])) : $anio_actual;
 
-// Límite mensual: último mes con instalaciones cargadas.
-$ultimo_anio_datos = (int)date('Y');
-$ultimo_mes_datos = (int)date('n');
-$res_ultima_fecha = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL");
-if ($res_ultima_fecha && $row_ultima_fecha = mysqli_fetch_assoc($res_ultima_fecha)) {
-    if (!empty($row_ultima_fecha['ultima_fecha'])) {
-        $ultimo_anio_datos = (int)date('Y', strtotime($row_ultima_fecha['ultima_fecha']));
-        $ultimo_mes_datos = (int)date('n', strtotime($row_ultima_fecha['ultima_fecha']));
-    }
-}
-
-// Si entran por URL a un mes sin datos futuros, regresar al último mes con datos.
-if ($anio_mes_actual > $ultimo_anio_datos || ($anio_mes_actual == $ultimo_anio_datos && $mes_actual > $ultimo_mes_datos)) {
-    $anio_mes_actual = $ultimo_anio_datos;
-    $mes_actual = $ultimo_mes_datos;
-}
-
 $mes_base = $mes_actual - 1;
 $anio_mes_base = $anio_mes_actual;
 if ($mes_base < 1) {
@@ -190,107 +173,43 @@ if ($periodo === 'mensual') {
     $hc_semana_actual = ultima_semana_hc_mes($conexion, $anio_mes_actual, $mes_actual, $semana_actual);
 }
 
-$dia_default_mensual = (int)date('j', strtotime('-1 day'));
+$dia_corte_mensual = (int)date('j', strtotime('-1 day'));
 $es_mes_actual_calendario = ((int)date('Y') === (int)$anio_mes_actual && (int)date('n') === (int)$mes_actual);
 if (!$es_mes_actual_calendario) {
-    $dia_default_mensual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)));
+    $dia_corte_mensual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)));
 }
-
-$ultimo_dia_base = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_base, $mes_base)));
-$ultimo_dia_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)));
-
-// El input se limita al mes seleccionado actual.
-// El mes base se ajusta automáticamente con MIN() si tiene menos días.
-// Ejemplo: Mar 1-31 vs Feb 1-28.
-$rango_mode = $_GET['rango_mode'] ?? 'mtd';
-if (!in_array($rango_mode, ['mtd','completo','custom'], true)) $rango_mode = 'mtd';
-
-$fecha_inicio_actual = sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual);
-$fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_default_mensual);
-
-if ($rango_mode === 'completo') {
-    // Mes completo real para cada mes:
-    // Ejemplo Abril completo => Marzo 1-31 vs Abril 1-30.
-    $dia_inicio_mensual = 1;
-    $dia_fin_mensual = $ultimo_dia_actual;
-
-    $dia_inicio_base = 1;
-    $dia_fin_base = $ultimo_dia_base;
-
-    $dia_inicio_actual = 1;
-    $dia_fin_actual = $ultimo_dia_actual;
-} else {
-    if ($rango_mode === 'custom' && !empty($_GET['fecha_inicio']) && !empty($_GET['fecha_fin'])) {
-        $fi = DateTime::createFromFormat('Y-m-d', $_GET['fecha_inicio']);
-        $ff = DateTime::createFromFormat('Y-m-d', $_GET['fecha_fin']);
-
-        if ($fi && $ff) {
-            // Solo se toma el día elegido; el mes/año activo se controla con el selector mensual.
-            $dia_inicio_mensual = (int)$fi->format('j');
-            $dia_fin_mensual = (int)$ff->format('j');
-        } else {
-            $dia_inicio_mensual = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
-            $dia_fin_mensual = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_default_mensual;
-        }
-    } else {
-        $dia_inicio_mensual = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
-        $dia_fin_mensual = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_default_mensual;
-    }
-
-    $dia_inicio_mensual = max(1, min($ultimo_dia_actual, $dia_inicio_mensual));
-    $dia_fin_mensual = max(1, min($ultimo_dia_actual, $dia_fin_mensual));
-
-    if ($dia_inicio_mensual > $dia_fin_mensual) {
-        $tmp_dia = $dia_inicio_mensual;
-        $dia_inicio_mensual = $dia_fin_mensual;
-        $dia_fin_mensual = $tmp_dia;
-    }
-
-    $dia_inicio_base = min($dia_inicio_mensual, $ultimo_dia_base);
-    $dia_fin_base = min($dia_fin_mensual, $ultimo_dia_base);
-
-    $dia_inicio_actual = min($dia_inicio_mensual, $ultimo_dia_actual);
-    $dia_fin_actual = min($dia_fin_mensual, $ultimo_dia_actual);
-}
-
-$fecha_inicio_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_inicio_actual);
-$fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_fin_actual);
-$fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
-$fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
-
-$rango_dias_label = $dia_inicio_mensual === $dia_fin_mensual
-    ? 'día '.$dia_fin_mensual
-    : 'días '.$dia_inicio_mensual.'-'.$dia_fin_mensual;
+$dia_corte_base = min($dia_corte_mensual, (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_base, $mes_base))));
+$dia_corte_actual = min($dia_corte_mensual, (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual))));
 
 $label_periodo_base = $periodo === 'mensual'
-    ? $meses_es[$mes_base].' '.$dia_inicio_base.'-'.$dia_fin_base.' '.$anio_mes_base
+    ? $meses_es[$mes_base].' 1-'.$dia_corte_base.' '.$anio_mes_base
     : 'Semana '.$semana_base;
 
 $label_periodo_actual = $periodo === 'mensual'
-    ? $meses_es[$mes_actual].' '.$dia_inicio_actual.'-'.$dia_fin_actual.' '.$anio_mes_actual
+    ? $meses_es[$mes_actual].' 1-'.$dia_corte_actual.' '.$anio_mes_actual
     : 'Semana '.$semana_actual;
 
-$label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' '.$dia_inicio_base.'-'.$dia_fin_base : 'SEM'.$semana_base;
-$label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' '.$dia_inicio_actual.'-'.$dia_fin_actual : 'SEM'.$semana_actual;
+$label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' 1-'.$dia_corte_base : 'SEM'.$semana_base;
+$label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' 1-'.$dia_corte_actual : 'SEM'.$semana_actual;
 
 $cond_i_base = $periodo === 'mensual'
-    ? "YEAR(i.fecha) = {$anio_mes_base} AND MONTH(i.fecha) = {$mes_base} AND DAY(i.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
+    ? "YEAR(i.fecha) = {$anio_mes_base} AND MONTH(i.fecha) = {$mes_base} AND DAY(i.fecha) BETWEEN 1 AND {$dia_corte_base}"
     : "YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base}";
 
 $cond_i_actual = $periodo === 'mensual'
-    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
+    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN 1 AND {$dia_corte_actual}"
     : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual}";
 
 $cond_ibase = $periodo === 'mensual'
-    ? "YEAR(ibase.fecha) = {$anio_mes_base} AND MONTH(ibase.fecha) = {$mes_base} AND DAY(ibase.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
+    ? "YEAR(ibase.fecha) = {$anio_mes_base} AND MONTH(ibase.fecha) = {$mes_base} AND DAY(ibase.fecha) BETWEEN 1 AND {$dia_corte_base}"
     : "YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha,1) = {$semana_base}";
 
 $cond_iactual = $periodo === 'mensual'
-    ? "YEAR(iactual.fecha) = {$anio_mes_actual} AND MONTH(iactual.fecha) = {$mes_actual} AND DAY(iactual.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
+    ? "YEAR(iactual.fecha) = {$anio_mes_actual} AND MONTH(iactual.fecha) = {$mes_actual} AND DAY(iactual.fecha) BETWEEN 1 AND {$dia_corte_actual}"
     : "YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha,1) = {$semana_actual}";
 
 $cond_mix_actual = $periodo === 'mensual'
-    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
+    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN 1 AND {$dia_corte_actual}"
     : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual}";
 
 $distrito_param  = $_GET['distrito'] ?? '';
@@ -867,197 +786,6 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 .matrix-sortable{cursor:pointer;user-select:none}
 .matrix-sortable .sort-icon{opacity:.65;margin-left:4px;font-size:.72rem}
 
-
-.month-day-filter{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    flex-wrap:wrap;
-    background:#ffffff;
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:10px 12px;
-    margin-bottom:14px;
-    box-shadow:0 2px 8px rgba(15,23,42,.04);
-}
-.month-day-filter label{
-    font-size:.78rem;
-    font-weight:900;
-    color:#334155;
-}
-.month-day-filter input{
-    width:74px;
-    border:1px solid #dbe3f0;
-    border-radius:10px;
-    padding:7px 9px;
-    font-weight:800;
-    color:#0f1f3d;
-}
-.month-day-filter button{
-    border:1px solid var(--blue);
-    background:var(--blue);
-    color:white;
-    border-radius:10px;
-    padding:8px 12px;
-    font-size:.78rem;
-    font-weight:900;
-    cursor:pointer;
-}
-.month-day-filter .hint{
-    color:var(--text2);
-    font-size:.78rem;
-    font-weight:700;
-}
-
-
-.week-nav{align-items:flex-end}
-.month-nav-row{
-    display:flex;
-    gap:8px;
-    justify-content:flex-end;
-    width:100%;
-}
-.month-day-filter.compact{
-    width:100%;
-    margin:8px 0 0;
-    padding:0;
-    border:0;
-    box-shadow:none;
-    background:transparent;
-    justify-content:flex-start;
-    align-self:flex-start;
-}
-.month-day-filter.compact label{
-    color:#334155;
-}
-.month-day-filter.compact input{
-    width:64px;
-    padding:6px 8px;
-    background:#fff;
-}
-.month-day-filter.compact button{
-    padding:7px 10px;
-}
-.month-day-filter.compact .hint{
-    white-space:nowrap;
-}
-@media(max-width:1100px){
-    .month-nav-row{justify-content:flex-start}
-    .month-day-filter.compact .hint{white-space:normal}
-}
-
-
-.month-day-filter.compact .quick-range{
-    border:1px solid #bcd0f5;
-    background:#f8fafc;
-    color:var(--blue);
-    border-radius:10px;
-    padding:7px 10px;
-    font-size:.78rem;
-    font-weight:900;
-    text-decoration:none;
-}
-.month-day-filter.compact .quick-range:hover{
-    background:#e8f0fe;
-}
-
-
-.month-day-filter.compact.calendar-mode input[type="date"]{
-    width:142px;
-    padding:6px 8px;
-    background:#fff;
-}
-.month-day-filter.compact.calendar-mode label{
-    margin-left:2px;
-}
-
-
-.range-dropdown{position:relative;display:inline-block}
-.range-trigger{border:0;cursor:pointer}
-.range-panel{
-    display:none;
-    position:absolute;
-    top:44px;
-    left:50%;
-    transform:translateX(-50%);
-    width:330px;
-    background:#fff;
-    border:1px solid var(--border);
-    border-radius:18px;
-    box-shadow:0 18px 45px rgba(15,23,42,.18);
-    z-index:50;
-    padding:14px;
-}
-.range-dropdown.open .range-panel{display:block}
-.range-panel-title{
-    font-weight:900;
-    color:#0f1f3d;
-    font-size:.88rem;
-    margin-bottom:10px;
-    text-align:left;
-}
-.calendar-grid{
-    display:grid;
-    grid-template-columns:repeat(7,1fr);
-    gap:6px;
-}
-.calendar-day{
-    border:1px solid #dbe3f0;
-    background:#f8fafc;
-    color:#0f1f3d;
-    border-radius:10px;
-    height:34px;
-    font-weight:900;
-    cursor:pointer;
-}
-.calendar-day:hover{background:#e8f0fe}
-.calendar-day.selected-start,
-.calendar-day.selected-end{
-    background:var(--blue);
-    color:#fff;
-    border-color:var(--blue);
-}
-.calendar-day.in-range{
-    background:#dbeafe;
-    color:#1e3a8a;
-    border-color:#bfdbfe;
-}
-.range-summary{
-    margin-top:10px;
-    font-size:.78rem;
-    color:var(--text2);
-    font-weight:800;
-    text-align:left;
-}
-.range-actions{
-    display:flex;
-    gap:7px;
-    margin-top:12px;
-    align-items:center;
-    flex-wrap:wrap;
-}
-.range-actions button{
-    margin-left:auto;
-    border:1px solid var(--blue);
-    background:var(--blue);
-    color:#fff;
-    border-radius:10px;
-    padding:8px 12px;
-    font-size:.78rem;
-    font-weight:900;
-    cursor:pointer;
-}
-.range-actions .quick-range{
-    border:1px solid #bcd0f5;
-    background:#f8fafc;
-    color:var(--blue);
-    border-radius:10px;
-    padding:7px 9px;
-    font-size:.75rem;
-    font-weight:900;
-    text-decoration:none;
-}
-
 </style>
 </head>
 <body>
@@ -1090,59 +818,13 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
             $next_mes_nav = $mes_actual + 1; $next_anio_mes_nav = $anio_mes_actual;
             if ($next_mes_nav > 12) { $next_mes_nav = 1; $next_anio_mes_nav++; }
         ?>
-            <?php
-                $has_next_month = (
-                    $next_anio_mes_nav < $ultimo_anio_datos
-                    || ($next_anio_mes_nav == $ultimo_anio_datos && $next_mes_nav <= $ultimo_mes_datos)
-                );
-            ?>
-            <div class="month-nav-row">
-                <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','anio_mes'=>$prev_anio_mes_nav,'mes'=>$prev_mes_nav])) ?>">← <?= h($meses_es[$prev_mes_nav]) ?></a>
-                <div class="range-dropdown">
-                    <button type="button" class="week-current range-trigger" id="rangeTrigger"><?= h($label_periodo_actual) ?></button>
-                    <div class="range-panel" id="rangePanel">
-                        <form method="get" id="rangeForm">
-                            <?php foreach ($_GET as $k => $v): ?>
-                                <?php if (!in_array($k, ['dia_inicio','dia_fin','fecha_inicio','fecha_fin','rango_mode'], true)): ?>
-                                    <input type="hidden" name="<?= h($k) ?>" value="<?= h($v) ?>">
-                                <?php endif; ?>
-                            <?php endforeach; ?>
-                            <input type="hidden" name="rango_mode" value="custom">
-                            <input type="hidden" name="dia_inicio" id="diaInicioInput" value="<?= h($dia_inicio_actual) ?>">
-                            <input type="hidden" name="dia_fin" id="diaFinInput" value="<?= h($dia_fin_actual) ?>">
-
-                            <div class="range-panel-title">Selecciona rango de <?= h($meses_es[$mes_actual]) ?> <?= h($anio_mes_actual) ?></div>
-                            <div class="calendar-grid" id="calendarGrid"
-                                 data-days="<?= h($ultimo_dia_actual) ?>"
-                                 data-start="<?= h($dia_inicio_actual) ?>"
-                                 data-end="<?= h($dia_fin_actual) ?>">
-                                <?php for ($d=1; $d <= $ultimo_dia_actual; $d++): ?>
-                                    <button type="button" class="calendar-day" data-day="<?= h($d) ?>"><?= h($d) ?></button>
-                                <?php endfor; ?>
-                            </div>
-
-                            <div class="range-summary">
-                                <span id="rangeSummary"><?= h($meses_es[$mes_base]) ?> <?= h($dia_inicio_base) ?>-<?= h($dia_fin_base) ?> vs <?= h($meses_es[$mes_actual]) ?> <?= h($dia_inicio_actual) ?>-<?= h($dia_fin_actual) ?></span>
-                            </div>
-
-                            <div class="range-actions">
-                                <a class="quick-range" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','rango_mode'=>'completo'])) ?>">Mes completo</a>
-                                <button type="submit">Aplicar</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-                <?php if ($has_next_month): ?>
-                    <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','anio_mes'=>$next_anio_mes_nav,'mes'=>$next_mes_nav])) ?>"><?= h($meses_es[$next_mes_nav]) ?> →</a>
-                <?php else: ?>
-                    <span class="week-btn disabled"><?= h($meses_es[$next_mes_nav]) ?> →</span>
-                <?php endif; ?>
-            </div>
-
-
+            <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','anio_mes'=>$prev_anio_mes_nav,'mes'=>$prev_mes_nav])) ?>">← <?= h($meses_es[$prev_mes_nav]) ?></a>
+            <span class="week-current"><?= h($label_periodo_actual) ?></span>
+            <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','anio_mes'=>$next_anio_mes_nav,'mes'=>$next_mes_nav])) ?>"><?= h($meses_es[$next_mes_nav]) ?> →</a>
         <?php endif; ?>
     </div>
 </section>
+
 <section class="breadcrumb-card">
     <div class="breadcrumb-top">
         <div>
@@ -1568,70 +1250,6 @@ recalc();
 })();
 </script>
 <?php endif; ?>
-
-
-<script>
-(function(){
-    const dropdown = document.querySelector('.range-dropdown');
-    const trigger = document.getElementById('rangeTrigger');
-    const panel = document.getElementById('rangePanel');
-    const grid = document.getElementById('calendarGrid');
-    const startInput = document.getElementById('diaInicioInput');
-    const endInput = document.getElementById('diaFinInput');
-    const summary = document.getElementById('rangeSummary');
-
-    if(!dropdown || !trigger || !grid || !startInput || !endInput) return;
-
-    let start = parseInt(grid.dataset.start || startInput.value || '1', 10);
-    let end = parseInt(grid.dataset.end || endInput.value || start, 10);
-    let clickMode = 'start';
-
-    function paint(){
-        if(start > end){ const t = start; start = end; end = t; }
-        startInput.value = start;
-        endInput.value = end;
-
-        grid.querySelectorAll('.calendar-day').forEach(btn=>{
-            const d = parseInt(btn.dataset.day, 10);
-            btn.classList.toggle('selected-start', d === start);
-            btn.classList.toggle('selected-end', d === end);
-            btn.classList.toggle('in-range', d > start && d < end);
-        });
-
-        if(summary){
-            summary.textContent = 'Rango seleccionado: día ' + start + ' al ' + end;
-        }
-    }
-
-    trigger.addEventListener('click', (e)=>{
-        e.stopPropagation();
-        dropdown.classList.toggle('open');
-    });
-
-    panel.addEventListener('click', (e)=>e.stopPropagation());
-
-    document.addEventListener('click', ()=>{
-        dropdown.classList.remove('open');
-    });
-
-    grid.querySelectorAll('.calendar-day').forEach(btn=>{
-        btn.addEventListener('click', ()=>{
-            const d = parseInt(btn.dataset.day, 10);
-            if(clickMode === 'start'){
-                start = d;
-                end = d;
-                clickMode = 'end';
-            }else{
-                end = d;
-                clickMode = 'start';
-            }
-            paint();
-        });
-    });
-
-    paint();
-})();
-</script>
 
 </body>
 </html>
