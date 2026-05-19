@@ -36,9 +36,13 @@ function pct_class($pct) {
 function prod_class($prod) {
     if ($prod === null || $prod === '') return 'muted';
     $p = (float)$prod;
-    if ($p >= 4.0) return 'tier-1';
-    if ($p >= 3.0) return 'tier-2';
-    if ($p >= 2.5) return 'tier-3';
+
+    // Productividad diaria homologada.
+    // Ajustable según criterio comercial:
+    // Verde >= 0.50, Amarillo >= 0.40, Naranja >= 0.30, Rojo < 0.30
+    if ($p >= 0.50) return 'tier-1';
+    if ($p >= 0.40) return 'tier-2';
+    if ($p >= 0.30) return 'tier-3';
     return 'tier-4';
 }
 function hc_sin_venta_class($v) {
@@ -63,7 +67,63 @@ function first_existing_column($conexion, $table, $candidates) {
     return null;
 }
 
-function base_metrics_totals($rows) {
+function table_exists($conexion, $table) {
+    $table = mysqli_real_escape_string($conexion, $table);
+    $res = mysqli_query($conexion, "SHOW TABLES LIKE '$table'");
+    return $res && mysqli_num_rows($res) > 0;
+}
+
+function fecha_iso_semana_inicio($anio, $semana) {
+    $d = new DateTime();
+    $d->setISODate((int)$anio, (int)$semana, 1); // lunes ISO
+    return $d;
+}
+
+function contar_dias_habiles($conexion, $fecha_inicio, $fecha_fin) {
+    if (!$fecha_inicio || !$fecha_fin) return 1;
+
+    $inicio = new DateTime($fecha_inicio);
+    $fin = new DateTime($fecha_fin);
+
+    if ($inicio > $fin) {
+        $tmp = $inicio;
+        $inicio = $fin;
+        $fin = $tmp;
+    }
+
+    $festivos = [];
+    if (table_exists($conexion, 'dias_inhabiles')) {
+        $fi = mysqli_real_escape_string($conexion, $inicio->format('Y-m-d'));
+        $ff = mysqli_real_escape_string($conexion, $fin->format('Y-m-d'));
+        $sql = "
+            SELECT fecha
+            FROM dias_inhabiles
+            WHERE activo = 1
+              AND fecha BETWEEN '$fi' AND '$ff'
+        ";
+        $res = mysqli_query($conexion, $sql);
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                $festivos[$row['fecha']] = true;
+            }
+        }
+    }
+
+    $habiles = 0;
+    for ($d = clone $inicio; $d <= $fin; $d->modify('+1 day')) {
+        $fecha = $d->format('Y-m-d');
+        $dia_semana = (int)$d->format('N'); // 7 = domingo
+
+        if ($dia_semana === 7) continue;       // domingo inhábil
+        if (isset($festivos[$fecha])) continue; // festivo oficial/interno inhábil
+
+        $habiles++;
+    }
+
+    return max(1, $habiles);
+}
+
+function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual = 1) {
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
         'hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual',
@@ -74,8 +134,8 @@ function base_metrics_totals($rows) {
         foreach ($keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
     }
     $tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
-    $tot['prod_base'] = $tot['hc_activo_base'] > 0 ? round($tot['ins_sem_base'] / $tot['hc_activo_base'], 2) : null;
-    $tot['prod_actual'] = $tot['hc_activo_actual'] > 0 ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'], 2) : null;
+    $tot['prod_base'] = ($tot['hc_activo_base'] > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $tot['hc_activo_base'] / $dias_habiles_base, 2) : null;
+    $tot['prod_actual'] = ($tot['hc_activo_actual'] > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'] / $dias_habiles_actual, 2) : null;
     return $tot;
 }
 
@@ -267,6 +327,31 @@ $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $di
 $fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
 $fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
 
+if ($periodo === 'semanal') {
+    $sem_base_inicio = fecha_iso_semana_inicio($anio_base, $semana_base);
+    $sem_base_fin = clone $sem_base_inicio;
+    $sem_base_fin->modify('+6 days');
+
+    $sem_actual_inicio = fecha_iso_semana_inicio($anio_actual, $semana_actual);
+    $sem_actual_fin = clone $sem_actual_inicio;
+    $sem_actual_fin->modify('+6 days');
+
+    $fecha_inicio_base_calc = $sem_base_inicio->format('Y-m-d');
+    $fecha_fin_base_calc = $sem_base_fin->format('Y-m-d');
+
+    $fecha_inicio_actual_calc = $sem_actual_inicio->format('Y-m-d');
+    $fecha_fin_actual_calc = $sem_actual_fin->format('Y-m-d');
+} else {
+    $fecha_inicio_base_calc = $fecha_inicio_base;
+    $fecha_fin_base_calc = $fecha_fin_base;
+
+    $fecha_inicio_actual_calc = $fecha_inicio_actual;
+    $fecha_fin_actual_calc = $fecha_fin_actual;
+}
+
+$dias_habiles_base = contar_dias_habiles($conexion, $fecha_inicio_base_calc, $fecha_fin_base_calc);
+$dias_habiles_actual = contar_dias_habiles($conexion, $fecha_inicio_actual_calc, $fecha_fin_actual_calc);
+
 $rango_dias_label = $dia_inicio_mensual === $dia_fin_mensual
     ? 'día '.$dia_fin_mensual
     : 'días '.$dia_inicio_mensual.'-'.$dia_fin_mensual;
@@ -450,8 +535,8 @@ SELECT
     COALESCE(h.hc_con_ins_actual,0) AS hc_con_ins_actual,
     COALESCE(h.hc_activo_base,0) - COALESCE(h.hc_con_ins_base,0) AS hc_sin_venta_base,
     COALESCE(h.hc_activo_actual,0) - COALESCE(h.hc_con_ins_actual,0) AS hc_sin_venta_actual,
-    ROUND(vl.ins_sem_base / NULLIF(h.hc_activo_base,0),2) AS prod_base,
-    ROUND(vl.ins_sem_actual / NULLIF(h.hc_activo_actual,0),2) AS prod_actual,
+    ROUND(vl.ins_sem_base / NULLIF(h.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
+    ROUND(vl.ins_sem_actual / NULLIF(h.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
     COALESCE(h.hc_activo_base,0) AS activo_base,
     COALESCE(h.vacante_base,0) AS vacante_base,
     COALESCE(h.hc_activo_base,0) + COALESCE(h.vacante_base,0) AS hc_total_base,
@@ -618,8 +703,8 @@ FROM (
         hc_con_ins_actual,
         hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
         hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
-        ROUND(ins_sem_base / NULLIF(hc_activo_base,0),2) AS prod_base,
-        ROUND(ins_sem_actual / NULLIF(hc_activo_actual,0),2) AS prod_actual,
+        ROUND(ins_sem_base / NULLIF(hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
+        ROUND(ins_sem_actual / NULLIF(hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
         hc_activo_base AS activo_base,
         vacante_base,
         hc_activo_base + vacante_base AS hc_total_base,
@@ -824,7 +909,7 @@ if (!$res) {
     }
 }
 
-$tot = base_metrics_totals($rows);
+$tot = base_metrics_totals($rows, $dias_habiles_base, $dias_habiles_actual);
 $districts = [];
 if ($view === 'lideres') {
     foreach ($rows as $r) if (!in_array($r['distrito'], $districts, true)) $districts[] = $r['distrito'];
@@ -1084,7 +1169,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 <section class="topbar">
     <div class="page-title">
         <h1><?= h($title_label) ?> <span class="week-pill"><?= h($periodo === 'mensual' ? 'Mensual · '.$label_periodo_actual : 'Semana '.$semana_actual.' · '.$anio_actual) ?></span></h1>
-        <p><?= h($subtitle) ?></p>
+        <p><?= h($subtitle) ?> · Días hábiles: <?= h($label_col_base) ?> <?= h($dias_habiles_base) ?> / <?= h($label_col_actual) ?> <?= h($dias_habiles_actual) ?></p>
     </div>
     <div class="week-nav">
         <a class="week-btn <?= $periodo === 'semanal' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal'])) ?>">Semanal</a>
@@ -1193,7 +1278,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 <section class="cards">
     <div class="card"><div class="label">Instalaciones <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
     <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
-    <div class="card"><div class="label">Productividad <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-prod-actual"><?= fmt_prod($tot['prod_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-prod-base"><?= fmt_prod($tot['prod_base']) ?></span></div></div>
+    <div class="card"><div class="label">Prod. diaria <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-prod-actual"><?= fmt_prod($tot['prod_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-prod-base"><?= fmt_prod($tot['prod_base']) ?></span></div></div>
     <div class="card"><div class="label">Headcount <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-hc-total"><?= fmt_num($tot['hc_total_actual']) ?></div><div class="hint">Activos <span id="kpi-activo"><?= fmt_num($tot['activo_actual']) ?></span> · Vacantes <span id="kpi-vacante"><?= fmt_num($tot['vacante_actual']) ?></span></div></div>
 </section>
 
@@ -1231,8 +1316,8 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <th rowspan="2" class="num sortable" data-key="hc_con_ins_actual">HC con INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="prod_base">Prod.<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="prod_actual">Prod.<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="prod_base">PROD. DIARIA<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="prod_actual">PROD. DIARIA<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th colspan="2" class="group">Head Count <?= h($label_col_base) ?></th>
                     <th colspan="2" class="group">Head Count <?= h($label_col_actual) ?></th>
                 </tr>
@@ -1488,6 +1573,8 @@ foreach ($ventas_hist as $vh) {
 <?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
 <script>
 const table=document.getElementById('rankingTable');
+const DIAS_HABILES_BASE = <?= (int)$dias_habiles_base ?>;
+const DIAS_HABILES_ACTUAL = <?= (int)$dias_habiles_actual ?>;
 const tbody=table.querySelector('tbody');
 const totalRow=document.getElementById('totalRow');
 const dataRows=()=>[...tbody.querySelectorAll('tr.data-row')];
@@ -1497,7 +1584,7 @@ function num(v){const n=parseFloat(v);return isNaN(n)?0:n}
 function fmt0(n){return Math.round(n).toLocaleString('en-US')}
 function fmt2(n){return (Math.round(n*100)/100).toFixed(2)}
 function pctClass(n){if(n>=5)return'badge up';if(n<=-10)return'badge down-hard';if(n<0)return'badge down';return'badge flat'}
-function prodClass(n){if(n>=4)return'prod tier-1';if(n>=3)return'prod tier-2';if(n>=2.5)return'prod tier-3';return'prod tier-4'}
+function prodClass(n){if(n>=0.50)return'prod tier-1';if(n>=0.40)return'prod tier-2';if(n>=0.30)return'prod tier-3';return'prod tier-4'}
 function hcClass(n){if(n<=2)return'hc-indicator hc-good';if(n<=5)return'hc-indicator hc-mid';return'hc-indicator hc-bad'}
 function visibleRows(){return dataRows().filter(r=>r.style.display!=='none')}
 function applyFilter(){
@@ -1511,8 +1598,8 @@ function recalc(){
  const t={};keys.forEach(k=>t[k]=0);
  rows.forEach(r=>keys.forEach(k=>t[k]+=num(r.dataset[k])));
  const pct=t.ins_sem_base>0?Math.round(((t.ins_sem_actual-t.ins_sem_base)/t.ins_sem_base)*100):null;
- const pb=t.hc_activo_base>0?t.ins_sem_base/t.hc_activo_base:null;
- const pa=t.hc_activo_actual>0?t.ins_sem_actual/t.hc_activo_actual:null;
+ const pb=(t.hc_activo_base>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/t.hc_activo_base/DIAS_HABILES_BASE:null;
+ const pa=(t.hc_activo_actual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/t.hc_activo_actual/DIAS_HABILES_ACTUAL:null;
  document.querySelectorAll('[data-total-key]').forEach(td=>td.textContent=fmt0(t[td.dataset.totalKey]||0));
  const p=document.getElementById('total-pct');p.textContent=pct===null?'-':fmt0(pct)+'%';p.className=pct===null?'badge flat':pctClass(pct);
  const hb=document.getElementById('total-hc-sin-base');hb.textContent=fmt0(t.hc_sin_venta_base);hb.className=hcClass(t.hc_sin_venta_base);
