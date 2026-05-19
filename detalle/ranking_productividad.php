@@ -119,6 +119,99 @@ $has_next = isset($semanas_key[$next_anio.'-'.$next_semana]);
 $view = $_GET['view'] ?? 'lideres';
 if (!in_array($view, ['lideres','coaches','vendedores','ventas'], true)) $view = 'lideres';
 
+$periodo = $_GET['periodo'] ?? 'semanal';
+if (!in_array($periodo, ['semanal','mensual'], true)) $periodo = 'semanal';
+
+$meses_es = [
+    1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',
+    7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'
+];
+
+$mes_actual = isset($_GET['mes']) ? max(1, min(12, (int)$_GET['mes'])) : (int)date('n');
+$anio_mes_actual = isset($_GET['anio_mes']) ? max(2020, min(2100, (int)$_GET['anio_mes'])) : $anio_actual;
+
+$mes_base = $mes_actual - 1;
+$anio_mes_base = $anio_mes_actual;
+if ($mes_base < 1) {
+    $mes_base = 12;
+    $anio_mes_base--;
+}
+
+function semanas_del_mes_iso($anio, $mes) {
+    $inicio = new DateTime(sprintf('%04d-%02d-01', $anio, $mes));
+    $fin = clone $inicio;
+    $fin->modify('last day of this month');
+    $weeks = [];
+    for ($d = clone $inicio; $d <= $fin; $d->modify('+1 day')) {
+        $weeks[(int)$d->format('W')] = true;
+    }
+    return array_keys($weeks);
+}
+
+function ultima_semana_hc_mes($conexion, $anio, $mes, $fallback_semana) {
+    $weeks = semanas_del_mes_iso($anio, $mes);
+    if (empty($weeks)) return (int)$fallback_semana;
+    $in = implode(',', array_map('intval', $weeks));
+    $sql = "SELECT MAX(semana) AS semana FROM hc WHERE anio = ".(int)$anio." AND semana IN ($in)";
+    $res = mysqli_query($conexion, $sql);
+    if ($res && $row = mysqli_fetch_assoc($res)) {
+        if (!empty($row['semana'])) return (int)$row['semana'];
+    }
+    return (int)$fallback_semana;
+}
+
+$hc_anio_base = $anio_base;
+$hc_semana_base = $semana_base;
+$hc_anio_actual = $anio_actual;
+$hc_semana_actual = $semana_actual;
+
+if ($periodo === 'mensual') {
+    $hc_anio_base = $anio_mes_base;
+    $hc_semana_base = ultima_semana_hc_mes($conexion, $anio_mes_base, $mes_base, $semana_base);
+
+    $hc_anio_actual = $anio_mes_actual;
+    $hc_semana_actual = ultima_semana_hc_mes($conexion, $anio_mes_actual, $mes_actual, $semana_actual);
+}
+
+$dia_corte_mensual = (int)date('j', strtotime('-1 day'));
+$es_mes_actual_calendario = ((int)date('Y') === (int)$anio_mes_actual && (int)date('n') === (int)$mes_actual);
+if (!$es_mes_actual_calendario) {
+    $dia_corte_mensual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)));
+}
+$dia_corte_base = min($dia_corte_mensual, (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_base, $mes_base))));
+$dia_corte_actual = min($dia_corte_mensual, (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual))));
+
+$label_periodo_base = $periodo === 'mensual'
+    ? $meses_es[$mes_base].' 1-'.$dia_corte_base.' '.$anio_mes_base
+    : 'Semana '.$semana_base;
+
+$label_periodo_actual = $periodo === 'mensual'
+    ? $meses_es[$mes_actual].' 1-'.$dia_corte_actual.' '.$anio_mes_actual
+    : 'Semana '.$semana_actual;
+
+$label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' 1-'.$dia_corte_base : 'SEM'.$semana_base;
+$label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' 1-'.$dia_corte_actual : 'SEM'.$semana_actual;
+
+$cond_i_base = $periodo === 'mensual'
+    ? "YEAR(i.fecha) = {$anio_mes_base} AND MONTH(i.fecha) = {$mes_base} AND DAY(i.fecha) BETWEEN 1 AND {$dia_corte_base}"
+    : "YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base}";
+
+$cond_i_actual = $periodo === 'mensual'
+    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN 1 AND {$dia_corte_actual}"
+    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual}";
+
+$cond_ibase = $periodo === 'mensual'
+    ? "YEAR(ibase.fecha) = {$anio_mes_base} AND MONTH(ibase.fecha) = {$mes_base} AND DAY(ibase.fecha) BETWEEN 1 AND {$dia_corte_base}"
+    : "YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha,1) = {$semana_base}";
+
+$cond_iactual = $periodo === 'mensual'
+    ? "YEAR(iactual.fecha) = {$anio_mes_actual} AND MONTH(iactual.fecha) = {$mes_actual} AND DAY(iactual.fecha) BETWEEN 1 AND {$dia_corte_actual}"
+    : "YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha,1) = {$semana_actual}";
+
+$cond_mix_actual = $periodo === 'mensual'
+    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN 1 AND {$dia_corte_actual}"
+    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual}";
+
 $distrito_param  = $_GET['distrito'] ?? '';
 $lider_param     = $_GET['lider'] ?? '';
 $coach_param     = $_GET['coach'] ?? '';
@@ -183,14 +276,14 @@ ventas_lider AS (
         la.distrito_reporte AS distrito,
         la.lider_hc AS entidad,
         la.lider_hc AS lider,
-        SUM(CASE WHEN YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base} THEN 1 ELSE 0 END) AS ins_sem_base,
-        SUM(CASE WHEN YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual} THEN 1 ELSE 0 END) AS ins_sem_actual
+        SUM(CASE WHEN {$cond_i_base} THEN 1 ELSE 0 END) AS ins_sem_base,
+        SUM(CASE WHEN {$cond_i_actual} THEN 1 ELSE 0 END) AS ins_sem_actual
     FROM lideres_activos la
     LEFT JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
        AND (
-            (YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base})
-         OR (YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual})
+            ({$cond_i_base})
+         OR ({$cond_i_actual})
        )
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
@@ -208,8 +301,8 @@ coaches_lider AS (
         ON h.nombre_linea_reporte = la.lider_hc
        AND h.distrito = la.distrito_hc
        AND (
-            (h.anio = {$anio_base} AND h.semana = {$semana_base})
-         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+            (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
+         OR (h.anio = {$hc_anio_actual} AND h.semana = {$hc_semana_actual})
        )
        AND h.puesto_lr LIKE '%LIDER%'
 ),
@@ -239,15 +332,15 @@ hc_resumen AS (
     SELECT
         v.distrito,
         v.lider,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual
     FROM vendedores v
-    LEFT JOIN instalaciones ibase ON v.folio_empleado = ibase.folio_empleado AND YEAR(ibase.fecha)={$anio_base} AND WEEK(ibase.fecha,1)={$semana_base}
-    LEFT JOIN instalaciones iactual ON v.folio_empleado = iactual.folio_empleado AND YEAR(iactual.fecha)={$anio_actual} AND WEEK(iactual.fecha,1)={$semana_actual}
+    LEFT JOIN instalaciones ibase ON v.folio_empleado = ibase.folio_empleado AND {$cond_ibase}
+    LEFT JOIN instalaciones iactual ON v.folio_empleado = iactual.folio_empleado AND {$cond_iactual}
     GROUP BY v.distrito, v.lider
 )
 SELECT
@@ -303,8 +396,8 @@ coaches_base AS (
         ON h.nombre_linea_reporte = la.lider_hc
        AND h.distrito = la.distrito_hc
        AND (
-            (h.anio = {$anio_base} AND h.semana = {$semana_base})
-         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+            (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
+         OR (h.anio = {$hc_anio_actual} AND h.semana = {$hc_semana_actual})
        )
        AND h.puesto_lr LIKE '%LIDER%'
 ),
@@ -342,57 +435,150 @@ resumen AS (
         c.coach,
         c.coach_pos,
         c.coach_key,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_base} AND v.semana={$semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$anio_actual} AND v.semana={$semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
         COUNT(ibase.cuenta) AS ins_sem_base,
         COUNT(iactual.cuenta) AS ins_sem_actual
     FROM coaches_base c
     LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
     LEFT JOIN instalaciones ibase
         ON v.folio_empleado = ibase.folio_empleado
-       AND YEAR(ibase.fecha)={$anio_base}
-       AND WEEK(ibase.fecha,1)={$semana_base}
-       AND v.anio={$anio_base}
-       AND v.semana={$semana_base}
+       AND {$cond_ibase}
+       AND v.anio={$hc_anio_base}
+       AND v.semana={$hc_semana_base}
     LEFT JOIN instalaciones iactual
         ON v.folio_empleado = iactual.folio_empleado
-       AND YEAR(iactual.fecha)={$anio_actual}
-       AND WEEK(iactual.fecha,1)={$semana_actual}
-       AND v.anio={$anio_actual}
-       AND v.semana={$semana_actual}
+       AND {$cond_iactual}
+       AND v.anio={$hc_anio_actual}
+       AND v.semana={$hc_semana_actual}
     GROUP BY c.distrito, c.lider, c.coach, c.coach_pos, c.coach_key
+),
+ventas_sin_coach_base AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS lider,
+        COUNT(i.cuenta) AS ins_sem_base
+    FROM selected_lider la
+    INNER JOIN instalaciones i
+        ON i.lider = la.lider_instalaciones
+       AND {$cond_i_base}
+    LEFT JOIN vendedores v
+        ON v.folio_empleado = i.folio_empleado
+       AND v.anio = {$hc_anio_base}
+       AND v.semana = {$hc_semana_base}
+       AND v.folio_empleado <> 'VACANTE'
+       AND v.nombre_colaborador <> 'VACANTE'
+    WHERE '{$periodo}' = 'mensual'
+      AND v.folio_empleado IS NULL
+    GROUP BY la.distrito_reporte, la.lider_hc
+),
+ventas_sin_coach_actual AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS lider,
+        COUNT(i.cuenta) AS ins_sem_actual
+    FROM selected_lider la
+    INNER JOIN instalaciones i
+        ON i.lider = la.lider_instalaciones
+       AND {$cond_i_actual}
+    LEFT JOIN vendedores v
+        ON v.folio_empleado = i.folio_empleado
+       AND v.anio = {$hc_anio_actual}
+       AND v.semana = {$hc_semana_actual}
+       AND v.folio_empleado <> 'VACANTE'
+       AND v.nombre_colaborador <> 'VACANTE'
+    WHERE '{$periodo}' = 'mensual'
+      AND v.folio_empleado IS NULL
+    GROUP BY la.distrito_reporte, la.lider_hc
+),
+sin_coach AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS lider,
+        COALESCE(b.ins_sem_base, 0) AS ins_sem_base,
+        COALESCE(a.ins_sem_actual, 0) AS ins_sem_actual
+    FROM selected_lider la
+    LEFT JOIN ventas_sin_coach_base b
+        ON la.distrito_reporte = b.distrito
+       AND la.lider_hc = b.lider
+    LEFT JOIN ventas_sin_coach_actual a
+        ON la.distrito_reporte = a.distrito
+       AND la.lider_hc = a.lider
 )
-SELECT
-    distrito,
-    entidad,
-    lider,
-    coach,
-    coach_pos,
-    '' AS folio_empleado,
-    ins_sem_base,
-    ins_sem_actual,
-    ins_sem_actual - ins_sem_base AS dif,
-    ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
-    hc_activo_base,
-    hc_activo_actual,
-    hc_con_ins_base,
-    hc_con_ins_actual,
-    hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
-    hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
-    ROUND(ins_sem_base / NULLIF(hc_activo_base,0),2) AS prod_base,
-    ROUND(ins_sem_actual / NULLIF(hc_activo_actual,0),2) AS prod_actual,
-    hc_activo_base AS activo_base,
-    vacante_base,
-    hc_activo_base + vacante_base AS hc_total_base,
-    hc_activo_actual AS activo_actual,
-    vacante_actual,
-    hc_activo_actual + vacante_actual AS hc_total_actual
-FROM resumen
-ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
+SELECT *
+FROM (
+    SELECT
+        distrito,
+        entidad,
+        lider,
+        coach,
+        coach_pos,
+        '' AS folio_empleado,
+        ins_sem_base,
+        ins_sem_actual,
+        ins_sem_actual - ins_sem_base AS dif,
+        ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
+        hc_activo_base,
+        hc_activo_actual,
+        hc_con_ins_base,
+        hc_con_ins_actual,
+        hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
+        hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
+        ROUND(ins_sem_base / NULLIF(hc_activo_base,0),2) AS prod_base,
+        ROUND(ins_sem_actual / NULLIF(hc_activo_actual,0),2) AS prod_actual,
+        hc_activo_base AS activo_base,
+        vacante_base,
+        hc_activo_base + vacante_base AS hc_total_base,
+        hc_activo_actual AS activo_actual,
+        vacante_actual,
+        hc_activo_actual + vacante_actual AS hc_total_actual
+    FROM resumen
+
+    UNION ALL
+
+    SELECT
+        distrito,
+        'SIN COACH / NO ENCONTRADO EN HC' AS entidad,
+        lider,
+        'SIN COACH / NO ENCONTRADO EN HC' AS coach,
+        '' AS coach_pos,
+        '' AS folio_empleado,
+        ins_sem_base,
+        ins_sem_actual,
+        ins_sem_actual - ins_sem_base AS dif,
+        ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
+        0 AS hc_activo_base,
+        0 AS hc_activo_actual,
+        0 AS hc_con_ins_base,
+        0 AS hc_con_ins_actual,
+        0 AS hc_sin_venta_base,
+        0 AS hc_sin_venta_actual,
+        NULL AS prod_base,
+        NULL AS prod_actual,
+        0 AS activo_base,
+        0 AS vacante_base,
+        0 AS hc_total_base,
+        0 AS activo_actual,
+        0 AS vacante_actual,
+        0 AS hc_total_actual
+    FROM sin_coach
+    WHERE '{$periodo}' = 'mensual'
+      AND (ins_sem_base + ins_sem_actual) > 0
+) final
+WHERE
+       COALESCE(ins_sem_base,0) > 0
+    OR COALESCE(ins_sem_actual,0) > 0
+    OR COALESCE(hc_total_base,0) > 0
+    OR COALESCE(hc_total_actual,0) > 0
+ORDER BY
+    CASE WHEN entidad = 'SIN COACH / NO ENCONTRADO EN HC' THEN 1 ELSE 0 END,
+    prod_actual DESC,
+    ins_sem_actual DESC,
+    entidad ASC
 ";
 } elseif ($view === 'vendedores') {
 $sql = "
@@ -416,8 +602,8 @@ WITH vendedores_base AS (
           ('{$coach_sql}' = 'VACANTE' AND h.posicion_lr = '{$coach_pos_sql}')
       )
       AND (
-            (h.anio = {$anio_base} AND h.semana = {$semana_base})
-         OR (h.anio = {$anio_actual} AND h.semana = {$semana_actual})
+            (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
+         OR (h.anio = {$hc_anio_actual} AND h.semana = {$hc_semana_actual})
       )
 ),
 ventas_vendedor AS (
@@ -429,29 +615,31 @@ ventas_vendedor AS (
         vb.vendedor,
         vb.folio_empleado,
         vb.antiguedad,
-        WEEK(i.fecha,1) AS semana,
+        CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END AS semana,
         COUNT(i.cuenta) AS ventas,
         SUM(CASE 
-                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                WHEN {$cond_mix_actual}
                  AND UPPER(COALESCE(i.plan,'')) LIKE '%TV%' 
                 THEN 1 ELSE 0 END) AS triple_play,
         SUM(CASE 
-                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                WHEN {$cond_mix_actual}
                  AND UPPER(COALESCE(i.plan,'')) NOT LIKE '%TV%' 
                 THEN 1 ELSE 0 END) AS doble_play,
         SUM(CASE 
-                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                WHEN {$cond_mix_actual}
                  AND UPPER(COALESCE({$segmento_select_expr},'')) LIKE '%NEGOC%' 
                 THEN 1 ELSE 0 END) AS negocios,
         SUM(CASE 
-                WHEN WEEK(i.fecha,1) = {$semana_actual}
+                WHEN {$cond_mix_actual}
                  AND UPPER(COALESCE({$segmento_select_expr},'')) NOT LIKE '%NEGOC%' 
                 THEN 1 ELSE 0 END) AS residencial
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
         ON i.folio_empleado = vb.folio_empleado
-       AND YEAR(i.fecha) = {$anio_actual}
-       AND WEEK(i.fecha,1) BETWEEN 1 AND {$semana_actual}
+       AND (
+            ({$cond_i_base})
+         OR ({$cond_i_actual})
+       )
     GROUP BY
         vb.distrito,
         vb.lider,
@@ -460,7 +648,7 @@ ventas_vendedor AS (
         vb.vendedor,
         vb.folio_empleado,
         vb.antiguedad,
-        WEEK(i.fecha,1)
+        CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END
 )
 SELECT
     distrito,
@@ -562,11 +750,11 @@ $title_label = [
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
-$base_link = '?' . qs(['anio'=>$anio_actual, 'semana'=>$semana_actual]);
-$lider_link = '?' . qs(['anio'=>$anio_actual, 'semana'=>$semana_actual, 'view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]);
-$coach_link = '?' . qs(['anio'=>$anio_actual, 'semana'=>$semana_actual, 'view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]);
+$base_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual]);
+$lider_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]);
+$coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]);
 
-$subtitle = "Comparativo Semana {$semana_base} vs Semana {$semana_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
+$subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
 if ($view !== 'lideres') $subtitle .= " · Líder: {$lider_param}";
 if ($view === 'vendedores' || $view === 'ventas') $subtitle .= " · Coach: {$coach_param}";
 if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
@@ -614,13 +802,26 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 <main class="main">
 <section class="topbar">
     <div class="page-title">
-        <h1><?= h($title_label) ?> <span class="week-pill">Semana <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span></h1>
+        <h1><?= h($title_label) ?> <span class="week-pill"><?= h($periodo === 'mensual' ? 'Mensual · '.$label_periodo_actual : 'Semana '.$semana_actual.' · '.$anio_actual) ?></span></h1>
         <p><?= h($subtitle) ?></p>
     </div>
     <div class="week-nav">
-        <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
-        <span class="week-current">Semana <?= h($semana_actual) ?></span>
-        <a class="week-btn <?= $has_next ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
+        <a class="week-btn <?= $periodo === 'semanal' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal'])) ?>">Semanal</a>
+        <a class="week-btn <?= $periodo === 'mensual' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual'])) ?>">Mensual</a>
+        <?php if ($periodo === 'semanal'): ?>
+            <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
+            <span class="week-current"><?= h($label_periodo_actual) ?></span>
+            <a class="week-btn <?= $has_next ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
+        <?php else:
+            $prev_mes_nav = $mes_actual - 1; $prev_anio_mes_nav = $anio_mes_actual;
+            if ($prev_mes_nav < 1) { $prev_mes_nav = 12; $prev_anio_mes_nav--; }
+            $next_mes_nav = $mes_actual + 1; $next_anio_mes_nav = $anio_mes_actual;
+            if ($next_mes_nav > 12) { $next_mes_nav = 1; $next_anio_mes_nav++; }
+        ?>
+            <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','anio_mes'=>$prev_anio_mes_nav,'mes'=>$prev_mes_nav])) ?>">← <?= h($meses_es[$prev_mes_nav]) ?></a>
+            <span class="week-current"><?= h($label_periodo_actual) ?></span>
+            <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','anio_mes'=>$next_anio_mes_nav,'mes'=>$next_mes_nav])) ?>"><?= h($meses_es[$next_mes_nav]) ?> →</a>
+        <?php endif; ?>
     </div>
 </section>
 
@@ -663,10 +864,10 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
 
 <?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
 <section class="cards">
-    <div class="card"><div class="label">Instalaciones Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint">Semana <?= h($semana_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
+    <div class="card"><div class="label">Instalaciones <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
     <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
-    <div class="card"><div class="label">Productividad Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-prod-actual"><?= fmt_prod($tot['prod_actual']) ?></div><div class="hint">Semana <?= h($semana_base) ?>: <span id="kpi-prod-base"><?= fmt_prod($tot['prod_base']) ?></span></div></div>
-    <div class="card"><div class="label">Headcount Semana <?= h($semana_actual) ?></div><div class="value" id="kpi-hc-total"><?= fmt_num($tot['hc_total_actual']) ?></div><div class="hint">Activos <span id="kpi-activo"><?= fmt_num($tot['activo_actual']) ?></span> · Vacantes <span id="kpi-vacante"><?= fmt_num($tot['vacante_actual']) ?></span></div></div>
+    <div class="card"><div class="label">Productividad <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-prod-actual"><?= fmt_prod($tot['prod_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-prod-base"><?= fmt_prod($tot['prod_base']) ?></span></div></div>
+    <div class="card"><div class="label">Headcount <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-hc-total"><?= fmt_num($tot['hc_total_actual']) ?></div><div class="hint">Activos <span id="kpi-activo"><?= fmt_num($tot['activo_actual']) ?></span> · Vacantes <span id="kpi-vacante"><?= fmt_num($tot['vacante_actual']) ?></span></div></div>
 </section>
 
 <section class="filters">
@@ -693,18 +894,18 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <th rowspan="2" class="center">#</th>
                     <th rowspan="2">Distrito</th>
                     <th rowspan="2"><?= h($entity_label) ?></th>
-                    <th rowspan="2" class="num sortable" data-key="ins_sem_base">INS<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="ins_sem_actual">INS<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="ins_sem_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="ins_sem_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="dif">Dif. <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="center sortable" data-key="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_activo_base">HC Activo<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_activo_actual">HC Activo<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_base">HC con INS<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_actual">HC con INS<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin Venta<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin Venta<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="prod_base">Prod.<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="prod_actual">Prod.<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_activo_base">HC Activo<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_activo_actual">HC Activo<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_base">HC con INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_actual">HC con INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="prod_base">Prod.<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center sortable" data-key="prod_actual">Prod.<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th colspan="3" class="group">Head Count SEM <?= h($semana_base) ?></th>
                     <th colspan="3" class="group">Head Count SEM <?= h($semana_actual) ?></th>
                 </tr>
@@ -717,11 +918,11 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                 <?php $rank=1; foreach($rows as $r):
                     $href = '';
                     if ($view === 'lideres') {
-                        $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
                     } elseif ($view === 'coaches') {
-                        $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
                     } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
-                        $href = '?' . qs(['anio'=>$anio_actual,'semana'=>$semana_actual,'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]);
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]);
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
@@ -790,8 +991,8 @@ foreach ($coach_matrix as $v) {
 }
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
-    <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura SEM<?= h($semana_base) ?> o SEM<?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Semana 1 a <?= h($label_periodo_actual) ?></div></div>
+    <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura <?= h($label_col_base) ?> o <?= h($label_col_actual) ?></div></div>
     <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> ventas</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
 </section>
@@ -799,7 +1000,7 @@ foreach ($coach_matrix as $v) {
 <section class="table-card">
     <div class="table-head">
         <strong>Resumen por vendedor del coach</strong>
-        <span>Comparativo SEM<?= h($semana_base) ?> vs SEM<?= h($semana_actual) ?> · Mix comercial SEM<?= h($semana_actual) ?></span>
+        <span>Comparativo <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Mix comercial <?= h($label_col_actual) ?></span>
     </div>
     <div class="table-wrap">
         <table class="sales-table" style="min-width:1280px">
@@ -807,8 +1008,8 @@ foreach ($coach_matrix as $v) {
                 <tr>
                     <th>Nombre vendedor</th>
                     <th class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="ins_base">INS<br>SEM<?= h($semana_base) ?> <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="ins_actual">INS<br>SEM<?= h($semana_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
                     <th class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
                     <th class="num matrix-sortable" data-sort="doble">2P <span class="sort-icon">↕</span></th>
@@ -833,10 +1034,12 @@ foreach ($coach_matrix as $v) {
                         $triple_v = (int)$v['triple_play'];
                         $resid_v = (int)$v['residencial'];
                         $neg_v = (int)$v['negocios'];
-                        $pct_doble = $total_v > 0 ? round(($doble_v / $total_v) * 100, 0) : null;
-                        $pct_triple = $total_v > 0 ? round(($triple_v / $total_v) * 100, 0) : null;
-                        $pct_resid = $total_v > 0 ? round(($resid_v / $total_v) * 100, 0) : null;
-                        $pct_neg = $total_v > 0 ? round(($neg_v / $total_v) * 100, 0) : null;
+                        $mix_total_v = $doble_v + $triple_v;
+                        $segmento_total_v = $resid_v + $neg_v;
+                        $pct_doble = $mix_total_v > 0 ? round(($doble_v / $mix_total_v) * 100, 0) : null;
+                        $pct_triple = $mix_total_v > 0 ? round(($triple_v / $mix_total_v) * 100, 0) : null;
+                        $pct_resid = $segmento_total_v > 0 ? round(($resid_v / $segmento_total_v) * 100, 0) : null;
+                        $pct_neg = $segmento_total_v > 0 ? round(($neg_v / $segmento_total_v) * 100, 0) : null;
                         $antig_meses = 0;
                         if (is_numeric($v['antiguedad'])) {
                             $antig_meses = (float)$v['antiguedad'];
@@ -931,7 +1134,7 @@ foreach ($ventas_hist as $vh) {
 }
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas acumuladas</div><div class="value"><?= fmt_num($total_ventas_hist) ?></div><div class="hint">Semana 1 a Semana <?= h($semana_actual) ?></div></div>
+    <div class="card"><div class="label">Ventas acumuladas</div><div class="value"><?= fmt_num($total_ventas_hist) ?></div><div class="hint">Semana 1 a <?= h($label_periodo_actual) ?></div></div>
     <div class="card"><div class="label">Mejor semana</div><div class="value">SEM <?= h($best_week) ?></div><div class="hint"><?= fmt_num($best_sales) ?> ventas</div></div>
     <div class="card"><div class="label">Promedio semanal</div><div class="value"><?= $semana_actual > 0 ? fmt_prod($total_ventas_hist / $semana_actual) : '-' ?></div><div class="hint">Año <?= h($anio_actual) ?></div></div>
     <div class="card"><div class="label">Folio empleado</div><div class="value" style="font-size:1.05rem"><?= h($folio_param) ?></div><div class="hint"><?= h($vendedor_param) ?></div></div>
@@ -939,7 +1142,7 @@ foreach ($ventas_hist as $vh) {
 <section class="table-card">
     <div class="table-head">
         <strong>Ventas semanales del vendedor</strong>
-        <span>Semana 1 de <?= h($anio_actual) ?> a Semana <?= h($semana_actual) ?></span>
+        <span>Semana 1 de <?= h($anio_actual) ?> a <?= h($label_periodo_actual) ?></span>
     </div>
     <div class="table-wrap">
         <table class="sales-table">
