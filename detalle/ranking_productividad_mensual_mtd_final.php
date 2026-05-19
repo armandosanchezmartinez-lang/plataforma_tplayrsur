@@ -569,6 +569,11 @@ FROM (
     WHERE '{$periodo}' = 'mensual'
       AND (ins_sem_base + ins_sem_actual) > 0
 ) final
+WHERE
+       COALESCE(ins_sem_base,0) > 0
+    OR COALESCE(ins_sem_actual,0) > 0
+    OR COALESCE(hc_total_base,0) > 0
+    OR COALESCE(hc_total_actual,0) > 0
 ORDER BY
     CASE WHEN entidad = 'SIN COACH / NO ENCONTRADO EN HC' THEN 1 ELSE 0 END,
     prod_actual DESC,
@@ -897,8 +902,8 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <th rowspan="2" class="num sortable" data-key="hc_activo_actual">HC Activo<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_con_ins_base">HC con INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_con_ins_actual">HC con INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin Venta<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin Venta<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="center sortable" data-key="prod_base">Prod.<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="center sortable" data-key="prod_actual">Prod.<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th colspan="3" class="group">Head Count SEM <?= h($semana_base) ?></th>
