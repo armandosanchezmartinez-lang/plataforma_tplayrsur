@@ -40,9 +40,9 @@ function prod_class($prod) {
     // Productividad diaria homologada.
     // Ajustable según criterio comercial:
     // Verde >= 0.50, Amarillo >= 0.40, Naranja >= 0.30, Rojo < 0.30
-    if ($p >= 0.70) return 'tier-1';
-    if ($p >= 0.55) return 'tier-2';
-    if ($p >= 0.40) return 'tier-3';
+    if ($p >= 0.50) return 'tier-1';
+    if ($p >= 0.40) return 'tier-2';
+    if ($p >= 0.30) return 'tier-3';
     return 'tier-4';
 }
 function hc_sin_venta_class($v) {
@@ -50,13 +50,6 @@ function hc_sin_venta_class($v) {
     if ($n <= 2) return 'hc-good';
     if ($n <= 5) return 'hc-mid';
     return 'hc-bad';
-}
-function pct_hc_sin_ins_class($pct) {
-    if ($pct === null || $pct === '') return 'flat';
-    $p = (float)$pct;
-    if ($p <= 5) return 'up';
-    if ($p <= 10) return 'flat';
-    return 'down-hard';
 }
 function qs($arr) { return http_build_query($arr); }
 function esc($conexion, $v) { return mysqli_real_escape_string($conexion, (string)$v); }
@@ -141,8 +134,6 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
         foreach ($keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
     }
     $tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_base'] = $tot['hc_activo_base'] > 0 ? round(($tot['hc_sin_venta_base'] / $tot['hc_activo_base']) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_actual'] = $tot['hc_activo_actual'] > 0 ? round(($tot['hc_sin_venta_actual'] / $tot['hc_activo_actual']) * 100, 0) : null;
     $tot['prod_base'] = ($tot['hc_activo_base'] > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $tot['hc_activo_base'] / $dias_habiles_base, 2) : null;
     $tot['prod_actual'] = ($tot['hc_activo_actual'] > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'] / $dias_habiles_actual, 2) : null;
     return $tot;
@@ -544,8 +535,6 @@ SELECT
     COALESCE(h.hc_con_ins_actual,0) AS hc_con_ins_actual,
     COALESCE(h.hc_activo_base,0) - COALESCE(h.hc_con_ins_base,0) AS hc_sin_venta_base,
     COALESCE(h.hc_activo_actual,0) - COALESCE(h.hc_con_ins_actual,0) AS hc_sin_venta_actual,
-    ROUND(((COALESCE(h.hc_activo_base,0) - COALESCE(h.hc_con_ins_base,0)) / NULLIF(h.hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
-    ROUND(((COALESCE(h.hc_activo_actual,0) - COALESCE(h.hc_con_ins_actual,0)) / NULLIF(h.hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
     ROUND(vl.ins_sem_base / NULLIF(h.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
     ROUND(vl.ins_sem_actual / NULLIF(h.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
     COALESCE(h.hc_activo_base,0) AS activo_base,
@@ -714,8 +703,6 @@ FROM (
         hc_con_ins_actual,
         hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
         hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
-        ROUND(((hc_activo_base - hc_con_ins_base) / NULLIF(hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
-        ROUND(((hc_activo_actual - hc_con_ins_actual) / NULLIF(hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
         ROUND(ins_sem_base / NULLIF(hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
         ROUND(ins_sem_actual / NULLIF(hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
         hc_activo_base AS activo_base,
@@ -745,8 +732,6 @@ FROM (
         0 AS hc_con_ins_actual,
         0 AS hc_sin_venta_base,
         0 AS hc_sin_venta_actual,
-        NULL AS pct_hc_sin_ins_base,
-        NULL AS pct_hc_sin_ins_actual,
         NULL AS prod_base,
         NULL AS prod_actual,
         0 AS activo_base,
@@ -968,7 +953,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--te
 .filters{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;background:var(--white);border:1px solid var(--border);border-radius:16px;padding:10px 12px;box-shadow:0 2px 8px rgba(15,23,42,.04)}.filter-label{font-size:.8rem;font-weight:900;color:#334155;margin-right:4px}.filter-btn{border:1px solid #dbe3f0;background:#f8fafc;color:#334155;border-radius:999px;padding:7px 12px;font-size:.78rem;font-weight:900;cursor:pointer}.filter-btn.active,.filter-btn:hover{background:#e8f0fe;color:var(--blue);border-color:#bcd0f5}.counter{margin-left:auto;color:var(--text2);font-size:.78rem;font-weight:800}
 .table-card{background:var(--white);border-radius:18px;border:1px solid var(--border);box-shadow:0 2px 10px rgba(15,23,42,.05);overflow:hidden}.table-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border)}.table-head strong{font-size:.95rem;color:#0f1f3d}.table-head span{color:var(--text2);font-size:.8rem}.table-wrap{overflow:auto}
 table{width:100%;border-collapse:separate;border-spacing:0;font-size:.78rem;min-width:1360px}th{position:sticky;top:0;z-index:2;background:var(--blue);color:white;padding:10px 8px;text-align:left;font-weight:900;text-transform:uppercase;letter-spacing:.35px;border-right:1px solid rgba(255,255,255,.25);vertical-align:bottom}th.num,td.num{text-align:right}th.center,td.center{text-align:center}th.group{background:#cfcfd2;color:#111827;text-align:center;border-right:2px solid #0f172a}th.sub-gray{background:#d9d9dc;color:#111827}th.sortable{cursor:pointer;user-select:none}th.sortable .sort-icon{opacity:.65;margin-left:4px;font-size:.72rem}
-td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid #eef2f7;white-space:nowrap}tbody tr:hover td{background:#f8fbff}.clickable{cursor:pointer}.clickable:hover td{background:#eef6ff!important}.rank{display:inline-flex;justify-content:center;align-items:center;min-width:24px;height:24px;border-radius:999px;background:#e8f0fe;color:var(--blue);font-weight:900;padding:0 8px}.entity{font-weight:800;color:#0f1f3d}.district{font-weight:800;color:#334155}.badge{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.badge.up{background:#bbf7d0;color:#166534}.badge.flat{background:#FFF3CD;color:#856404}.badge.down{background:#fed7aa;color:#9a3412}.badge.down-hard{background:#fecaca;color:#991b1b}
+td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid #eef2f7;white-space:nowrap}tbody tr:hover td{background:#f8fbff}.clickable{cursor:pointer}.clickable:hover td{background:#eef6ff!important}.rank{display:inline-flex;justify-content:center;align-items:center;min-width:24px;height:24px;border-radius:999px;background:#e8f0fe;color:var(--blue);font-weight:900;padding:0 8px}.entity{font-weight:800;color:#0f1f3d}.district{font-weight:800;color:#334155}.badge{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.badge.up{background:#bbf7d0;color:#166534}.badge.flat{background:#dbeafe;color:#1d4ed8}.badge.down{background:#fed7aa;color:#9a3412}.badge.down-hard{background:#fecaca;color:#991b1b}
 .prod{font-weight:900;border-radius:8px;padding:4px 8px;display:inline-block;min-width:48px;text-align:center}.prod.tier-1{background:#bbf7d0;color:#065f46}.prod.tier-2{background:#fde68a;color:#78350f}.prod.tier-3{background:#fed7aa;color:#9a3412}.prod.tier-4{background:#fecaca;color:#991b1b}.prod.muted{background:#f1f5f9;color:#94a3b8}.hc-indicator{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.hc-good{background:#bbf7d0;color:#166534}.hc-mid{background:#fde68a;color:#78350f}.hc-bad{background:#fecaca;color:#991b1b}.gray-cell{background:#f1f1f3}.total-row td{background:#f3f4f6!important;color:#111827!important;font-weight:900!important;border-top:2px solid #9ca3af!important}.error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:14px;padding:14px 16px;margin-bottom:16px;font-weight:700}
 .sales-table{min-width:640px}.sales-table .sales-zero{color:#94a3b8}.sales-table .sales-hit{font-weight:900;color:#065f46}
 @media(max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{flex-direction:column}.week-nav{justify-content:flex-start}.counter{margin-left:0;width:100%}}@media(max-width:760px){:root{--sidebar:0}.sidebar{display:none}.main{margin-left:0;padding:20px}.cards{grid-template-columns:1fr}}
@@ -1327,10 +1312,10 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <th rowspan="2" class="center sortable" data-key="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_activo_base">HC Activo<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_activo_actual">HC Activo<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_base">HC con INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num sortable" data-key="hc_con_ins_actual">HC con INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="pct_hc_sin_ins_base">% HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="pct_hc_sin_ins_actual">% HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="center sortable" data-key="prod_base">PROD. DIARIA<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="center sortable" data-key="prod_actual">PROD. DIARIA<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th colspan="2" class="group">Head Count <?= h($label_col_base) ?></th>
@@ -1353,7 +1338,7 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
-                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
+                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
                     data-<?= h($k) ?>="<?= h($r[$k] ?? 0) ?>"
                     <?php endforeach; ?>>
                     <td class="center"><span class="rank"><?= $rank++ ?></span></td>
@@ -1365,10 +1350,10 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <td class="center"><span class="badge <?= pct_class($r['pct_dif']) ?>"><?= $r['pct_dif'] === null ? '-' : fmt_num($r['pct_dif']).'%' ?></span></td>
                     <td class="num"><?= fmt_num($r['hc_activo_base']) ?></td>
                     <td class="num"><?= fmt_num($r['hc_activo_actual']) ?></td>
-                    <td class="num"><?= fmt_num($r['hc_sin_venta_base']) ?></td>
-                    <td class="num"><?= fmt_num($r['hc_sin_venta_actual']) ?></td>
-                    <td class="center"><span class="badge <?= pct_hc_sin_ins_class($r['pct_hc_sin_ins_base'] ?? null) ?>"><?= ($r['pct_hc_sin_ins_base'] ?? null) === null ? '-' : fmt_num($r['pct_hc_sin_ins_base']).'%' ?></span></td>
-                    <td class="center"><span class="badge <?= pct_hc_sin_ins_class($r['pct_hc_sin_ins_actual'] ?? null) ?>"><?= ($r['pct_hc_sin_ins_actual'] ?? null) === null ? '-' : fmt_num($r['pct_hc_sin_ins_actual']).'%' ?></span></td>
+                    <td class="num"><?= fmt_num($r['hc_con_ins_base']) ?></td>
+                    <td class="num"><?= fmt_num($r['hc_con_ins_actual']) ?></td>
+                    <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_base']) ?>"><?= fmt_num($r['hc_sin_venta_base']) ?></span></td>
+                    <td class="num"><span class="hc-indicator <?= hc_sin_venta_class($r['hc_sin_venta_actual']) ?>"><?= fmt_num($r['hc_sin_venta_actual']) ?></span></td>
                     <td class="center"><span class="prod <?= prod_class($r['prod_base']) ?>"><?= fmt_prod($r['prod_base']) ?></span></td>
                     <td class="center"><span class="prod <?= prod_class($r['prod_actual']) ?>"><?= fmt_prod($r['prod_actual']) ?></span></td>
                     <td class="num gray-cell"><?= fmt_num($r['vacante_base']) ?></td>
@@ -1385,10 +1370,10 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                     <td class="center"><span id="total-pct" class="badge <?= pct_class($tot['pct_dif']) ?>"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span></td>
                     <td class="num" data-total-key="hc_activo_base"><?= fmt_num($tot['hc_activo_base']) ?></td>
                     <td class="num" data-total-key="hc_activo_actual"><?= fmt_num($tot['hc_activo_actual']) ?></td>
-                    <td class="num" id="total-hc-sin-base"><?= fmt_num($tot['hc_sin_venta_base']) ?></td>
-                    <td class="num" id="total-hc-sin-actual"><?= fmt_num($tot['hc_sin_venta_actual']) ?></td>
-                    <td class="center"><span id="total-pct-hc-sin-base" class="badge <?= pct_hc_sin_ins_class($tot['pct_hc_sin_ins_base'] ?? null) ?>"><?= ($tot['pct_hc_sin_ins_base'] ?? null) === null ? '-' : fmt_num($tot['pct_hc_sin_ins_base']).'%' ?></span></td>
-                    <td class="center"><span id="total-pct-hc-sin-actual" class="badge <?= pct_hc_sin_ins_class($tot['pct_hc_sin_ins_actual'] ?? null) ?>"><?= ($tot['pct_hc_sin_ins_actual'] ?? null) === null ? '-' : fmt_num($tot['pct_hc_sin_ins_actual']).'%' ?></span></td>
+                    <td class="num" data-total-key="hc_con_ins_base"><?= fmt_num($tot['hc_con_ins_base']) ?></td>
+                    <td class="num" data-total-key="hc_con_ins_actual"><?= fmt_num($tot['hc_con_ins_actual']) ?></td>
+                    <td class="num"><span id="total-hc-sin-base" class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_base']) ?>"><?= fmt_num($tot['hc_sin_venta_base']) ?></span></td>
+                    <td class="num"><span id="total-hc-sin-actual" class="hc-indicator <?= hc_sin_venta_class($tot['hc_sin_venta_actual']) ?>"><?= fmt_num($tot['hc_sin_venta_actual']) ?></span></td>
                     <td class="center"><span id="total-prod-base" class="prod <?= prod_class($tot['prod_base']) ?>"><?= fmt_prod($tot['prod_base']) ?></span></td>
                     <td class="center"><span id="total-prod-actual" class="prod <?= prod_class($tot['prod_actual']) ?>"><?= fmt_prod($tot['prod_actual']) ?></span></td>
                     <td class="num gray-cell" data-total-key="vacante_base"><?= fmt_num($tot['vacante_base']) ?></td>
@@ -1599,9 +1584,8 @@ function num(v){const n=parseFloat(v);return isNaN(n)?0:n}
 function fmt0(n){return Math.round(n).toLocaleString('en-US')}
 function fmt2(n){return (Math.round(n*100)/100).toFixed(2)}
 function pctClass(n){if(n>=5)return'badge up';if(n<=-10)return'badge down-hard';if(n<0)return'badge down';return'badge flat'}
-function prodClass(n){if(n>=0.70)return'prod tier-1';if(n>=0.55)return'prod tier-2';if(n>=0.40)return'prod tier-3';return'prod tier-4'}
+function prodClass(n){if(n>=0.50)return'prod tier-1';if(n>=0.40)return'prod tier-2';if(n>=0.30)return'prod tier-3';return'prod tier-4'}
 function hcClass(n){if(n<=2)return'hc-indicator hc-good';if(n<=5)return'hc-indicator hc-mid';return'hc-indicator hc-bad'}
-function pctHcClass(n){if(n===null)return'badge flat';if(n<=5)return'badge up';if(n<=10)return'badge flat';return'badge down-hard'}
 function visibleRows(){return dataRows().filter(r=>r.style.display!=='none')}
 function applyFilter(){
  dataRows().forEach(r=>{r.style.display=(activeDistrict==='ALL'||r.dataset.district===activeDistrict)?'':'none'});
@@ -1610,20 +1594,16 @@ function applyFilter(){
 function recalc(){
  const rows=visibleRows();
  rows.forEach((r,i)=>{const rk=r.querySelector('.rank');if(rk)rk.textContent=i+1});
- const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
+ const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
  const t={};keys.forEach(k=>t[k]=0);
  rows.forEach(r=>keys.forEach(k=>t[k]+=num(r.dataset[k])));
  const pct=t.ins_sem_base>0?Math.round(((t.ins_sem_actual-t.ins_sem_base)/t.ins_sem_base)*100):null;
- const pctHcSinBase=t.hc_activo_base>0?Math.round((t.hc_sin_venta_base/t.hc_activo_base)*100):null;
- const pctHcSinActual=t.hc_activo_actual>0?Math.round((t.hc_sin_venta_actual/t.hc_activo_actual)*100):null;
  const pb=(t.hc_activo_base>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/t.hc_activo_base/DIAS_HABILES_BASE:null;
  const pa=(t.hc_activo_actual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/t.hc_activo_actual/DIAS_HABILES_ACTUAL:null;
  document.querySelectorAll('[data-total-key]').forEach(td=>td.textContent=fmt0(t[td.dataset.totalKey]||0));
  const p=document.getElementById('total-pct');p.textContent=pct===null?'-':fmt0(pct)+'%';p.className=pct===null?'badge flat':pctClass(pct);
- const hb=document.getElementById('total-hc-sin-base');hb.textContent=fmt0(t.hc_sin_venta_base);
- const ha=document.getElementById('total-hc-sin-actual');ha.textContent=fmt0(t.hc_sin_venta_actual);
- const phb=document.getElementById('total-pct-hc-sin-base');if(phb){phb.textContent=pctHcSinBase===null?'-':fmt0(pctHcSinBase)+'%';phb.className=pctHcClass(pctHcSinBase);}
- const pha=document.getElementById('total-pct-hc-sin-actual');if(pha){pha.textContent=pctHcSinActual===null?'-':fmt0(pctHcSinActual)+'%';pha.className=pctHcClass(pctHcSinActual);}
+ const hb=document.getElementById('total-hc-sin-base');hb.textContent=fmt0(t.hc_sin_venta_base);hb.className=hcClass(t.hc_sin_venta_base);
+ const ha=document.getElementById('total-hc-sin-actual');ha.textContent=fmt0(t.hc_sin_venta_actual);ha.className=hcClass(t.hc_sin_venta_actual);
  const tb=document.getElementById('total-prod-base');tb.textContent=pb===null?'-':fmt2(pb);tb.className=pb===null?'prod muted':prodClass(pb);
  const ta=document.getElementById('total-prod-actual');ta.textContent=pa===null?'-':fmt2(pa);ta.className=pa===null?'prod muted':prodClass(pa);
  document.getElementById('kpi-ins-actual').textContent=fmt0(t.ins_sem_actual);
