@@ -480,13 +480,33 @@ $dias_semana_labels = [
     6 => 'SÁB'
 ];
 
-$dias_semana_seleccionados = [1,2,3,4,5,6];
+// Selector semanal operativo.
+// Por default muestra solo días vencidos con base en la última fecha cargada.
+// Ejemplo: si última carga es viernes de SEM21, default = LUN-VIE.
+$dias_semana_disponibles = [1,2,3,4,5,6];
+if ($periodo === 'semanal' && $anio_actual == $max_anio_operativo && $semana_actual == $max_semana_operativa) {
+    $ultima_fecha_operativa = null;
+    if (!empty($row_max_inst['ultima_fecha'])) {
+        $ultima_fecha_operativa = $row_max_inst['ultima_fecha'];
+    } else {
+        $res_uf = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL");
+        if ($res_uf && $row_uf = mysqli_fetch_assoc($res_uf)) $ultima_fecha_operativa = $row_uf['ultima_fecha'] ?? null;
+    }
+
+    if ($ultima_fecha_operativa) {
+        $dow_ultima = (int)date('N', strtotime($ultima_fecha_operativa)); // 1=LUN ... 7=DOM
+        $dow_ultima = min(6, max(1, $dow_ultima));
+        $dias_semana_disponibles = range(1, $dow_ultima);
+    }
+}
+
+$dias_semana_seleccionados = $dias_semana_disponibles;
 if ($periodo === 'semanal' && isset($_GET['dias_semana'])) {
     $raw_dias = explode(',', (string)$_GET['dias_semana']);
     $tmp_dias = [];
     foreach ($raw_dias as $d) {
         $n = (int)$d;
-        if ($n >= 1 && $n <= 6 && !in_array($n, $tmp_dias, true)) {
+        if ($n >= 1 && $n <= 6 && in_array($n, $dias_semana_disponibles, true) && !in_array($n, $tmp_dias, true)) {
             $tmp_dias[] = $n;
         }
     }
@@ -1124,13 +1144,30 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                         <input type="hidden" name="periodo" value="semanal">
                         <input type="hidden" name="dias_semana" id="diasSemanaInput" value="<?= h(implode(',', $dias_semana_seleccionados)) ?>">
 
-                        <div class="range-panel-title">Selecciona días comparables</div>
-                        <div class="weekday-grid" id="weekdayGrid">
-                            <?php foreach ($dias_semana_labels as $dia_num => $dia_lbl): ?>
+                        <div class="range-panel-title">Selecciona días comparables de Semana <?= h($semana_actual) ?> · <?= h($anio_actual) ?></div>
+                        <div class="calendar-grid-real weekday-grid-real" id="weekdayGrid">
+                            <div class="calendar-weekday">Lun</div>
+                            <div class="calendar-weekday">Mar</div>
+                            <div class="calendar-weekday">Mié</div>
+                            <div class="calendar-weekday">Jue</div>
+                            <div class="calendar-weekday">Vie</div>
+                            <div class="calendar-weekday">Sáb</div>
+                            <div class="calendar-weekday">Dom</div>
+
+                            <?php for ($dia_num = 1; $dia_num <= 7; $dia_num++): ?>
+                                <?php
+                                    $disabled_week_day = ($dia_num === 7 || !in_array($dia_num, $dias_semana_disponibles, true));
+                                    $selected_week_day = in_array($dia_num, $dias_semana_seleccionados, true);
+                                    $week_day_class = $selected_week_day ? 'selected-start selected-end' : '';
+                                    if ($disabled_week_day) $week_day_class .= ' disabled-day';
+                                ?>
                                 <button type="button"
-                                        class="weekday-day <?= in_array($dia_num, $dias_semana_seleccionados, true) ? 'selected' : '' ?>"
-                                        data-day="<?= h($dia_num) ?>"><?= h($dia_lbl) ?></button>
-                            <?php endforeach; ?>
+                                        class="calendar-day weekday-day <?= h(trim($week_day_class)) ?>"
+                                        data-day="<?= h($dia_num) ?>"
+                                        <?= $disabled_week_day ? 'disabled' : '' ?>>
+                                    <?= h($dia_num <= 6 ? $dias_semana_labels[$dia_num] : 'DOM') ?>
+                                </button>
+                            <?php endfor; ?>
                         </div>
 
                         <div class="range-summary">
@@ -1138,7 +1175,7 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                         </div>
 
                         <div class="range-actions">
-                            <button type="button" class="quick-week" id="weekFullBtn">Semana completa</button>
+                            <button type="button" class="quick-week" id="weekFullBtn">Semana completa disponible</button>
                             <button type="submit">Aplicar</button>
                         </div>
                     </form>
@@ -1745,8 +1782,13 @@ recalc();
 
     if(!dropdown || !trigger || !grid || !input) return;
 
+    function buttons(){
+        return [...grid.querySelectorAll('.weekday-day:not(:disabled)')];
+    }
+
     function selectedDays(){
-        return [...grid.querySelectorAll('.weekday-day.selected')]
+        return buttons()
+            .filter(btn => btn.classList.contains('selected-start'))
             .map(btn => parseInt(btn.dataset.day, 10))
             .filter(n => n >= 1 && n <= 6)
             .sort((a,b)=>a-b);
@@ -1756,12 +1798,17 @@ recalc();
         let days = selectedDays();
 
         if(days.length === 0){
-            const first = grid.querySelector('.weekday-day');
-            if(first) first.classList.add('selected');
+            const first = buttons()[0];
+            if(first) first.classList.add('selected-start','selected-end');
             days = selectedDays();
         }
 
         input.value = days.join(',');
+    }
+
+    function markSelected(btn, selected){
+        btn.classList.toggle('selected-start', selected);
+        btn.classList.toggle('selected-end', selected);
     }
 
     trigger.addEventListener('click', (e)=>{
@@ -1775,16 +1822,17 @@ recalc();
         dropdown.classList.remove('open');
     });
 
-    grid.querySelectorAll('.weekday-day').forEach(btn=>{
+    buttons().forEach(btn=>{
         btn.addEventListener('click', ()=>{
-            btn.classList.toggle('selected');
+            const selected = !(btn.classList.contains('selected-start') || btn.classList.contains('selected-end'));
+            markSelected(btn, selected);
             sync();
         });
     });
 
     if(fullBtn){
         fullBtn.addEventListener('click', ()=>{
-            grid.querySelectorAll('.weekday-day').forEach(btn=>btn.classList.add('selected'));
+            buttons().forEach(btn=>markSelected(btn, true));
             sync();
         });
     }

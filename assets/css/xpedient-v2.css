@@ -3518,76 +3518,73 @@ body.page-hc .toggle-btn{
 }
 
 /* =========================================================
-   RANKING — SELECTOR SEMANAL DINÁMICO
+   RANKING — SELECTOR SEMANAL TIPO CALENDARIO
+   v semanal dinámico
 ========================================================= */
 
-body.page-ranking .week-picker-panel{
-    display:none;
-    position:absolute;
-    top:52px;
-    right:0;
-    width:360px;
-    background:rgba(255,255,255,.95);
-    border:1px solid rgba(255,255,255,.70);
-    border-radius:22px;
-    box-shadow:var(--shadow);
-    backdrop-filter:blur(18px);
-    padding:18px;
-    z-index:9999;
+body.page-ranking .week-range-panel{
+    width:360px !important;
 }
 
-body.page-ranking .week-dropdown.open .week-picker-panel{
-    display:block;
+body.page-ranking .weekday-grid-real{
+    display:grid !important;
+    grid-template-columns:repeat(7,1fr) !important;
+    gap:6px !important;
 }
 
-body.page-ranking .week-picker-title{
-    font-size:.82rem;
-    font-weight:800;
-    color:#24324A;
-    margin-bottom:14px;
+body.page-ranking .weekday-grid-real .weekday-day{
+    width:100% !important;
+    height:38px !important;
+    border:none !important;
+    border-radius:12px !important;
+    background:rgba(122,43,255,.08) !important;
+    color:#24324A !important;
+    font-size:.72rem !important;
+    font-weight:900 !important;
+    cursor:pointer !important;
+    transition:all .18s ease !important;
 }
 
-body.page-ranking .week-days-grid{
-    display:grid;
-    grid-template-columns:repeat(6,1fr);
-    gap:8px;
-}
-
-body.page-ranking .week-day-btn{
-    border:none;
-    border-radius:12px;
-    padding:10px 8px;
-    background:rgba(122,43,255,.08);
-    color:#24324A;
-    font-size:.74rem;
-    font-weight:800;
-    cursor:pointer;
-    transition:all .18s ease;
-}
-
-body.page-ranking .week-day-btn:hover{
-    background:rgba(122,43,255,.16);
+body.page-ranking .weekday-grid-real .weekday-day:hover:not(:disabled){
+    background:rgba(122,43,255,.16) !important;
     transform:translateY(-1px);
 }
 
-body.page-ranking .week-day-btn.active{
-    background:linear-gradient(135deg,#7A2BFF,#FF0AC8);
-    color:#fff;
+body.page-ranking .weekday-grid-real .weekday-day.selected-start,
+body.page-ranking .weekday-grid-real .weekday-day.selected-end{
+    background:linear-gradient(135deg,#7A2BFF,#FF0AC8) !important;
+    color:#fff !important;
+    box-shadow:0 8px 18px rgba(122,43,255,.18) !important;
 }
 
-body.page-ranking .week-picker-actions{
-    margin-top:16px;
-    display:flex;
-    justify-content:flex-end;
+body.page-ranking .weekday-grid-real .weekday-day.disabled-day,
+body.page-ranking .weekday-grid-real .weekday-day:disabled{
+    background:#F3F4F6 !important;
+    color:#CBD5E1 !important;
+    cursor:not-allowed !important;
+    opacity:.75 !important;
+    transform:none !important;
 }
 
-body.page-ranking .week-picker-apply{
-    border:none;
-    border-radius:999px;
-    padding:10px 18px;
-    font-size:.76rem;
-    font-weight:800;
-    cursor:pointer;
-    background:linear-gradient(135deg,#7A2BFF,#FF0AC8);
-    color:white;
+body.page-ranking .quick-week{
+    border:none !important;
+    border-radius:999px !important;
+    padding:9px 14px !important;
+    font-size:.74rem !important;
+    font-weight:800 !important;
+    cursor:pointer !important;
+    text-decoration:none !important;
+    background:rgba(122,43,255,.10) !important;
+    color:#5B21B6 !important;
+}
+
+body.page-ranking .quick-week:hover{
+    background:rgba(122,43,255,.16) !important;
+}
+
+@media(max-width:760px){
+    body.page-ranking .week-range-panel{
+        width:320px !important;
+        right:0 !important;
+    }
 }
