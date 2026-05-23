@@ -136,38 +136,47 @@ function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dia
     if (empty($dias_iso)) return 1;
 
     $lunes = fecha_iso_semana_inicio($anio, $semana);
-    $sabado = clone $lunes;
-    $sabado->modify('+5 days');
+    $fechas_seleccionadas = [];
 
+    foreach ($dias_iso as $dia_iso) {
+        $dia_iso = (int)$dia_iso;
+        if ($dia_iso < 1 || $dia_iso > 6) continue; // 1=LUN ... 6=SÁB, domingo no opera
+
+        $fecha = clone $lunes;
+        $fecha->modify('+'.($dia_iso - 1).' days');
+        $fechas_seleccionadas[$fecha->format('Y-m-d')] = true;
+    }
+
+    if (empty($fechas_seleccionadas)) return 1;
+
+    // Regla semanal: los días hábiles son los días operativos seleccionados,
+    // menos festivos oficiales capturados en dias_inhabiles.
     $festivos = [];
     if (table_exists($conexion, 'dias_inhabiles')) {
-        $fi = mysqli_real_escape_string($conexion, $lunes->format('Y-m-d'));
-        $ff = mysqli_real_escape_string($conexion, $sabado->format('Y-m-d'));
-        $sql = "
-            SELECT fecha
-            FROM dias_inhabiles
-            WHERE activo = 1
-              AND fecha BETWEEN '$fi' AND '$ff'
-        ";
-        $res = mysqli_query($conexion, $sql);
-        if ($res) {
-            while ($row = mysqli_fetch_assoc($res)) {
-                $festivos[$row['fecha']] = true;
+        $fechas_sql = [];
+        foreach (array_keys($fechas_seleccionadas) as $fecha_sel) {
+            $fechas_sql[] = "'".mysqli_real_escape_string($conexion, $fecha_sel)."'";
+        }
+
+        if (!empty($fechas_sql)) {
+            $sql = "
+                SELECT fecha
+                FROM dias_inhabiles
+                WHERE fecha IN (".implode(',', $fechas_sql).")
+                  AND (activo = 1 OR activo IS NULL)
+            ";
+            $res = mysqli_query($conexion, $sql);
+            if ($res) {
+                while ($row = mysqli_fetch_assoc($res)) {
+                    $festivos[$row['fecha']] = true;
+                }
             }
         }
     }
 
     $habiles = 0;
-    foreach ($dias_iso as $dia_iso) {
-        $dia_iso = (int)$dia_iso;
-        if ($dia_iso < 1 || $dia_iso > 6) continue;
-
-        $fecha = clone $lunes;
-        $fecha->modify('+'.($dia_iso - 1).' days');
-        $fecha_str = $fecha->format('Y-m-d');
-
-        if (isset($festivos[$fecha_str])) continue;
-
+    foreach (array_keys($fechas_seleccionadas) as $fecha_sel) {
+        if (isset($festivos[$fecha_sel])) continue;
         $habiles++;
     }
 
@@ -264,8 +273,12 @@ $next_semana = $semana_actual + 1; $next_anio = $anio_actual;
 if ($next_semana > 53) { $next_semana = 1; $next_anio++; }
 
 $has_prev = isset($semanas_key[$prev_anio.'-'.$prev_semana]);
-$has_next = isset($semanas_key[$next_anio.'-'.$next_semana])
-    || ($next_anio < $max_anio_operativo || ($next_anio == $max_anio_operativo && $next_semana <= $max_semana_operativa));
+// Solo permitir navegar a semanas con datos operativos reales.
+// La semana futura queda bloqueada aunque exista por calendario.
+$has_next = (
+    $next_anio < $max_anio_operativo
+    || ($next_anio == $max_anio_operativo && $next_semana <= $max_semana_operativa)
+);
 
 $view = $_GET['view'] ?? 'lideres';
 if (!in_array($view, ['lideres','coaches','vendedores','ventas'], true)) $view = 'lideres';
