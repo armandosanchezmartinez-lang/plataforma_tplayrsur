@@ -224,101 +224,159 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2 — TOTALXPEDIENT</title>
+    <title>REAI — TOTALXPEDIENT</title>
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
-        :root { --blue:#2b57a7; --bg:#f4f6fb; --white:#fff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --red:#ef4444; --sidebar:200px; }
-        * { box-sizing:border-box; margin:0; padding:0; }
-        body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
-        .sidebar { width:var(--sidebar); background:var(--blue); min-height:100vh; position:fixed; top:0; left:0; display:flex; flex-direction:column; align-items:center; padding:28px 0; z-index:100; }
-        .sidebar-logo { color:white; font-size:2rem; margin-bottom:6px; }
-        .sidebar-brand { color:rgba(255,255,255,0.9); font-size:0.72rem; font-weight:800; letter-spacing:1px; text-transform:uppercase; margin-bottom:32px; text-align:center; padding:0 12px; }
-        .nav-item { width:100%; display:flex; flex-direction:column; align-items:center; gap:4px; padding:14px 0; color:rgba(255,255,255,0.65); text-decoration:none; font-size:0.78rem; font-weight:600; transition:all 0.2s; }
-        .nav-item:hover,.nav-item.active { color:white; background:rgba(255,255,255,0.12); }
-        .nav-icon { font-size:1.3rem; }
-        .sidebar-bottom { margin-top:auto; width:100%; padding:0 12px; }
-        .logout-btn { display:block; text-align:center; padding:10px; border-radius:8px; color:rgba(255,255,255,0.6); text-decoration:none; font-size:0.78rem; font-weight:600; }
-        .logout-btn:hover { background:rgba(255,255,255,0.1); color:white; }
-        .main { margin-left:var(--sidebar); flex:1; padding:32px; min-width:0; }
-        
-        .page-header { margin-bottom:20px; }
-        .page-header h2 { font-size:1.5rem; font-weight:700; }
-        .page-header p { font-size:0.82rem; color:var(--text2); margin-top:2px; }
-        .search-bar { margin-bottom:16px; }
-        .search-input { width:100%; max-width:380px; padding:10px 16px 10px 40px; border:1px solid var(--border); border-radius:10px; font-size:0.9rem; background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236b7a99' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.156a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z'/%3E%3C/svg%3E") no-repeat 12px center; outline:none; }
-        .search-input:focus { border-color:var(--blue); }
-        
-        /* CORRECCIÓN DEL SCROLL DE LA TABLA */
-        .table-card { 
-            background: var(--white); 
-            border-radius: 16px; 
-            border: 1px solid var(--border); 
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04); 
-            overflow-x: auto; 
+        /* Soporte específico REAI: modal, historial y toast.
+           El layout, sidebar, tabla, buscador y badges vienen del CSS maestro. */
+        body.page-reai .modal-overlay.active{display:flex !important;}
+        body.page-reai .modal-box{
+            max-width:560px;
+            max-height:90vh;
+            overflow-y:auto;
         }
-
-        table { width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap; }
-        thead tr:first-child th { background:#1d4ed8; color:white; padding:10px 12px; font-weight:700; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.5px; text-align:center; }
-        thead tr:last-child th { background:var(--blue); color:white; padding:8px 12px; font-weight:700; font-size:0.7rem; text-transform:uppercase; text-align:center; }
-        thead th.left { text-align:left; }
-        tbody tr { border-bottom:1px solid var(--border); }
-        tbody tr:last-child { border-bottom:none; }
-        tbody tr:hover td { background:#f8faff; }
-        td { padding:10px 12px; vertical-align:middle; text-align:center; }
-        td.left { text-align:left; }
-        .sub-text { font-size:0.68rem; color:var(--text2); margin-top:2px; }
-        .num-pos { color:var(--green); font-weight:700; }
-        .num-neg { color:var(--red); font-weight:700; }
-        .num-neu { color:var(--text2); font-weight:600; }
-        .diff-badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:0.7rem; font-weight:700; }
-        .diff-pos { background:#d1fae5; color:#065f46; }
-        .diff-neg { background:#fee2e2; color:#991b1b; }
-        .diff-neu { background:#f4f6fb; color:#6b7a99; }
-        .reai-badge { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:7px; font-size:0.7rem; font-weight:700; cursor:pointer; border:none; transition:all 0.15s; }
-        .reai-badge.has-data { background:#e8f0fe; color:var(--blue); }
-        .reai-badge.no-data  { background:#f4f6fb; color:#d1d5db; cursor:default; }
-        .reai-badge.can-add  { background:#f0fdf4; color:#059669; }
-        .reai-badge:hover:not(.no-data) { transform:scale(1.15); }
-        .sep { border-left:2px solid var(--border); }
-        
-        /* CORRECCIÓN DE ESTILOS DEL MODAL */
-        .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center; }
-        .modal-overlay.open { display:flex !important; }
-        .modal { background:white; border-radius:16px; padding:28px; width:100%; max-width:520px; box-shadow:0 20px 60px rgba(0,0,0,0.2); max-height:90vh; overflow-y:auto; }
-        
-        .modal-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; }
-        .modal-title { font-size:1rem; font-weight:700; line-height:1.3; }
-        .modal-close { background:none; border:none; font-size:1.4rem; cursor:pointer; color:var(--text2); flex-shrink:0; margin-left:12px; }
-        .form-group { margin-bottom:16px; text-align: left; }
-        .form-group label { display:block; font-size:0.78rem; font-weight:700; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
-        .form-group select,.form-group input,.form-group textarea { width:100%; padding:10px 14px; border:1px solid var(--border); border-radius:8px; font-size:0.9rem; font-family:inherit; outline:none; }
-        .form-group textarea { resize:vertical; min-height:80px; }
-        .btn-primary { width:100%; padding:12px; background:var(--blue); color:white; border:none; border-radius:8px; font-size:0.95rem; font-weight:700; cursor:pointer; }
-        .btn-primary:disabled { background:#9ca3af; cursor:not-allowed; }
-        .historial-item { border:1px solid var(--border); border-radius:10px; padding:14px; margin-bottom:10px; text-align: left; }
-        .historial-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-        .historial-asunto { font-size:0.78rem; font-weight:700; padding:3px 10px; border-radius:20px; }
-        .asunto-r { background:#dbeafe; color:#1d4ed8; }
-        .asunto-e { background:#fef3c7; color:#92400e; }
-        .asunto-a { background:#fee2e2; color:#991b1b; }
-        .asunto-i { background:#f3e8ff; color:#6b21a8; }
-        .historial-fecha { font-size:0.75rem; color:var(--text2); }
-        .historial-desc { font-size:0.82rem; margin-top:6px; }
-        .historial-evidencia a { font-size:0.78rem; color:var(--blue); text-decoration:none; font-weight:600; }
-        .divider { border:none; border-top:1px solid var(--border); margin:20px 0; }
-        .section-label { font-size:0.78rem; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:14px; font-weight:700; text-align: left;}
-        .toast { position:fixed; bottom:24px; right:24px; padding:12px 20px; border-radius:10px; font-size:0.85rem; font-weight:600; z-index:9999; display:none; color:white; }
-        .toast.show { display:block; }
-        .toast.success { background:#065f46; }
-        .toast.error   { background:#991b1b; }
-        .hidden { display:none; }
-        .empty-state { text-align:center; padding:48px; color:var(--text2); }
+        body.page-reai .modal-header{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:14px;
+            margin-bottom:20px;
+        }
+        body.page-reai .modal-close{
+            background:none;
+            border:none;
+            font-size:1.4rem;
+            color:var(--text2);
+            cursor:pointer;
+            line-height:1;
+        }
+        body.page-reai .form-group{
+            margin-bottom:16px;
+            text-align:left;
+        }
+        body.page-reai .form-group label{
+            display:block;
+            font-size:.78rem;
+            font-weight:700;
+            color:var(--text2);
+            text-transform:uppercase;
+            letter-spacing:.5px;
+            margin-bottom:6px;
+        }
+        body.page-reai .form-group select,
+        body.page-reai .form-group input,
+        body.page-reai .form-group textarea{
+            width:100%;
+            padding:10px 14px;
+            border:1px solid rgba(122,43,255,.14);
+            border-radius:12px;
+            background:rgba(245,247,255,.85);
+            color:var(--text);
+            font-size:.9rem;
+            outline:none;
+        }
+        body.page-reai .form-group textarea{
+            resize:vertical;
+            min-height:90px;
+        }
+        body.page-reai .btn-primary{
+            width:100%;
+            padding:12px;
+            border:none;
+            border-radius:14px;
+            background:var(--grad-main);
+            color:white;
+            font-size:.92rem;
+            font-weight:800;
+            cursor:pointer;
+        }
+        body.page-reai .btn-primary:disabled{
+            opacity:.6;
+            cursor:not-allowed;
+        }
+        body.page-reai .historial-item{
+            border:1px solid rgba(122,43,255,.12);
+            border-radius:14px;
+            padding:14px;
+            margin-bottom:10px;
+            background:rgba(255,255,255,.62);
+            text-align:left;
+        }
+        body.page-reai .historial-header{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+            margin-bottom:8px;
+        }
+        body.page-reai .historial-asunto{
+            display:inline-flex;
+            align-items:center;
+            padding:4px 10px;
+            border-radius:999px;
+            font-size:.74rem;
+            font-weight:800;
+        }
+        body.page-reai .asunto-r{background:#DBEAFE;color:#1D4ED8;}
+        body.page-reai .asunto-e{background:#FEF3C7;color:#92400E;}
+        body.page-reai .asunto-a{background:#FEE2E2;color:#991B1B;}
+        body.page-reai .asunto-i{background:#F3E8FF;color:#6B21A8;}
+        body.page-reai .historial-fecha,
+        body.page-reai .historial-desc,
+        body.page-reai .historial-evidencia a{
+            font-size:.8rem;
+        }
+        body.page-reai .historial-fecha{color:var(--text2);}
+        body.page-reai .historial-evidencia a{
+            color:#7A2BFF;
+            text-decoration:none;
+            font-weight:700;
+        }
+        body.page-reai .divider{
+            border:none;
+            border-top:1px solid rgba(122,43,255,.12);
+            margin:20px 0;
+        }
+        body.page-reai .section-label{
+            font-size:.76rem;
+            color:var(--text2);
+            text-transform:uppercase;
+            letter-spacing:.6px;
+            margin-bottom:14px;
+            font-weight:800;
+            text-align:left;
+        }
+        body.page-reai .toast{
+            position:fixed;
+            bottom:24px;
+            right:24px;
+            padding:12px 20px;
+            border-radius:12px;
+            font-size:.85rem;
+            font-weight:700;
+            z-index:9999;
+            display:none;
+            color:white;
+            box-shadow:var(--shadow);
+        }
+        body.page-reai .toast.show{display:block;}
+        body.page-reai .toast.success{background:#065F46;}
+        body.page-reai .toast.error{background:#991B1B;}
+        body.page-reai .empty-state{
+            text-align:center;
+            padding:48px;
+            color:var(--text2);
+        }
     </style>
 </head>
-<body>
+<body class="page-reai">
 <aside class="sidebar">
-    <div class="sidebar-logo">📊</div>
+    <div class="sidebar-logo">
+        <img src="../assets/img/logo-xpedient.png?v=3" alt="Xpedient">
+    </div>
     <div class="sidebar-brand">TOTALXPEDIENT</div>
     <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="ranking_productividad.php?anio=<?= $anio_actual ?>&semana=<?= $semana_actual ?>" class="nav-item"><span class="nav-icon">🏆</span> Ranking</a>
     <a href="hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="reai.php" class="nav-item active"><span class="nav-icon">📋</span> REAI</a>
     <div class="sidebar-bottom">
@@ -342,8 +400,10 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
         <div class="table-card"><div class="empty-state">No se encontraron colaboradores.</div></div>
     <?php else: ?>
 
-    <div class="search-bar">
-        <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador o coach..." oninput="filtrarTabla()">
+    <div class="reai-toolbar">
+        <div class="search-bar">
+            <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador o coach..." oninput="filtrarTabla()">
+        </div>
     </div>
 
     <div class="table-card">
@@ -463,7 +523,7 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
 </main>
 
 <div class="modal-overlay" id="modalOverlay" onclick="cerrarModal(event)">
-    <div class="modal">
+    <div class="modal-box">
         <div class="modal-header">
             <div class="modal-title" id="modalTitle"></div>
             <button class="modal-close" onclick="cerrarModalBtn()">×</button>
@@ -495,7 +555,7 @@ function filtrarTabla() {
 function abrirModal(talento, nombre, asunto) {
     currentTalento = talento; currentNombre = nombre; currentAsunto = asunto;
     document.getElementById('modalTitle').textContent = nombre + ' — ' + asunto;
-    document.getElementById('modalOverlay').classList.add('open');
+    document.getElementById('modalOverlay').classList.add('active');
     document.getElementById('modalBody').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text2);">Cargando...</div>';
 
     // Aquí está la corrección: apuntando al archivo actual
@@ -584,7 +644,7 @@ function cerrarModal(e) {
 }
 
 function cerrarModalBtn() {
-    document.getElementById('modalOverlay').classList.remove('open');
+    document.getElementById('modalOverlay').classList.remove('active');
     document.getElementById('modalBody').innerHTML = '';
 }
 

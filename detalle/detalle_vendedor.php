@@ -124,55 +124,16 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
     <title><?= htmlspecialchars($nombre) ?> — Seguimiento</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
-    <style>
-        :root { --blue:#2b57a7; --bg:#f4f6fb; --white:#fff; --text:#1a2540; --text2:#6b7a99; --border:#e2e8f4; --green:#10b981; --red:#ef4444; --orange:#f59e0b; --sidebar:200px; }
-        * { box-sizing:border-box; margin:0; padding:0; }
-        body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
-        .sidebar { width:var(--sidebar); background:var(--blue); min-height:100vh; position:fixed; top:0; left:0; display:flex; flex-direction:column; align-items:center; padding:28px 0; z-index:100; }
-        .sidebar-logo { color:white; font-size:2rem; margin-bottom:6px; }
-        .sidebar-brand { color:rgba(255,255,255,0.9); font-size:0.72rem; font-weight:800; letter-spacing:1px; text-transform:uppercase; margin-bottom:32px; text-align:center; padding:0 12px; }
-        .nav-item { width:100%; display:flex; flex-direction:column; align-items:center; gap:4px; padding:14px 0; color:rgba(255,255,255,0.65); text-decoration:none; font-size:0.78rem; font-weight:600; transition:all 0.2s; }
-        .nav-item:hover,.nav-item.active { color:white; background:rgba(255,255,255,0.12); }
-        .nav-icon { font-size:1.3rem; }
-        .sidebar-bottom { margin-top:auto; width:100%; padding:0 12px; }
-        .logout-btn { display:block; text-align:center; padding:10px; border-radius:8px; color:rgba(255,255,255,0.6); text-decoration:none; font-size:0.78rem; font-weight:600; }
-        .logout-btn:hover { background:rgba(255,255,255,0.1); color:white; }
-        .main { margin-left:var(--sidebar); flex:1; padding:32px; }
-        .back-btn { display:inline-flex; align-items:center; gap:6px; color:var(--blue); font-size:0.82rem; font-weight:700; text-decoration:none; margin-bottom:20px; }
-        .back-btn:hover { opacity:0.7; }
-
-        /* TARJETA VENDEDOR */
-        .vendedor-card { background:var(--white); border-radius:16px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); padding:24px 28px; margin-bottom:24px; display:flex; align-items:center; gap:28px; }
-        .vendedor-avatar { width:64px; height:64px; border-radius:50%; background:var(--blue); color:white; display:flex; align-items:center; justify-content:center; font-size:1.6rem; font-weight:800; flex-shrink:0; }
-        .vendedor-info { flex:1; }
-        .vendedor-nombre { font-size:1.3rem; font-weight:800; margin-bottom:4px; }
-        .vendedor-pos { font-size:0.82rem; color:var(--text2); margin-bottom:12px; }
-        .vendedor-meta { display:flex; flex-wrap:wrap; gap:20px; }
-        .meta-item { display:flex; flex-direction:column; }
-        .meta-label { font-size:0.68rem; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:3px; }
-        .meta-val { font-size:0.88rem; font-weight:700; color:var(--text); }
-
-        /* KPI CHIPS */
-        .kpi-row { display:flex; gap:16px; margin-bottom:24px; flex-wrap:wrap; }
-        .kpi-chip { background:var(--white); border-radius:12px; border:1px solid var(--border); padding:16px 20px; flex:1; min-width:140px; box-shadow:0 2px 8px rgba(0,0,0,0.04); }
-        .kpi-chip-label { font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
-        .kpi-chip-val { font-size:1.8rem; font-weight:800; letter-spacing:-1px; }
-        .c-blue   { color:#2b57a7; }
-        .c-green  { color:var(--green); }
-        .c-orange { color:var(--orange); }
-
-        /* GRÁFICA */
-        .chart-card { background:var(--white); border-radius:16px; border:1px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,0.04); padding:24px 28px; }
-        .chart-title { font-size:0.9rem; font-weight:700; margin-bottom:4px; }
-        .chart-sub { font-size:0.75rem; color:var(--text2); margin-bottom:20px; }
-        .chart-wrap { position:relative; height:320px; }
-    </style>
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
 </head>
-<body>
+<body class="page-vendedor">
 <aside class="sidebar">
-    <div class="sidebar-logo">📊</div>
+    <div class="sidebar-logo">
+        <img src="../assets/img/logo-xpedient.png?v=3" alt="Xpedient">
+    </div>
     <div class="sidebar-brand">TOTALXPEDIENT</div>
     <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="ranking_productividad.php" class="nav-item"><span class="nav-icon">🏆</span> Ranking</a>
     <a href="hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="reai.php" class="nav-item active"><span class="nav-icon">📋</span> REAI</a>
     <div class="sidebar-bottom">
@@ -181,7 +142,7 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
 </aside>
 
 <main class="main">
-    <a href="reai1.php" class="back-btn">← Volver al seguimiento</a>
+    <a href="reai.php" class="back-btn">← Volver al seguimiento</a>
 
     <!-- TARJETA VENDEDOR -->
     <div class="vendedor-card">

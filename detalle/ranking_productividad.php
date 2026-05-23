@@ -1,3 +1,5 @@
+
+
 <?php
 ini_set('display_errors', 0);
 error_reporting(0);
@@ -948,6 +950,9 @@ $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativ
 if ($view !== 'lideres') $subtitle .= " · Líder: {$lider_param}";
 if ($view === 'vendedores' || $view === 'ventas') $subtitle .= " · Coach: {$coach_param}";
 if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
+
+/* Calendario mensual: lunes = 1, domingo = 7 */
+$primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)))->format('N');
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -955,223 +960,13 @@ if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= h($title_label) ?> — TOTALXPEDIENT</title>
-<style>
-:root{--blue:#2b57a7;--blue-dark:#153b82;--bg:#f4f6fb;--white:#fff;--text:#111827;--text2:#64748b;--border:#e2e8f0;--sidebar:200px}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh}
-.sidebar{width:var(--sidebar);background:linear-gradient(180deg,var(--blue),var(--blue-dark));min-height:100vh;position:fixed;inset:0 auto 0 0;display:flex;flex-direction:column;align-items:center;padding:28px 0;z-index:100}
-.sidebar-logo{color:white;font-size:2rem;margin-bottom:6px}.sidebar-brand{color:rgba(255,255,255,.92);font-size:.72rem;font-weight:900;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:32px;text-align:center;padding:0 12px}
-.nav-item{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;padding:14px 0;color:rgba(255,255,255,.68);text-decoration:none;font-size:.78rem;font-weight:700;transition:.2s}.nav-item:hover,.nav-item.active{color:white;background:rgba(255,255,255,.14)}.nav-icon{font-size:1.25rem}.sidebar-bottom{margin-top:auto;width:100%;padding:0 12px}.logout-btn{display:block;text-align:center;padding:10px;border-radius:8px;color:rgba(255,255,255,.65);text-decoration:none;font-size:.78rem;font-weight:700}.logout-btn:hover{background:rgba(255,255,255,.12);color:white}
-.main{margin-left:var(--sidebar);flex:1;padding:30px 32px 40px;min-width:0}.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:16px}.page-title h1{font-size:1.55rem;color:#0f1f3d}.page-title p{margin-top:5px;color:var(--text2);font-size:.86rem}.week-pill{display:inline-flex;margin-left:10px;background:#e8f0fe;color:var(--blue);border-radius:999px;padding:5px 12px;font-size:.82rem;font-weight:800}.week-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.week-btn,.week-current,.back-btn{border:1px solid var(--border);background:var(--white);color:var(--blue);text-decoration:none;border-radius:12px;padding:9px 12px;font-size:.82rem;font-weight:800;box-shadow:0 1px 3px rgba(15,23,42,.05)}.week-btn.disabled{opacity:.45;pointer-events:none;color:#94a3b8}.week-current{background:var(--blue);color:white;border-color:var(--blue)}.back-btn{color:#334155}
-.breadcrumb-card{background:linear-gradient(135deg,#fff,#f8fbff);border:1px solid var(--border);border-left:5px solid var(--blue);border-radius:16px;padding:14px 16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(15,23,42,.04)}.breadcrumb-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.breadcrumb-title{font-size:.78rem;font-weight:900;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}.breadcrumb-path{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.92rem;font-weight:900;color:#0f1f3d}.breadcrumb-link,.breadcrumb-current{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 11px;text-decoration:none;border:1px solid #dbe3f0}.breadcrumb-link{background:#f8fafc;color:var(--blue)}.breadcrumb-link:hover{background:#e8f0fe;border-color:#bcd0f5}.breadcrumb-current{background:var(--blue);color:white;border-color:var(--blue)}.breadcrumb-sep{color:#94a3b8;font-weight:900}.level-actions{display:flex;gap:8px;flex-wrap:wrap}.level-action{border:1px solid var(--border);background:white;color:#334155;text-decoration:none;border-radius:12px;padding:8px 11px;font-size:.78rem;font-weight:900;box-shadow:0 1px 3px rgba(15,23,42,.05)}.level-action.primary{background:#e8f0fe;color:var(--blue);border-color:#bcd0f5}.context-chip{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:999px;background:#eef2ff;color:#1e3a8a;font-size:.78rem;font-weight:800}
-.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}.card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.04)}.card .label{color:var(--text2);font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.4px}.card .value{margin-top:4px;font-size:1.45rem;font-weight:900;color:#0f1f3d}.card .hint{margin-top:2px;color:var(--text2);font-size:.78rem}
-.filters{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;background:var(--white);border:1px solid var(--border);border-radius:16px;padding:10px 12px;box-shadow:0 2px 8px rgba(15,23,42,.04)}.filter-label{font-size:.8rem;font-weight:900;color:#334155;margin-right:4px}.filter-btn{border:1px solid #dbe3f0;background:#f8fafc;color:#334155;border-radius:999px;padding:7px 12px;font-size:.78rem;font-weight:900;cursor:pointer}.filter-btn.active,.filter-btn:hover{background:#e8f0fe;color:var(--blue);border-color:#bcd0f5}.counter{margin-left:auto;color:var(--text2);font-size:.78rem;font-weight:800}
-.table-card{background:var(--white);border-radius:18px;border:1px solid var(--border);box-shadow:0 2px 10px rgba(15,23,42,.05);overflow:hidden}.table-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border)}.table-head strong{font-size:.95rem;color:#0f1f3d}.table-head span{color:var(--text2);font-size:.8rem}.table-wrap{overflow:auto}
-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.78rem;min-width:1360px}th{position:sticky;top:0;z-index:2;background:var(--blue);color:white;padding:10px 8px;text-align:left;font-weight:900;text-transform:uppercase;letter-spacing:.35px;border-right:1px solid rgba(255,255,255,.25);vertical-align:bottom}th.num,td.num{text-align:right}th.center,td.center{text-align:center}th.group{background:#cfcfd2;color:#111827;text-align:center;border-right:2px solid #0f172a}th.sub-gray{background:#d9d9dc;color:#111827}th.sortable{cursor:pointer;user-select:none}th.sortable .sort-icon{opacity:.65;margin-left:4px;font-size:.72rem}
-td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid #eef2f7;white-space:nowrap}tbody tr:hover td{background:#f8fbff}.clickable{cursor:pointer}.clickable:hover td{background:#eef6ff!important}.rank{display:inline-flex;justify-content:center;align-items:center;min-width:24px;height:24px;border-radius:999px;background:#e8f0fe;color:var(--blue);font-weight:900;padding:0 8px}.entity{font-weight:800;color:#0f1f3d}.district{font-weight:800;color:#334155}.badge{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.badge.up{background:#bbf7d0;color:#166534}.badge.flat{background:#FFF3CD;color:#856404}.badge.down{background:#fed7aa;color:#9a3412}.badge.down-hard{background:#fecaca;color:#991b1b}
-.prod{font-weight:900;border-radius:8px;padding:4px 8px;display:inline-block;min-width:48px;text-align:center}.prod.tier-1{background:#bbf7d0;color:#065f46}.prod.tier-2{background:#fde68a;color:#78350f}.prod.tier-3{background:#fed7aa;color:#9a3412}.prod.tier-4{background:#fecaca;color:#991b1b}.prod.muted{background:#f1f5f9;color:#94a3b8}.hc-indicator{display:inline-block;min-width:36px;padding:3px 8px;border-radius:999px;text-align:center;font-weight:900}.hc-good{background:#bbf7d0;color:#166534}.hc-mid{background:#fde68a;color:#78350f}.hc-bad{background:#fecaca;color:#991b1b}.gray-cell{background:#f1f1f3}.total-row td{background:#f3f4f6!important;color:#111827!important;font-weight:900!important;border-top:2px solid #9ca3af!important}.error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:14px;padding:14px 16px;margin-bottom:16px;font-weight:700}
-.sales-table{min-width:640px}.sales-table .sales-zero{color:#94a3b8}.sales-table .sales-hit{font-weight:900;color:#065f46}
-@media(max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{flex-direction:column}.week-nav{justify-content:flex-start}.counter{margin-left:0;width:100%}}@media(max-width:760px){:root{--sidebar:0}.sidebar{display:none}.main{margin-left:0;padding:20px}.cards{grid-template-columns:1fr}}
-
-.matrix-sortable{cursor:pointer;user-select:none}
-.matrix-sortable .sort-icon{opacity:.65;margin-left:4px;font-size:.72rem}
-
-
-.month-day-filter{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    flex-wrap:wrap;
-    background:#ffffff;
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:10px 12px;
-    margin-bottom:14px;
-    box-shadow:0 2px 8px rgba(15,23,42,.04);
-}
-.month-day-filter label{
-    font-size:.78rem;
-    font-weight:900;
-    color:#334155;
-}
-.month-day-filter input{
-    width:74px;
-    border:1px solid #dbe3f0;
-    border-radius:10px;
-    padding:7px 9px;
-    font-weight:800;
-    color:#0f1f3d;
-}
-.month-day-filter button{
-    border:1px solid var(--blue);
-    background:var(--blue);
-    color:white;
-    border-radius:10px;
-    padding:8px 12px;
-    font-size:.78rem;
-    font-weight:900;
-    cursor:pointer;
-}
-.month-day-filter .hint{
-    color:var(--text2);
-    font-size:.78rem;
-    font-weight:700;
-}
-
-
-.week-nav{align-items:flex-end}
-.month-nav-row{
-    display:flex;
-    gap:8px;
-    justify-content:flex-end;
-    width:100%;
-}
-.month-day-filter.compact{
-    width:100%;
-    margin:8px 0 0;
-    padding:0;
-    border:0;
-    box-shadow:none;
-    background:transparent;
-    justify-content:flex-start;
-    align-self:flex-start;
-}
-.month-day-filter.compact label{
-    color:#334155;
-}
-.month-day-filter.compact input{
-    width:64px;
-    padding:6px 8px;
-    background:#fff;
-}
-.month-day-filter.compact button{
-    padding:7px 10px;
-}
-.month-day-filter.compact .hint{
-    white-space:nowrap;
-}
-@media(max-width:1100px){
-    .month-nav-row{justify-content:flex-start}
-    .month-day-filter.compact .hint{white-space:normal}
-}
-
-
-.month-day-filter.compact .quick-range{
-    border:1px solid #bcd0f5;
-    background:#f8fafc;
-    color:var(--blue);
-    border-radius:10px;
-    padding:7px 10px;
-    font-size:.78rem;
-    font-weight:900;
-    text-decoration:none;
-}
-.month-day-filter.compact .quick-range:hover{
-    background:#e8f0fe;
-}
-
-
-.month-day-filter.compact.calendar-mode input[type="date"]{
-    width:142px;
-    padding:6px 8px;
-    background:#fff;
-}
-.month-day-filter.compact.calendar-mode label{
-    margin-left:2px;
-}
-
-
-.range-dropdown{position:relative;display:inline-block}
-.range-trigger{border:0;cursor:pointer}
-.range-panel{
-    display:none;
-    position:absolute;
-    top:44px;
-    left:50%;
-    transform:translateX(-50%);
-    width:330px;
-    background:#fff;
-    border:1px solid var(--border);
-    border-radius:18px;
-    box-shadow:0 18px 45px rgba(15,23,42,.18);
-    z-index:50;
-    padding:14px;
-}
-.range-dropdown.open .range-panel{display:block}
-.range-panel-title{
-    font-weight:900;
-    color:#0f1f3d;
-    font-size:.88rem;
-    margin-bottom:10px;
-    text-align:left;
-}
-.calendar-grid{
-    display:grid;
-    grid-template-columns:repeat(7,1fr);
-    gap:6px;
-}
-.calendar-day{
-    border:1px solid #dbe3f0;
-    background:#f8fafc;
-    color:#0f1f3d;
-    border-radius:10px;
-    height:34px;
-    font-weight:900;
-    cursor:pointer;
-}
-.calendar-day:hover{background:#e8f0fe}
-.calendar-day.selected-start,
-.calendar-day.selected-end{
-    background:var(--blue);
-    color:#fff;
-    border-color:var(--blue);
-}
-.calendar-day.in-range{
-    background:#dbeafe;
-    color:#1e3a8a;
-    border-color:#bfdbfe;
-}
-.range-summary{
-    margin-top:10px;
-    font-size:.78rem;
-    color:var(--text2);
-    font-weight:800;
-    text-align:left;
-}
-.range-actions{
-    display:flex;
-    gap:7px;
-    margin-top:12px;
-    align-items:center;
-    flex-wrap:wrap;
-}
-.range-actions button{
-    margin-left:auto;
-    border:1px solid var(--blue);
-    background:var(--blue);
-    color:#fff;
-    border-radius:10px;
-    padding:8px 12px;
-    font-size:.78rem;
-    font-weight:900;
-    cursor:pointer;
-}
-.range-actions .quick-range{
-    border:1px solid #bcd0f5;
-    background:#f8fafc;
-    color:var(--blue);
-    border-radius:10px;
-    padding:7px 9px;
-    font-size:.75rem;
-    font-weight:900;
-    text-decoration:none;
-}
-
-</style>
+<link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
 </head>
-<body>
+<body class="page-ranking">
 <aside class="sidebar">
-    <div class="sidebar-logo">📊</div>
+    <div class="sidebar-logo">
+        <img src="../assets/img/logo-xpedient.png?v=3" alt="Xpedient">
+    </div>
     <div class="sidebar-brand">TOTALXPEDIENT</div>
     <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
     <a href="ranking_productividad.php" class="nav-item active"><span class="nav-icon">🏆</span> Ranking</a>
@@ -1221,14 +1016,50 @@ td{padding:9px 8px;border-bottom:1px solid var(--border);border-right:1px solid 
                             <input type="hidden" name="dia_fin" id="diaFinInput" value="<?= h($dia_fin_actual) ?>">
 
                             <div class="range-panel-title">Selecciona rango de <?= h($meses_es[$mes_actual]) ?> <?= h($anio_mes_actual) ?></div>
-                            <div class="calendar-grid" id="calendarGrid"
-                                 data-days="<?= h($ultimo_dia_actual) ?>"
-                                 data-start="<?= h($dia_inicio_actual) ?>"
-                                 data-end="<?= h($dia_fin_actual) ?>">
-                                <?php for ($d=1; $d <= $ultimo_dia_actual; $d++): ?>
-                                    <button type="button" class="calendar-day" data-day="<?= h($d) ?>"><?= h($d) ?></button>
-                                <?php endfor; ?>
-                            </div>
+                            <div class="calendar-grid-real" id="calendarGrid"
+     data-days="<?= h($ultimo_dia_actual) ?>"
+     data-start="<?= h($dia_inicio_actual) ?>"
+     data-end="<?= h($dia_fin_actual) ?>">
+
+    <div class="calendar-weekday">Lun</div>
+    <div class="calendar-weekday">Mar</div>
+    <div class="calendar-weekday">Mié</div>
+    <div class="calendar-weekday">Jue</div>
+    <div class="calendar-weekday">Vie</div>
+    <div class="calendar-weekday">Sáb</div>
+    <div class="calendar-weekday">Dom</div>
+
+    <?php for ($i = 1; $i < $primer_dia_semana; $i++): ?>
+        <div class="calendar-empty"></div>
+    <?php endfor; ?>
+
+    <?php for ($d = 1; $d <= $ultimo_dia_actual; $d++): ?>
+        <?php
+            $classes = [];
+
+            if ($d == $dia_inicio_actual) {
+                $classes[] = 'selected-start';
+            }
+
+            if ($d == $dia_fin_actual) {
+                $classes[] = 'selected-end';
+            }
+
+            if ($d > $dia_inicio_actual && $d < $dia_fin_actual) {
+                $classes[] = 'in-range';
+            }
+        ?>
+
+        <button
+            type="button"
+            class="calendar-day <?= h(implode(' ', $classes)) ?>"
+            data-day="<?= h($d) ?>"
+        >
+            <?= h($d) ?>
+        </button>
+    <?php endfor; ?>
+
+</div>
 
                             <div class="range-summary">
                                 <span id="rangeSummary"><?= h($meses_es[$mes_base]) ?> <?= h($dia_inicio_base) ?>-<?= h($dia_fin_base) ?> vs <?= h($meses_es[$mes_actual]) ?> <?= h($dia_inicio_actual) ?>-<?= h($dia_fin_actual) ?></span>
