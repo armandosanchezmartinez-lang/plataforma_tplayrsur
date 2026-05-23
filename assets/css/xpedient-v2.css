@@ -3516,3 +3516,78 @@ body.page-hc .toggle-btn{
     width:12px !important;
     margin-right:4px !important;
 }
+
+/* =========================================================
+   RANKING — SELECTOR SEMANAL DINÁMICO
+========================================================= */
+
+body.page-ranking .week-picker-panel{
+    display:none;
+    position:absolute;
+    top:52px;
+    right:0;
+    width:360px;
+    background:rgba(255,255,255,.95);
+    border:1px solid rgba(255,255,255,.70);
+    border-radius:22px;
+    box-shadow:var(--shadow);
+    backdrop-filter:blur(18px);
+    padding:18px;
+    z-index:9999;
+}
+
+body.page-ranking .week-dropdown.open .week-picker-panel{
+    display:block;
+}
+
+body.page-ranking .week-picker-title{
+    font-size:.82rem;
+    font-weight:800;
+    color:#24324A;
+    margin-bottom:14px;
+}
+
+body.page-ranking .week-days-grid{
+    display:grid;
+    grid-template-columns:repeat(6,1fr);
+    gap:8px;
+}
+
+body.page-ranking .week-day-btn{
+    border:none;
+    border-radius:12px;
+    padding:10px 8px;
+    background:rgba(122,43,255,.08);
+    color:#24324A;
+    font-size:.74rem;
+    font-weight:800;
+    cursor:pointer;
+    transition:all .18s ease;
+}
+
+body.page-ranking .week-day-btn:hover{
+    background:rgba(122,43,255,.16);
+    transform:translateY(-1px);
+}
+
+body.page-ranking .week-day-btn.active{
+    background:linear-gradient(135deg,#7A2BFF,#FF0AC8);
+    color:#fff;
+}
+
+body.page-ranking .week-picker-actions{
+    margin-top:16px;
+    display:flex;
+    justify-content:flex-end;
+}
+
+body.page-ranking .week-picker-apply{
+    border:none;
+    border-radius:999px;
+    padding:10px 18px;
+    font-size:.76rem;
+    font-weight:800;
+    cursor:pointer;
+    background:linear-gradient(135deg,#7A2BFF,#FF0AC8);
+    color:white;
+}
