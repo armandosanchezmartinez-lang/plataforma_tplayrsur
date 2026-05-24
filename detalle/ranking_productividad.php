@@ -241,20 +241,25 @@ if ($res_max_inst && $row_max_inst = mysqli_fetch_assoc($res_max_inst)) {
     }
 }
 
-// Default correcto: abrir la semana operativa con datos, no la última semana con HC.
-$anio_actual = $max_anio_operativo;
-$semana_actual = $max_semana_operativa;
+// Abrir SIEMPRE la semana calendario corriente por default.
+// Aunque vaya parcial, se calcula con los días vencidos/disponibles.
+$anio_actual = (int)date('o');   // año ISO
+$semana_actual = (int)date('W'); // semana ISO actual
 
 if (isset($_GET['anio'])) $anio_actual = max(2020, min(2100, (int)$_GET['anio']));
 if (isset($_GET['semana'])) $semana_actual = max(1, min(53, (int)$_GET['semana']));
 
-// Si por URL intentan ir a una semana futura sin instalaciones, regresar a la última semana operativa.
+// Permitir semana calendario corriente aunque aún vaya parcial.
+// Solo bloquear semanas FUTURAS reales.
+$anio_hoy = (int)date('o');
+$semana_hoy = (int)date('W');
+
 if (
-    $anio_actual > $max_anio_operativo
-    || ($anio_actual == $max_anio_operativo && $semana_actual > $max_semana_operativa)
+    $anio_actual > $anio_hoy
+    || ($anio_actual == $anio_hoy && $semana_actual > $semana_hoy)
 ) {
-    $anio_actual = $max_anio_operativo;
-    $semana_actual = $max_semana_operativa;
+    $anio_actual = $anio_hoy;
+    $semana_actual = $semana_hoy;
 }
 
 $semana_base = $semana_actual - 1;
@@ -467,14 +472,12 @@ $dias_semana_labels = [
 // Semanas históricas: permitir semana completa LUN-DOM.
 // Semana corriente: limitar únicamente a días con información cargada/vencida.
 $dias_semana_disponibles = [1,2,3,4,5,6,7];
-if ($periodo === 'semanal' && $anio_actual == $max_anio_operativo && $semana_actual == $max_semana_operativa) {
-    $ultima_fecha_operativa = $ultima_fecha_operativa_global;
-
-    if ($ultima_fecha_operativa) {
-        $dow_ultima = (int)date('N', strtotime($ultima_fecha_operativa)); // 1=LUN ... 7=DOM
-        $dow_ultima = min(7, max(1, $dow_ultima));
-        $dias_semana_disponibles = range(1, $dow_ultima);
-    }
+if ($periodo === 'semanal' && $anio_actual == (int)date('o') && $semana_actual == (int)date('W')) {
+    // Semana corriente: mostrar solo días vencidos (-1 día).
+    $fecha_corte_semanal = date('Y-m-d', strtotime('-1 day'));
+    $dow_corte = (int)date('N', strtotime($fecha_corte_semanal)); // 1=LUN ... 7=DOM
+    $dow_corte = min(7, max(1, $dow_corte));
+    $dias_semana_disponibles = range(1, $dow_corte);
 }
 
 $dias_semana_seleccionados = $dias_semana_disponibles;
