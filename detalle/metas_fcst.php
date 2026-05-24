@@ -91,6 +91,12 @@ function semana_anterior_calc($semana, $anio) {
 $anio_actual = (int)date('Y');
 $semana_actual = (int)date('W');
 
+$res_sem = mysqli_query($conexion, "SELECT anio, semana FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
+if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
+    $anio_actual = (int)$row_sem['anio'];
+    $semana_actual = (int)$row_sem['semana'];
+}
+
 list($semana_anterior, $anio_semana_anterior) = semana_anterior_calc($semana_actual, $anio_actual);
 
 $responsable = null;
