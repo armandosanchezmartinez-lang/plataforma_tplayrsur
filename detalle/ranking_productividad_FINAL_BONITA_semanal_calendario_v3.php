@@ -140,7 +140,7 @@ function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dia
 
     foreach ($dias_iso as $dia_iso) {
         $dia_iso = (int)$dia_iso;
-        if ($dia_iso < 1 || $dia_iso > 6) continue; // 1=LUN ... 6=SÁB, domingo no opera
+        if ($dia_iso < 1 || $dia_iso > 6) continue; // LUN-SÁB. Domingo no opera.
 
         $fecha = clone $lunes;
         $fecha->modify('+'.($dia_iso - 1).' days');
@@ -149,8 +149,6 @@ function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dia
 
     if (empty($fechas_seleccionadas)) return 1;
 
-    // Regla semanal: los días hábiles son los días operativos seleccionados,
-    // menos festivos oficiales capturados en dias_inhabiles.
     $festivos = [];
     if (table_exists($conexion, 'dias_inhabiles')) {
         $fechas_sql = [];
@@ -158,28 +156,16 @@ function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dia
             $fechas_sql[] = "'".mysqli_real_escape_string($conexion, $fecha_sel)."'";
         }
 
-        if (!empty($fechas_sql)) {
-            $sql = "
-                SELECT fecha
-                FROM dias_inhabiles
-                WHERE fecha IN (".implode(',', $fechas_sql).")
-                  AND (activo = 1 OR activo IS NULL)
-            ";
-            $res = mysqli_query($conexion, $sql);
-            if ($res) {
-                while ($row = mysqli_fetch_assoc($res)) {
-                    $festivos[$row['fecha']] = true;
-                }
+        $sql = "SELECT fecha FROM dias_inhabiles WHERE fecha IN (".implode(',', $fechas_sql).")";
+        $res = mysqli_query($conexion, $sql);
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                if (!empty($row['fecha'])) $festivos[$row['fecha']] = true;
             }
         }
     }
 
-    $habiles = 0;
-    foreach (array_keys($fechas_seleccionadas) as $fecha_sel) {
-        if (isset($festivos[$fecha_sel])) continue;
-        $habiles++;
-    }
-
+    $habiles = count($fechas_seleccionadas) - count(array_intersect_key($fechas_seleccionadas, $festivos));
     return max(1, $habiles);
 }
 
@@ -237,7 +223,7 @@ $semana_actual = $semanas[0]['semana'] ?? (int)date('W');
 // Semana operativa máxima: permite ver avance de semana corriente aunque aún no exista plantilla HC.
 $max_anio_operativo = $anio_actual;
 $max_semana_operativa = $semana_actual;
-$res_max_inst = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL");
+$res_max_inst = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL AND fecha <= CURDATE()");
 if ($res_max_inst && $row_max_inst = mysqli_fetch_assoc($res_max_inst)) {
     if (!empty($row_max_inst['ultima_fecha'])) {
         $max_anio_operativo = (int)date('o', strtotime($row_max_inst['ultima_fecha']));
@@ -439,51 +425,6 @@ $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $di
 $fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
 $fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
 
-if ($periodo === 'semanal') {
-    $sem_base_inicio = fecha_iso_semana_inicio($anio_base, $semana_base);
-    $sem_base_fin = clone $sem_base_inicio;
-    $sem_base_fin->modify('+6 days');
-
-    $sem_actual_inicio = fecha_iso_semana_inicio($anio_actual, $semana_actual);
-    $sem_actual_fin = clone $sem_actual_inicio;
-    $sem_actual_fin->modify('+6 days');
-
-    $fecha_inicio_base_calc = $sem_base_inicio->format('Y-m-d');
-    $fecha_fin_base_calc = $sem_base_fin->format('Y-m-d');
-
-    $fecha_inicio_actual_calc = $sem_actual_inicio->format('Y-m-d');
-    $fecha_fin_actual_calc = $sem_actual_fin->format('Y-m-d');
-} else {
-    $fecha_inicio_base_calc = $fecha_inicio_base;
-    $fecha_fin_base_calc = $fecha_fin_base;
-
-    $fecha_inicio_actual_calc = $fecha_inicio_actual;
-    $fecha_fin_actual_calc = $fecha_fin_actual;
-}
-
-if ($periodo === 'semanal') {
-    $dias_habiles_base = contar_dias_habiles_semana_seleccionada($conexion, $anio_base, $semana_base, $dias_semana_seleccionados);
-    $dias_habiles_actual = contar_dias_habiles_semana_seleccionada($conexion, $anio_actual, $semana_actual, $dias_semana_seleccionados);
-} else {
-    $dias_habiles_base = contar_dias_habiles($conexion, $fecha_inicio_base_calc, $fecha_fin_base_calc);
-    $dias_habiles_actual = contar_dias_habiles($conexion, $fecha_inicio_actual_calc, $fecha_fin_actual_calc);
-}
-
-$rango_dias_label = $dia_inicio_mensual === $dia_fin_mensual
-    ? 'día '.$dia_fin_mensual
-    : 'días '.$dia_inicio_mensual.'-'.$dia_fin_mensual;
-
-$label_periodo_base = $periodo === 'mensual'
-    ? $meses_es[$mes_base].' '.$dia_inicio_base.'-'.$dia_fin_base.' '.$anio_mes_base
-    : 'Semana '.$semana_base;
-
-$label_periodo_actual = $periodo === 'mensual'
-    ? $meses_es[$mes_actual].' '.$dia_inicio_actual.'-'.$dia_fin_actual.' '.$anio_mes_actual
-    : 'Semana '.$semana_actual;
-
-$label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' '.$dia_inicio_base.'-'.$dia_fin_base : 'SEM'.$semana_base;
-$label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' '.$dia_inicio_actual.'-'.$dia_fin_actual : 'SEM'.$semana_actual;
-
 $dias_semana_labels = [
     1 => 'LUN',
     2 => 'MAR',
@@ -534,6 +475,51 @@ $dias_semana_mysql_in = implode(',', $dias_semana_mysql);
 $dias_semana_label = implode(', ', array_map(function($d) use ($dias_semana_labels) {
     return $dias_semana_labels[$d] ?? '';
 }, $dias_semana_seleccionados));
+
+if ($periodo === 'semanal') {
+    $sem_base_inicio = fecha_iso_semana_inicio($anio_base, $semana_base);
+    $sem_base_fin = clone $sem_base_inicio;
+    $sem_base_fin->modify('+6 days');
+
+    $sem_actual_inicio = fecha_iso_semana_inicio($anio_actual, $semana_actual);
+    $sem_actual_fin = clone $sem_actual_inicio;
+    $sem_actual_fin->modify('+6 days');
+
+    $fecha_inicio_base_calc = $sem_base_inicio->format('Y-m-d');
+    $fecha_fin_base_calc = $sem_base_fin->format('Y-m-d');
+
+    $fecha_inicio_actual_calc = $sem_actual_inicio->format('Y-m-d');
+    $fecha_fin_actual_calc = $sem_actual_fin->format('Y-m-d');
+} else {
+    $fecha_inicio_base_calc = $fecha_inicio_base;
+    $fecha_fin_base_calc = $fecha_fin_base;
+
+    $fecha_inicio_actual_calc = $fecha_inicio_actual;
+    $fecha_fin_actual_calc = $fecha_fin_actual;
+}
+
+if ($periodo === 'semanal') {
+    $dias_habiles_base = contar_dias_habiles_semana_seleccionada($conexion, $anio_base, $semana_base, $dias_semana_seleccionados);
+    $dias_habiles_actual = contar_dias_habiles_semana_seleccionada($conexion, $anio_actual, $semana_actual, $dias_semana_seleccionados);
+} else {
+    $dias_habiles_base = contar_dias_habiles($conexion, $fecha_inicio_base_calc, $fecha_fin_base_calc);
+    $dias_habiles_actual = contar_dias_habiles($conexion, $fecha_inicio_actual_calc, $fecha_fin_actual_calc);
+}
+
+$rango_dias_label = $dia_inicio_mensual === $dia_fin_mensual
+    ? 'día '.$dia_fin_mensual
+    : 'días '.$dia_inicio_mensual.'-'.$dia_fin_mensual;
+
+$label_periodo_base = $periodo === 'mensual'
+    ? $meses_es[$mes_base].' '.$dia_inicio_base.'-'.$dia_fin_base.' '.$anio_mes_base
+    : 'Semana '.$semana_base;
+
+$label_periodo_actual = $periodo === 'mensual'
+    ? $meses_es[$mes_actual].' '.$dia_inicio_actual.'-'.$dia_fin_actual.' '.$anio_mes_actual
+    : 'Semana '.$semana_actual;
+
+$label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' '.$dia_inicio_base.'-'.$dia_fin_base : 'SEM'.$semana_base;
+$label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' '.$dia_inicio_actual.'-'.$dia_fin_actual : 'SEM'.$semana_actual;
 
 $cond_i_base = $periodo === 'mensual'
     ? "YEAR(i.fecha) = {$anio_mes_base} AND MONTH(i.fecha) = {$mes_base} AND DAY(i.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
@@ -1194,7 +1180,11 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                     </form>
                 </div>
             </div>
-            <a class="week-btn <?= $has_next ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
+            <?php if ($has_next): ?>
+                <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
+            <?php else: ?>
+                <span class="week-btn disabled">Semana <?= h($next_semana) ?> →</span>
+            <?php endif; ?>
         <?php else:
             $prev_mes_nav = $mes_actual - 1; $prev_anio_mes_nav = $anio_mes_actual;
             if ($prev_mes_nav < 1) { $prev_mes_nav = 12; $prev_anio_mes_nav--; }
