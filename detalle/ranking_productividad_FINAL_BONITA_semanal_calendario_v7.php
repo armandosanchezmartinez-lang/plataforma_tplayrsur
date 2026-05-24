@@ -1287,16 +1287,16 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                             </div>
 
                             <div class="range-actions">
-                                                                   	<a class="quick-range <?= ($rango_mode === 'completo') ? 'active' : '' ?>" href="?<?= qs(array_merge($_GET, [
+                                                                   	<a class="quick-range <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
+   					style="<?= ($rango_mode === 'completo') ? 'background:linear-gradient(135deg,#7A2BFF,#FF0AC8)!important;color:#fff!important;box-shadow:0 8px 18px rgba(122,43,255,.18)!important;' : '' ?>"
+   					href="?<?= qs(array_merge($_GET, [
         					'periodo'=>'mensual',
         					'rango_mode'=>'completo',
         					'dia_inicio'=>null,
         					'dia_fin'=>null,
         					'fecha_inicio'=>null,
         					'fecha_fin'=>null
-    					])) ?>">Mes completo</a>
-
-    					<button type="submit">Aplicar</button>
+    				])) ?>">Mes completo</a>
 			    </div>
 
                         </form>
