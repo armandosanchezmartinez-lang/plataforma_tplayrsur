@@ -3590,8 +3590,7 @@ body.page-ranking .quick-week:hover{
 }
 
 /* == Botón activo Mes completo == */
-body.page-ranking .quick-range.active{
-    background:linear-gradient(135deg,#7A2BFF,#FF0AC8) !important;
-    color:#fff !important;
-    box-shadow:0 8px 18px rgba(122,43,255,.18) !important;
+body.page-ranking .range-actions a.quick-range.active{
+    background:red !important;
+    color:white !important;
 }
