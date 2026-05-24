@@ -382,20 +382,31 @@ $ultimo_dia_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_
 $rango_mode = $_GET['rango_mode'] ?? 'mtd';
 if (!in_array($rango_mode, ['mtd','completo','custom'], true)) $rango_mode = 'mtd';
 
+// Mes completo siempre debe ignorar cualquier rango manual heredado en la URL.
+if ($rango_mode === 'completo') {
+    unset($_GET['dia_inicio'], $_GET['dia_fin'], $_GET['fecha_inicio'], $_GET['fecha_fin']);
+}
+
 $fecha_inicio_actual = sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual);
 $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_default_mensual);
 
 if ($rango_mode === 'completo') {
-    // Mes completo real para cada mes:
+    // Mes completo real para cada mes histórico:
     // Ejemplo Abril completo => Marzo 1-31 vs Abril 1-30.
+    // Si el mes seleccionado es el último mes con datos, se limita al último día cargado para no ir al futuro.
     $dia_inicio_mensual = 1;
-    $dia_fin_mensual = $ultimo_dia_actual;
+
+    $dia_fin_actual_completo = $ultimo_dia_actual;
+    if ($anio_mes_actual == $ultimo_anio_datos && $mes_actual == $ultimo_mes_datos && !empty($row_ultima_fecha['ultima_fecha'])) {
+        $dia_fin_actual_completo = min($ultimo_dia_actual, (int)date('j', strtotime($row_ultima_fecha['ultima_fecha'])));
+    }
 
     $dia_inicio_base = 1;
     $dia_fin_base = $ultimo_dia_base;
 
     $dia_inicio_actual = 1;
-    $dia_fin_actual = $ultimo_dia_actual;
+    $dia_fin_actual = $dia_fin_actual_completo;
+    $dia_fin_mensual = $dia_fin_actual_completo;
 } else {
     if ($rango_mode !== 'custom') {
         $_GET['dia_inicio'] = 1;
@@ -1276,7 +1287,14 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                             </div>
 
                             <div class="range-actions">
-                                <a class="quick-range" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','rango_mode'=>'completo'])) ?>">Mes completo</a>
+                                <a class="quick-range" href="?<?= qs(array_merge($_GET, [
+                                    'periodo'=>'mensual',
+                                    'rango_mode'=>'completo',
+                                    'dia_inicio'=>null,
+                                    'dia_fin'=>null,
+                                    'fecha_inicio'=>null,
+                                    'fecha_fin'=>null
+                                ])) ?>">Mes completo</a>
                                 <button type="submit">Aplicar</button>
                             </div>
                         </form>
