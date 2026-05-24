@@ -1192,11 +1192,6 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                                 </button>
                             <?php endfor; ?>
                         </div>
-
-                        <div class="range-summary">
-                            SEM<?= h($semana_base) ?> <?= h($dias_semana_label) ?> vs SEM<?= h($semana_actual) ?> <?= h($dias_semana_label) ?>
-                        </div>
-
                         <div class="range-actions">
                             <button type="button" class="quick-week" id="weekFullBtn">Semana completa disponible</button>
                             <button type="submit">Aplicar</button>
@@ -1286,17 +1281,21 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                                 <span id="rangeSummary"><?= h($meses_es[$mes_base]) ?> <?= h($dia_inicio_base) ?>-<?= h($dia_fin_base) ?> vs <?= h($meses_es[$mes_actual]) ?> <?= h($dia_inicio_actual) ?>-<?= h($dia_fin_actual) ?></span>
                             </div>
 
-                            <div class="range-actions">
-                                <a class="quick-range" href="?<?= qs(array_merge($_GET, [
-                                    'periodo'=>'mensual',
-                                    'rango_mode'=>'completo',
-                                    'dia_inicio'=>null,
-                                    'dia_fin'=>null,
-                                    'fecha_inicio'=>null,
-                                    'fecha_fin'=>null
-                                ])) ?>">Mes completo</a>
-                                <button type="submit">Aplicar</button>
-                            </div>
+		<div class="range-actions">
+    			<a class="quick-range <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
+       				style="<?= ($rango_mode === 'completo') ? 'background:linear-gradient(135deg,#7A2BFF,#FF0AC8)!important;color:#fff!important;box-shadow:0 8px 18px rgba(122,43,255,.18)!important;' : '' ?>"
+       					href="?<?= qs(array_merge($_GET, [
+            					'periodo'=>'mensual',
+            					'rango_mode'=>'completo',
+            					'dia_inicio'=>null,
+            					'dia_fin'=>null,
+            					'fecha_inicio'=>null,
+            					'fecha_fin'=>null
+        			])) ?>">Mes completo</a>
+
+    			<button type="submit">Aplicar</button>
+		</div>
+
                         </form>
                     </div>
                 </div>
