@@ -132,66 +132,6 @@ function contar_dias_habiles($conexion, $fecha_inicio, $fecha_fin) {
     return max(1, $habiles);
 }
 
-function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dias_iso) {
-    if (empty($dias_iso)) return 1;
-
-    $lunes = fecha_iso_semana_inicio($anio, $semana);
-    $fechas_seleccionadas = [];
-
-    foreach ($dias_iso as $dia_iso) {
-        $dia_iso = (int)$dia_iso;
-        if ($dia_iso < 1 || $dia_iso > 7) continue; // 1=LUN ... 7=DOM
-
-        // Domingo puede seleccionarse para filtrar ventas, pero NO cuenta como día hábil.
-        if ($dia_iso === 7) continue;
-
-        $fecha = clone $lunes;
-        $fecha->modify('+'.($dia_iso - 1).' days');
-        $fechas_seleccionadas[$fecha->format('Y-m-d')] = true;
-    }
-
-    if (empty($fechas_seleccionadas)) return 1;
-
-    $festivos = [];
-    if (table_exists($conexion, 'dias_inhabiles')) {
-        $fechas_sql = [];
-        foreach (array_keys($fechas_seleccionadas) as $fecha_sel) {
-            $fechas_sql[] = "'".mysqli_real_escape_string($conexion, $fecha_sel)."'";
-        }
-
-        if (!empty($fechas_sql)) {
-            $sql = "SELECT fecha FROM dias_inhabiles WHERE fecha IN (".implode(',', $fechas_sql).")";
-            $res = mysqli_query($conexion, $sql);
-            if ($res) {
-                while ($row = mysqli_fetch_assoc($res)) {
-                    if (!empty($row['fecha'])) $festivos[$row['fecha']] = true;
-                }
-            }
-        }
-    }
-
-    $habiles = count($fechas_seleccionadas) - count(array_intersect_key($fechas_seleccionadas, $festivos));
-    return max(1, $habiles);
-}
-
-function week_has_hc($conexion, $anio, $semana) {
-    $sql = "SELECT 1 FROM hc WHERE anio = ".(int)$anio." AND semana = ".(int)$semana." LIMIT 1";
-    $res = mysqli_query($conexion, $sql);
-    return $res && mysqli_num_rows($res) > 0;
-}
-
-function previous_iso_week($anio, $semana) {
-    $anio = (int)$anio;
-    $semana = (int)$semana - 1;
-
-    if ($semana >= 1) return [$anio, $semana];
-
-    $prev_anio = $anio - 1;
-    $last_week = (int)(new DateTime($prev_anio.'-12-28'))->format('W');
-
-    return [$prev_anio, $last_week];
-}
-
 function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual = 1) {
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
@@ -222,40 +162,11 @@ while ($res_sem && $row = mysqli_fetch_assoc($res_sem)) {
     $semanas[] = ['anio' => (int)$row['anio'], 'semana' => (int)$row['semana']];
 }
 
-// Última semana con plantilla HC. Sirve para histórico y fallback.
-$anio_hc_default = $semanas[0]['anio'] ?? (int)date('Y');
-$semana_hc_default = $semanas[0]['semana'] ?? (int)date('W');
-
-// Semana operativa máxima: se obtiene de la última fecha real cargada en instalaciones.
-// Esta es la que debe abrir por default, aunque aún no exista plantilla HC propia.
-$max_anio_operativo = $anio_hc_default;
-$max_semana_operativa = $semana_hc_default;
-$ultima_fecha_operativa_global = null;
-
-$res_max_inst = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL AND fecha <= CURDATE()");
-if ($res_max_inst && $row_max_inst = mysqli_fetch_assoc($res_max_inst)) {
-    if (!empty($row_max_inst['ultima_fecha'])) {
-        $ultima_fecha_operativa_global = $row_max_inst['ultima_fecha'];
-        $max_anio_operativo = (int)date('o', strtotime($row_max_inst['ultima_fecha']));
-        $max_semana_operativa = (int)date('W', strtotime($row_max_inst['ultima_fecha']));
-    }
-}
-
-// Default correcto: abrir la semana operativa con datos, no la última semana con HC.
-$anio_actual = $max_anio_operativo;
-$semana_actual = $max_semana_operativa;
+$anio_actual = $semanas[0]['anio'] ?? (int)date('Y');
+$semana_actual = $semanas[0]['semana'] ?? (int)date('W');
 
 if (isset($_GET['anio'])) $anio_actual = max(2020, min(2100, (int)$_GET['anio']));
 if (isset($_GET['semana'])) $semana_actual = max(1, min(53, (int)$_GET['semana']));
-
-// Si por URL intentan ir a una semana futura sin instalaciones, regresar a la última semana operativa.
-if (
-    $anio_actual > $max_anio_operativo
-    || ($anio_actual == $max_anio_operativo && $semana_actual > $max_semana_operativa)
-) {
-    $anio_actual = $max_anio_operativo;
-    $semana_actual = $max_semana_operativa;
-}
 
 $semana_base = $semana_actual - 1;
 $anio_base = $anio_actual;
@@ -274,12 +185,7 @@ $next_semana = $semana_actual + 1; $next_anio = $anio_actual;
 if ($next_semana > 53) { $next_semana = 1; $next_anio++; }
 
 $has_prev = isset($semanas_key[$prev_anio.'-'.$prev_semana]);
-// Solo permitir navegar a semanas con datos operativos reales.
-// La semana futura queda bloqueada aunque exista por calendario.
-$has_next = (
-    $next_anio < $max_anio_operativo
-    || ($next_anio == $max_anio_operativo && $next_semana <= $max_semana_operativa)
-);
+$has_next = isset($semanas_key[$next_anio.'-'.$next_semana]);
 
 $view = $_GET['view'] ?? 'lideres';
 if (!in_array($view, ['lideres','coaches','vendedores','ventas'], true)) $view = 'lideres';
@@ -347,14 +253,6 @@ $hc_semana_base = $semana_base;
 $hc_anio_actual = $anio_actual;
 $hc_semana_actual = $semana_actual;
 
-$hc_actual_fallback = false;
-if ($periodo === 'semanal' && !week_has_hc($conexion, $hc_anio_actual, $hc_semana_actual)) {
-    [$fallback_anio, $fallback_semana] = previous_iso_week($hc_anio_actual, $hc_semana_actual);
-    $hc_anio_actual = $fallback_anio;
-    $hc_semana_actual = $fallback_semana;
-    $hc_actual_fallback = true;
-}
-
 if ($periodo === 'mensual') {
     $hc_anio_base = $anio_mes_base;
     $hc_semana_base = ultima_semana_hc_mes($conexion, $anio_mes_base, $mes_base, $semana_base);
@@ -382,31 +280,20 @@ $ultimo_dia_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_
 $rango_mode = $_GET['rango_mode'] ?? 'mtd';
 if (!in_array($rango_mode, ['mtd','completo','custom'], true)) $rango_mode = 'mtd';
 
-// Mes completo siempre debe ignorar cualquier rango manual heredado en la URL.
-if ($rango_mode === 'completo') {
-    unset($_GET['dia_inicio'], $_GET['dia_fin'], $_GET['fecha_inicio'], $_GET['fecha_fin']);
-}
-
 $fecha_inicio_actual = sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual);
 $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_default_mensual);
 
 if ($rango_mode === 'completo') {
-    // Mes completo real para cada mes histórico:
+    // Mes completo real para cada mes:
     // Ejemplo Abril completo => Marzo 1-31 vs Abril 1-30.
-    // Si el mes seleccionado es el último mes con datos, se limita al último día cargado para no ir al futuro.
     $dia_inicio_mensual = 1;
-
-    $dia_fin_actual_completo = $ultimo_dia_actual;
-    if ($anio_mes_actual == $ultimo_anio_datos && $mes_actual == $ultimo_mes_datos && !empty($row_ultima_fecha['ultima_fecha'])) {
-        $dia_fin_actual_completo = min($ultimo_dia_actual, (int)date('j', strtotime($row_ultima_fecha['ultima_fecha'])));
-    }
+    $dia_fin_mensual = $ultimo_dia_actual;
 
     $dia_inicio_base = 1;
     $dia_fin_base = $ultimo_dia_base;
 
     $dia_inicio_actual = 1;
-    $dia_fin_actual = $dia_fin_actual_completo;
-    $dia_fin_mensual = $dia_fin_actual_completo;
+    $dia_fin_actual = $ultimo_dia_actual;
 } else {
     if ($rango_mode !== 'custom') {
         $_GET['dia_inicio'] = 1;
@@ -451,55 +338,6 @@ $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $di
 $fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
 $fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
 
-$dias_semana_labels = [
-    1 => 'LUN',
-    2 => 'MAR',
-    3 => 'MIÉ',
-    4 => 'JUE',
-    5 => 'VIE',
-    6 => 'SÁB',
-    7 => 'DOM'
-];
-
-// Selector semanal operativo.
-// Por default muestra solo días vencidos con base en la última fecha cargada.
-// Ejemplo: si última carga es viernes de SEM21, default = LUN-VIE.
-// Semanas históricas: permitir semana completa LUN-DOM.
-// Semana corriente: limitar únicamente a días con información cargada/vencida.
-$dias_semana_disponibles = [1,2,3,4,5,6,7];
-if ($periodo === 'semanal' && $anio_actual == $max_anio_operativo && $semana_actual == $max_semana_operativa) {
-    $ultima_fecha_operativa = $ultima_fecha_operativa_global;
-
-    if ($ultima_fecha_operativa) {
-        $dow_ultima = (int)date('N', strtotime($ultima_fecha_operativa)); // 1=LUN ... 7=DOM
-        $dow_ultima = min(7, max(1, $dow_ultima));
-        $dias_semana_disponibles = range(1, $dow_ultima);
-    }
-}
-
-$dias_semana_seleccionados = $dias_semana_disponibles;
-if ($periodo === 'semanal' && isset($_GET['dias_semana'])) {
-    $raw_dias = explode(',', (string)$_GET['dias_semana']);
-    $tmp_dias = [];
-    foreach ($raw_dias as $d) {
-        $n = (int)$d;
-        if ($n >= 1 && $n <= 7 && in_array($n, $dias_semana_disponibles, true) && !in_array($n, $tmp_dias, true)) {
-            $tmp_dias[] = $n;
-        }
-    }
-    if (!empty($tmp_dias)) {
-        sort($tmp_dias);
-        $dias_semana_seleccionados = $tmp_dias;
-    }
-}
-
-// ISO 1=LUN ... 7=DOM -> MySQL DAYOFWEEK 2=LUN ... 1=DOM
-$dias_semana_mysql = array_map(function($d) { return ((int)$d === 7) ? 1 : ((int)$d + 1); }, $dias_semana_seleccionados);
-$dias_semana_mysql_in = implode(',', $dias_semana_mysql);
-$dias_semana_label = implode(', ', array_map(function($d) use ($dias_semana_labels) {
-    return $dias_semana_labels[$d] ?? '';
-}, $dias_semana_seleccionados));
-
 if ($periodo === 'semanal') {
     $sem_base_inicio = fecha_iso_semana_inicio($anio_base, $semana_base);
     $sem_base_fin = clone $sem_base_inicio;
@@ -522,13 +360,8 @@ if ($periodo === 'semanal') {
     $fecha_fin_actual_calc = $fecha_fin_actual;
 }
 
-if ($periodo === 'semanal') {
-    $dias_habiles_base = contar_dias_habiles_semana_seleccionada($conexion, $anio_base, $semana_base, $dias_semana_seleccionados);
-    $dias_habiles_actual = contar_dias_habiles_semana_seleccionada($conexion, $anio_actual, $semana_actual, $dias_semana_seleccionados);
-} else {
-    $dias_habiles_base = contar_dias_habiles($conexion, $fecha_inicio_base_calc, $fecha_fin_base_calc);
-    $dias_habiles_actual = contar_dias_habiles($conexion, $fecha_inicio_actual_calc, $fecha_fin_actual_calc);
-}
+$dias_habiles_base = contar_dias_habiles($conexion, $fecha_inicio_base_calc, $fecha_fin_base_calc);
+$dias_habiles_actual = contar_dias_habiles($conexion, $fecha_inicio_actual_calc, $fecha_fin_actual_calc);
 
 $rango_dias_label = $dia_inicio_mensual === $dia_fin_mensual
     ? 'día '.$dia_fin_mensual
@@ -547,23 +380,23 @@ $label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_ac
 
 $cond_i_base = $periodo === 'mensual'
     ? "YEAR(i.fecha) = {$anio_mes_base} AND MONTH(i.fecha) = {$mes_base} AND DAY(i.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
-    : "YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
+    : "YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base}";
 
 $cond_i_actual = $periodo === 'mensual'
     ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
-    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
+    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual}";
 
 $cond_ibase = $periodo === 'mensual'
     ? "YEAR(ibase.fecha) = {$anio_mes_base} AND MONTH(ibase.fecha) = {$mes_base} AND DAY(ibase.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
-    : "YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha,1) = {$semana_base} AND DAYOFWEEK(ibase.fecha) IN ({$dias_semana_mysql_in})";
+    : "YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha,1) = {$semana_base}";
 
 $cond_iactual = $periodo === 'mensual'
     ? "YEAR(iactual.fecha) = {$anio_mes_actual} AND MONTH(iactual.fecha) = {$mes_actual} AND DAY(iactual.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
-    : "YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha,1) = {$semana_actual} AND DAYOFWEEK(iactual.fecha) IN ({$dias_semana_mysql_in})";
+    : "YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha,1) = {$semana_actual}";
 
 $cond_mix_actual = $periodo === 'mensual'
     ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
-    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
+    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual}";
 
 $distrito_param  = $_GET['distrito'] ?? '';
 $lider_param     = $_GET['lider'] ?? '';
@@ -1109,13 +942,11 @@ $title_label = [
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
-$base_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados)]);
-$lider_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]);
-$coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]);
+$base_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual]);
+$lider_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]);
+$coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]);
 
 $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
-if ($periodo === 'semanal') $subtitle .= " · Días: {$dias_semana_label}";
-if (!empty($hc_actual_fallback)) $subtitle .= " · HC actual usando SEM{$hc_semana_actual}";
 if ($view !== 'lideres') $subtitle .= " · Líder: {$lider_param}";
 if ($view === 'vendedores' || $view === 'ventas') $subtitle .= " · Coach: {$coach_param}";
 if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
@@ -1155,55 +986,8 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
         <a class="week-btn <?= $periodo === 'mensual' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual'])) ?>">Mensual</a>
         <?php if ($periodo === 'semanal'): ?>
             <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
-            <div class="range-dropdown week-range-dropdown">
-                <button type="button" class="week-current range-trigger" id="weekRangeTrigger"><?= h($label_periodo_actual) ?></button>
-                <div class="range-panel week-range-panel" id="weekRangePanel">
-                    <form method="get" id="weekRangeForm">
-                        <?php foreach ($_GET as $k => $v): ?>
-                            <?php if (!in_array($k, ['dias_semana'], true)): ?>
-                                <input type="hidden" name="<?= h($k) ?>" value="<?= h($v) ?>">
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                        <input type="hidden" name="periodo" value="semanal">
-                        <input type="hidden" name="dias_semana" id="diasSemanaInput" value="<?= h(implode(',', $dias_semana_seleccionados)) ?>">
-
-                        <div class="range-panel-title">Selecciona días comparables de Semana <?= h($semana_actual) ?> · <?= h($anio_actual) ?></div>
-                        <div class="calendar-grid-real weekday-grid-real" id="weekdayGrid">
-                            <div class="calendar-weekday">Lun</div>
-                            <div class="calendar-weekday">Mar</div>
-                            <div class="calendar-weekday">Mié</div>
-                            <div class="calendar-weekday">Jue</div>
-                            <div class="calendar-weekday">Vie</div>
-                            <div class="calendar-weekday">Sáb</div>
-                            <div class="calendar-weekday">Dom</div>
-
-                            <?php for ($dia_num = 1; $dia_num <= 7; $dia_num++): ?>
-                                <?php
-                                    $disabled_week_day = !in_array($dia_num, $dias_semana_disponibles, true);
-                                    $selected_week_day = in_array($dia_num, $dias_semana_seleccionados, true);
-                                    $week_day_class = $selected_week_day ? 'selected-start selected-end' : '';
-                                    if ($disabled_week_day) $week_day_class .= ' disabled-day';
-                                ?>
-                                <button type="button"
-                                        class="calendar-day weekday-day <?= h(trim($week_day_class)) ?>"
-                                        data-day="<?= h($dia_num) ?>"
-                                        <?= $disabled_week_day ? 'disabled' : '' ?>>
-                                    <?= h($dias_semana_labels[$dia_num]) ?>
-                                </button>
-                            <?php endfor; ?>
-                        </div>
-                        <div class="range-actions">
-                            <button type="button" class="quick-week" id="weekFullBtn">Semana completa disponible</button>
-                            <button type="submit">Aplicar</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-            <?php if ($has_next): ?>
-                <a class="week-btn" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
-            <?php else: ?>
-                <span class="week-btn disabled">Semana <?= h($next_semana) ?> →</span>
-            <?php endif; ?>
+            <span class="week-current"><?= h($label_periodo_actual) ?></span>
+            <a class="week-btn <?= $has_next ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$next_anio,'semana'=>$next_semana])) ?>">Semana <?= h($next_semana) ?> →</a>
         <?php else:
             $prev_mes_nav = $mes_actual - 1; $prev_anio_mes_nav = $anio_mes_actual;
             if ($prev_mes_nav < 1) { $prev_mes_nav = 12; $prev_anio_mes_nav--; }
@@ -1281,21 +1065,10 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                                 <span id="rangeSummary"><?= h($meses_es[$mes_base]) ?> <?= h($dia_inicio_base) ?>-<?= h($dia_fin_base) ?> vs <?= h($meses_es[$mes_actual]) ?> <?= h($dia_inicio_actual) ?>-<?= h($dia_fin_actual) ?></span>
                             </div>
 
-		<div class="range-actions">
-    			<a class="quick-range <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
-       				style="<?= ($rango_mode === 'completo') ? 'background:linear-gradient(135deg,#7A2BFF,#FF0AC8)!important;color:#fff!important;box-shadow:0 8px 18px rgba(122,43,255,.18)!important;' : '' ?>"
-       					href="?<?= qs(array_merge($_GET, [
-            					'periodo'=>'mensual',
-            					'rango_mode'=>'completo',
-            					'dia_inicio'=>null,
-            					'dia_fin'=>null,
-            					'fecha_inicio'=>null,
-            					'fecha_fin'=>null
-        			])) ?>">Mes completo</a>
-
-    			<button type="submit">Aplicar</button>
-		</div>
-
+                            <div class="range-actions">
+                                <a class="quick-range" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','rango_mode'=>'completo'])) ?>">Mes completo</a>
+                                <button type="submit">Aplicar</button>
+                            </div>
                         </form>
                     </div>
                 </div>
@@ -1403,11 +1176,11 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                 <?php $rank=1; foreach($rows as $r):
                     $href = '';
                     if ($view === 'lideres') {
-                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
                     } elseif ($view === 'coaches') {
-                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
                     } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
-                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]);
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]);
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
@@ -1800,77 +1573,6 @@ recalc();
     });
 
     paint();
-})();
-</script>
-
-
-<script>
-(function(){
-    const dropdown = document.querySelector('body.page-ranking .week-range-dropdown');
-    const trigger = document.getElementById('weekRangeTrigger');
-    const panel = document.getElementById('weekRangePanel');
-    const grid = document.getElementById('weekdayGrid');
-    const input = document.getElementById('diasSemanaInput');
-    const fullBtn = document.getElementById('weekFullBtn');
-
-    if(!dropdown || !trigger || !grid || !input) return;
-
-    function buttons(){
-        return [...grid.querySelectorAll('.weekday-day:not(:disabled)')];
-    }
-
-    function selectedDays(){
-        return buttons()
-            .filter(btn => btn.classList.contains('selected-start'))
-            .map(btn => parseInt(btn.dataset.day, 10))
-            .filter(n => n >= 1 && n <= 7)
-            .sort((a,b)=>a-b);
-    }
-
-    function sync(){
-        let days = selectedDays();
-
-        if(days.length === 0){
-            const first = buttons()[0];
-            if(first) first.classList.add('selected-start','selected-end');
-            days = selectedDays();
-        }
-
-        input.value = days.join(',');
-    }
-
-    function markSelected(btn, selected){
-        btn.classList.toggle('selected-start', selected);
-        btn.classList.toggle('selected-end', selected);
-    }
-
-    trigger.addEventListener('click', (e)=>{
-        e.stopPropagation();
-        dropdown.classList.toggle('open');
-    });
-
-    panel.addEventListener('click', (e)=>e.stopPropagation());
-
-    document.addEventListener('click', ()=>{
-        dropdown.classList.remove('open');
-    });
-
-    buttons().forEach(btn=>{
-        btn.addEventListener('click', ()=>{
-            const selected = !(btn.classList.contains('selected-start') || btn.classList.contains('selected-end'));
-            markSelected(btn, selected);
-            sync();
-        });
-    });
-
-    if(fullBtn){
-        fullBtn.addEventListener('click', ()=>{
-            buttons().forEach(btn=>markSelected(btn, true));
-            sync();
-        });
-    }
-
-    sync();
 })();
 </script>
 
