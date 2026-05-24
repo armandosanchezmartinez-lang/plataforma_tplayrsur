@@ -3594,3 +3594,21 @@ body.page-ranking .range-actions a.quick-range.active{
     background:red !important;
     color:white !important;
 }
+
+/* == Botón aplicar en selecion de días del mes == */
+body.page-ranking .range-actions{
+    display:flex !important;
+    justify-content:space-between !important;
+    align-items:center !important;
+    gap:12px !important;
+    margin-top:14px !important;
+}
+
+body.page-ranking .range-actions .quick-range,
+body.page-ranking .range-actions button{
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    min-height:42px !important;
+    white-space:nowrap !important;
+}
