@@ -140,7 +140,10 @@ function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dia
 
     foreach ($dias_iso as $dia_iso) {
         $dia_iso = (int)$dia_iso;
-        if ($dia_iso < 1 || $dia_iso > 6) continue; // LUN-SÁB. Domingo no opera.
+        if ($dia_iso < 1 || $dia_iso > 7) continue; // 1=LUN ... 7=DOM
+
+        // Domingo puede seleccionarse para filtrar ventas, pero NO cuenta como día hábil.
+        if ($dia_iso === 7) continue;
 
         $fecha = clone $lunes;
         $fecha->modify('+'.($dia_iso - 1).' days');
@@ -156,11 +159,13 @@ function contar_dias_habiles_semana_seleccionada($conexion, $anio, $semana, $dia
             $fechas_sql[] = "'".mysqli_real_escape_string($conexion, $fecha_sel)."'";
         }
 
-        $sql = "SELECT fecha FROM dias_inhabiles WHERE fecha IN (".implode(',', $fechas_sql).")";
-        $res = mysqli_query($conexion, $sql);
-        if ($res) {
-            while ($row = mysqli_fetch_assoc($res)) {
-                if (!empty($row['fecha'])) $festivos[$row['fecha']] = true;
+        if (!empty($fechas_sql)) {
+            $sql = "SELECT fecha FROM dias_inhabiles WHERE fecha IN (".implode(',', $fechas_sql).")";
+            $res = mysqli_query($conexion, $sql);
+            if ($res) {
+                while ($row = mysqli_fetch_assoc($res)) {
+                    if (!empty($row['fecha'])) $festivos[$row['fecha']] = true;
+                }
             }
         }
     }
@@ -441,19 +446,22 @@ $dias_semana_labels = [
     3 => 'MIÉ',
     4 => 'JUE',
     5 => 'VIE',
-    6 => 'SÁB'
+    6 => 'SÁB',
+    7 => 'DOM'
 ];
 
 // Selector semanal operativo.
 // Por default muestra solo días vencidos con base en la última fecha cargada.
 // Ejemplo: si última carga es viernes de SEM21, default = LUN-VIE.
-$dias_semana_disponibles = [1,2,3,4,5,6];
+// Semanas históricas: permitir semana completa LUN-DOM.
+// Semana corriente: limitar únicamente a días con información cargada/vencida.
+$dias_semana_disponibles = [1,2,3,4,5,6,7];
 if ($periodo === 'semanal' && $anio_actual == $max_anio_operativo && $semana_actual == $max_semana_operativa) {
     $ultima_fecha_operativa = $ultima_fecha_operativa_global;
 
     if ($ultima_fecha_operativa) {
         $dow_ultima = (int)date('N', strtotime($ultima_fecha_operativa)); // 1=LUN ... 7=DOM
-        $dow_ultima = min(6, max(1, $dow_ultima));
+        $dow_ultima = min(7, max(1, $dow_ultima));
         $dias_semana_disponibles = range(1, $dow_ultima);
     }
 }
@@ -464,7 +472,7 @@ if ($periodo === 'semanal' && isset($_GET['dias_semana'])) {
     $tmp_dias = [];
     foreach ($raw_dias as $d) {
         $n = (int)$d;
-        if ($n >= 1 && $n <= 6 && in_array($n, $dias_semana_disponibles, true) && !in_array($n, $tmp_dias, true)) {
+        if ($n >= 1 && $n <= 7 && in_array($n, $dias_semana_disponibles, true) && !in_array($n, $tmp_dias, true)) {
             $tmp_dias[] = $n;
         }
     }
@@ -474,7 +482,8 @@ if ($periodo === 'semanal' && isset($_GET['dias_semana'])) {
     }
 }
 
-$dias_semana_mysql = array_map(function($d) { return (int)$d + 1; }, $dias_semana_seleccionados);
+// ISO 1=LUN ... 7=DOM -> MySQL DAYOFWEEK 2=LUN ... 1=DOM
+$dias_semana_mysql = array_map(function($d) { return ((int)$d === 7) ? 1 : ((int)$d + 1); }, $dias_semana_seleccionados);
 $dias_semana_mysql_in = implode(',', $dias_semana_mysql);
 $dias_semana_label = implode(', ', array_map(function($d) use ($dias_semana_labels) {
     return $dias_semana_labels[$d] ?? '';
@@ -1159,7 +1168,7 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
 
                             <?php for ($dia_num = 1; $dia_num <= 7; $dia_num++): ?>
                                 <?php
-                                    $disabled_week_day = ($dia_num === 7 || !in_array($dia_num, $dias_semana_disponibles, true));
+                                    $disabled_week_day = !in_array($dia_num, $dias_semana_disponibles, true);
                                     $selected_week_day = in_array($dia_num, $dias_semana_seleccionados, true);
                                     $week_day_class = $selected_week_day ? 'selected-start selected-end' : '';
                                     if ($disabled_week_day) $week_day_class .= ' disabled-day';
@@ -1168,7 +1177,7 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
                                         class="calendar-day weekday-day <?= h(trim($week_day_class)) ?>"
                                         data-day="<?= h($dia_num) ?>"
                                         <?= $disabled_week_day ? 'disabled' : '' ?>>
-                                    <?= h($dia_num <= 6 ? $dias_semana_labels[$dia_num] : 'DOM') ?>
+                                    <?= h($dias_semana_labels[$dia_num]) ?>
                                 </button>
                             <?php endfor; ?>
                         </div>
@@ -1797,7 +1806,7 @@ recalc();
         return buttons()
             .filter(btn => btn.classList.contains('selected-start'))
             .map(btn => parseInt(btn.dataset.day, 10))
-            .filter(n => n >= 1 && n <= 6)
+            .filter(n => n >= 1 && n <= 7)
             .sort((a,b)=>a-b);
     }
 
