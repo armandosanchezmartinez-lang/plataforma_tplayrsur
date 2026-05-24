@@ -217,23 +217,33 @@ while ($res_sem && $row = mysqli_fetch_assoc($res_sem)) {
     $semanas[] = ['anio' => (int)$row['anio'], 'semana' => (int)$row['semana']];
 }
 
-$anio_actual = $semanas[0]['anio'] ?? (int)date('Y');
-$semana_actual = $semanas[0]['semana'] ?? (int)date('W');
+// Última semana con plantilla HC. Sirve para histórico y fallback.
+$anio_hc_default = $semanas[0]['anio'] ?? (int)date('Y');
+$semana_hc_default = $semanas[0]['semana'] ?? (int)date('W');
 
-// Semana operativa máxima: permite ver avance de semana corriente aunque aún no exista plantilla HC.
-$max_anio_operativo = $anio_actual;
-$max_semana_operativa = $semana_actual;
+// Semana operativa máxima: se obtiene de la última fecha real cargada en instalaciones.
+// Esta es la que debe abrir por default, aunque aún no exista plantilla HC propia.
+$max_anio_operativo = $anio_hc_default;
+$max_semana_operativa = $semana_hc_default;
+$ultima_fecha_operativa_global = null;
+
 $res_max_inst = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL AND fecha <= CURDATE()");
 if ($res_max_inst && $row_max_inst = mysqli_fetch_assoc($res_max_inst)) {
     if (!empty($row_max_inst['ultima_fecha'])) {
+        $ultima_fecha_operativa_global = $row_max_inst['ultima_fecha'];
         $max_anio_operativo = (int)date('o', strtotime($row_max_inst['ultima_fecha']));
         $max_semana_operativa = (int)date('W', strtotime($row_max_inst['ultima_fecha']));
     }
 }
 
+// Default correcto: abrir la semana operativa con datos, no la última semana con HC.
+$anio_actual = $max_anio_operativo;
+$semana_actual = $max_semana_operativa;
+
 if (isset($_GET['anio'])) $anio_actual = max(2020, min(2100, (int)$_GET['anio']));
 if (isset($_GET['semana'])) $semana_actual = max(1, min(53, (int)$_GET['semana']));
 
+// Si por URL intentan ir a una semana futura sin instalaciones, regresar a la última semana operativa.
 if (
     $anio_actual > $max_anio_operativo
     || ($anio_actual == $max_anio_operativo && $semana_actual > $max_semana_operativa)
@@ -439,13 +449,7 @@ $dias_semana_labels = [
 // Ejemplo: si última carga es viernes de SEM21, default = LUN-VIE.
 $dias_semana_disponibles = [1,2,3,4,5,6];
 if ($periodo === 'semanal' && $anio_actual == $max_anio_operativo && $semana_actual == $max_semana_operativa) {
-    $ultima_fecha_operativa = null;
-    if (!empty($row_max_inst['ultima_fecha'])) {
-        $ultima_fecha_operativa = $row_max_inst['ultima_fecha'];
-    } else {
-        $res_uf = mysqli_query($conexion, "SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha IS NOT NULL");
-        if ($res_uf && $row_uf = mysqli_fetch_assoc($res_uf)) $ultima_fecha_operativa = $row_uf['ultima_fecha'] ?? null;
-    }
+    $ultima_fecha_operativa = $ultima_fecha_operativa_global;
 
     if ($ultima_fecha_operativa) {
         $dow_ultima = (int)date('N', strtotime($ultima_fecha_operativa)); // 1=LUN ... 7=DOM
