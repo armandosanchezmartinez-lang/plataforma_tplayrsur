@@ -339,6 +339,8 @@ $roles_labels = [
     <a href="detalle/ranking_productividad.php?periodo=semanal" class="nav-item"><span class="nav-icon">🏆</span> Ranking</a>
     <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
     <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <a href="detalle/metas_fcst_captura.php" class="nav-item"><span class="nav-icon">🎯</span>Captura FCST</a>
+         <a href="detalle/metas_fcst_dashboard.php" class="nav-item"> <span class="nav-icon">🚦</span> Dashboard FCST</a>
     <div class="sidebar-bottom"></div>
 </aside>
 
