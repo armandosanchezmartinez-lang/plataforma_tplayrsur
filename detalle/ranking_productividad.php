@@ -241,25 +241,22 @@ if ($res_max_inst && $row_max_inst = mysqli_fetch_assoc($res_max_inst)) {
     }
 }
 
-// Abrir SIEMPRE la semana calendario corriente por default.
-// Aunque vaya parcial, se calcula con los días vencidos/disponibles.
-$anio_actual = (int)date('o');   // año ISO
-$semana_actual = (int)date('W'); // semana ISO actual
+// Abrir por default la última semana con información cargada en instalaciones.
+// Si es lunes y aún no hay carga de la semana corriente, se queda en la semana vencida completa.
+$anio_actual = $max_anio_operativo;
+$semana_actual = $max_semana_operativa;
 
 if (isset($_GET['anio'])) $anio_actual = max(2020, min(2100, (int)$_GET['anio']));
 if (isset($_GET['semana'])) $semana_actual = max(1, min(53, (int)$_GET['semana']));
 
-// Permitir semana calendario corriente aunque aún vaya parcial.
-// Solo bloquear semanas FUTURAS reales.
-$anio_hoy = (int)date('o');
-$semana_hoy = (int)date('W');
-
+// Bloquear semanas sin información operativa.
+// Si por URL intentan abrir una semana mayor a la última cargada, regresar a la última semana con datos.
 if (
-    $anio_actual > $anio_hoy
-    || ($anio_actual == $anio_hoy && $semana_actual > $semana_hoy)
+    $anio_actual > $max_anio_operativo
+    || ($anio_actual == $max_anio_operativo && $semana_actual > $max_semana_operativa)
 ) {
-    $anio_actual = $anio_hoy;
-    $semana_actual = $semana_hoy;
+    $anio_actual = $max_anio_operativo;
+    $semana_actual = $max_semana_operativa;
 }
 
 $semana_base = $semana_actual - 1;
@@ -472,12 +469,16 @@ $dias_semana_labels = [
 // Semanas históricas: permitir semana completa LUN-DOM.
 // Semana corriente: limitar únicamente a días con información cargada/vencida.
 $dias_semana_disponibles = [1,2,3,4,5,6,7];
-if ($periodo === 'semanal' && $anio_actual == (int)date('o') && $semana_actual == (int)date('W')) {
-    // Semana corriente: mostrar solo días vencidos (-1 día).
-    $fecha_corte_semanal = date('Y-m-d', strtotime('-1 day'));
-    $dow_corte = (int)date('N', strtotime($fecha_corte_semanal)); // 1=LUN ... 7=DOM
-    $dow_corte = min(7, max(1, $dow_corte));
-    $dias_semana_disponibles = range(1, $dow_corte);
+if ($periodo === 'semanal' && $anio_actual == $max_anio_operativo && $semana_actual == $max_semana_operativa) {
+    // Última semana cargada: mostrar solo hasta el último día con información.
+    // Si la última carga fue domingo, queda semana completa LUN-DOM.
+    $ultima_fecha_operativa = $ultima_fecha_operativa_global;
+
+    if ($ultima_fecha_operativa) {
+        $dow_ultima = (int)date('N', strtotime($ultima_fecha_operativa)); // 1=LUN ... 7=DOM
+        $dow_ultima = min(7, max(1, $dow_ultima));
+        $dias_semana_disponibles = range(1, $dow_ultima);
+    }
 }
 
 $dias_semana_seleccionados = $dias_semana_disponibles;
