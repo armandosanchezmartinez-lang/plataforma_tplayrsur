@@ -1135,10 +1135,17 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
 </head>
 <body class="page-ranking">
-<?php
-$current_page = 'ranking';
-include __DIR__ . '/../includes/sidebar.php';
-?>
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <img src="../assets/img/logo-xpedient.png?v=3" alt="Xpedient">
+    </div>
+    <div class="sidebar-brand">TOTALXPEDIENT</div>
+    <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="ranking_productividad.php" class="nav-item active"><span class="nav-icon">🏆</span> Ranking</a>
+    <a href="hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
+    <a href="reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <div class="sidebar-bottom"><a href="../logout.php" class="logout-btn">⎋ Cerrar sesión</a></div>
+</aside>
 
 <main class="main">
 <section class="topbar">

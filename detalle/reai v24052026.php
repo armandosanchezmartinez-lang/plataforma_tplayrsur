@@ -370,10 +370,19 @@ $label_dia_ant = date('d/m', strtotime($fecha_dia_anterior));
     </style>
 </head>
 <body class="page-reai">
-<?php
-$current_page = 'reai';
-include __DIR__ . '/../includes/sidebar.php';
-?>
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <img src="../assets/img/logo-xpedient.png?v=3" alt="Xpedient">
+    </div>
+    <div class="sidebar-brand">TOTALXPEDIENT</div>
+    <a href="../index.php" class="nav-item"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="ranking_productividad.php?anio=<?= $anio_actual ?>&semana=<?= $semana_actual ?>" class="nav-item"><span class="nav-icon">🏆</span> Ranking</a>
+    <a href="hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
+    <a href="reai.php" class="nav-item active"><span class="nav-icon">📋</span> REAI</a>
+    <div class="sidebar-bottom">
+        <a href="../logout.php" class="logout-btn">⎋ Cerrar sesión</a>
+    </div>
+</aside>
 
 <main class="main">
     <div class="page-header">

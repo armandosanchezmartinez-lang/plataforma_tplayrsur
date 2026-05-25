@@ -340,10 +340,19 @@ $roles_labels = [
     <link rel="stylesheet" href="assets/css/xpedient-v2.css?v=160">
 </head>
 <body class="page-dashboard">
-<?php
-$current_page = 'dashboard';
-include __DIR__ . '/includes/sidebar.php';
-?>
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <img src="assets/img/logo-xpedient.png?v=3" alt="Xpedient">
+    </div>
+    <div class="sidebar-brand">TOTALXPEDIENT</div>
+    <a href="index.php" class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</a>
+    <a href="detalle/ranking_productividad.php?periodo=semanal" class="nav-item"><span class="nav-icon">🏆</span> Ranking</a>
+    <a href="detalle/hc_detalle.php" class="nav-item"><span class="nav-icon">👥</span> Headcount</a>
+    <a href="detalle/reai.php" class="nav-item"><span class="nav-icon">📋</span> REAI</a>
+    <a href="detalle/metas_fcst_captura.php" class="nav-item"><span class="nav-icon">🎯</span>Captura FCST</a>
+         <a href="detalle/metas_fcst_dashboard.php" class="nav-item"> <span class="nav-icon">🚦</span> Dashboard FCST</a>
+    <div class="sidebar-bottom"></div>
+</aside>
 
 <main class="main">
     <div class="page-header">
