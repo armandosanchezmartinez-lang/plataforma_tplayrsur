@@ -393,7 +393,7 @@ $fcst_pct_series = $semaforo['fcst_pct_series'];
 <head>
     <meta charset="UTF-8">
     <title>METAS-FCST - TOTALXPEDIENT</title>
-    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
     <style>
         :root {
             --tx-purple:#7A2BFF; --tx-pink:#FF00B8; --tx-blue:#2563eb;
@@ -402,6 +402,13 @@ $fcst_pct_series = $semaforo['fcst_pct_series'];
         }
         *{box-sizing:border-box}
         body{margin:0;font-family:'Poppins','Segoe UI',sans-serif;background:radial-gradient(circle at 8% 8%,rgba(255,10,200,.10),transparent 28%),radial-gradient(circle at 92% 14%,rgba(0,216,255,.09),transparent 30%),linear-gradient(180deg,#f7f8ff 0%,#eef5ff 100%);color:var(--tx-text);min-height:100vh;display:flex}
+        .sidebar{width:var(--sidebar);background:linear-gradient(180deg,#1b2d5a 0%,#102046 100%);min-height:100vh;position:fixed;left:0;top:0;padding:24px 0;display:flex;flex-direction:column;align-items:center}
+        .sidebar-logo{width:74px;height:74px;border-radius:22px;background:rgba(255,255,255,.10);display:flex;align-items:center;justify-content:center;margin-bottom:8px;font-size:2rem}
+        .sidebar-brand{color:white;font-weight:800;letter-spacing:.8px;font-size:.78rem;margin-bottom:28px}
+        .nav-item{width:100%;display:flex;flex-direction:column;align-items:center;gap:5px;padding:14px 0;color:rgba(255,255,255,.70);text-decoration:none;font-weight:700;font-size:.78rem;transition:.18s ease}
+        .nav-item:hover,.nav-item.active{background:rgba(255,255,255,.11);color:white}
+        .nav-icon{font-size:1.25rem}
+        .main{margin-left:var(--sidebar);width:calc(100% - var(--sidebar));padding:30px}
         .page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}
         .page-title h1{margin:0;font-size:1.65rem;letter-spacing:-.4px}
         .page-title p{margin:6px 0 0;color:var(--tx-muted);font-size:.9rem}
@@ -446,7 +453,7 @@ $fcst_pct_series = $semaforo['fcst_pct_series'];
         .btn:disabled{opacity:.45;cursor:not-allowed}
         .alert{border-radius:16px;padding:14px 16px;margin-bottom:18px;line-height:1.45;font-weight:700}.alert.exito{background:#dcfce7;color:#166534}.alert.error{background:#fee2e2;color:#991b1b}
         .helper{font-size:.78rem;color:var(--tx-muted);line-height:1.45;margin-top:8px}
-        @media(max-width:1100px){.grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
+        @media(max-width:1100px){.grid{grid-template-columns:1fr}.main{padding:22px}.page-header{flex-direction:column}.status-card{width:100%}}
     </style>
 </head>
 <body>
