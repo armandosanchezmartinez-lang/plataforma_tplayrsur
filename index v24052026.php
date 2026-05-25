@@ -97,16 +97,6 @@ $mes_actual   = (int)date('n', strtotime('-2 day'));
 $anio_query   = (int)date('Y', strtotime('-2 day'));
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
-// Equivalencias de distrito
-$distritos_equivalentes = [$distrito_usuario];
-if ($distrito_usuario === 'COATZA MINA') {
-    $distritos_equivalentes[] = 'COATZA / MINA';
-}
-$distritos_equivalentes = array_unique($distritos_equivalentes);
-$distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
-    return mysqli_real_escape_string($conexion, $d);
-}, $distritos_equivalentes)) . "'";
-
 $por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
 $mostrar_meta = $por_distrito;
 
@@ -114,7 +104,7 @@ $mostrar_meta = $por_distrito;
 if ($rol === 'admin') {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_inst = mysqli_query($conexion, "SELECT 0 as total");
@@ -134,7 +124,7 @@ $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 if ($rol === 'admin') {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
 } elseif ($por_distrito) {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito IN ($distritos_sql)");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_vent = mysqli_query($conexion, "SELECT 0 as total");
@@ -195,7 +185,7 @@ if ($mostrar_meta) {
     if ($rol === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
     } else {
-        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
+        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito='$distrito_esc'");
     }
 
     if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
@@ -209,7 +199,7 @@ if ($mostrar_meta) {
 if ($rol === 'admin') {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_mix_inst = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
@@ -231,7 +221,7 @@ $inst_2p = (int)($mix_inst['p2'] ?? 0);
 if ($rol === 'admin') {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
 } elseif ($por_distrito) {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito IN ($distritos_sql)");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito='$distrito_esc'");
 } else {
     if (empty($folio_ids)) {
         $r_mix_vent = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
@@ -265,7 +255,7 @@ $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto
     FROM instalaciones 
     WHERE fecha >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) AND origen_prospecto <> '-' ";
 if ($rol !== 'admin' && $por_distrito) {
-    $query_inst .= " AND distrito IN ($distritos_sql)";
+    $query_inst .= " AND distrito='$distrito_esc'";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
     $query_inst .= " AND folio_empleado IN ('$ph')";
@@ -288,7 +278,7 @@ $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, ca
     FROM ventas 
     WHERE fecha_cierre >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) ";
 if ($rol !== 'admin' && $por_distrito) {
-    $query_vent .= " AND distrito IN ($distritos_sql)";
+    $query_vent .= " AND distrito='$distrito_esc'";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
     $query_vent .= " AND folio_empleado IN ('$ph')";
