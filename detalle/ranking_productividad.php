@@ -799,8 +799,8 @@ resumen AS (
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
-        COUNT(ibase.cuenta) AS ins_sem_base,
-        COUNT(iactual.cuenta) AS ins_sem_actual
+        COUNT(DISTINCT ibase.cuenta) AS ins_sem_base,
+        COUNT(DISTINCT iactual.cuenta) AS ins_sem_actual
     FROM coaches_base c
     LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
     LEFT JOIN instalaciones ibase
@@ -819,7 +819,7 @@ ventas_sin_coach_base AS (
     SELECT
         la.distrito_reporte AS distrito,
         la.lider_hc AS lider,
-        COUNT(i.cuenta) AS ins_sem_base
+        COUNT(DISTINCT i.cuenta) AS ins_sem_base
     FROM selected_lider la
     INNER JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
@@ -830,15 +830,14 @@ ventas_sin_coach_base AS (
        AND v.semana = {$hc_semana_base}
        AND v.folio_empleado <> 'VACANTE'
        AND v.nombre_colaborador <> 'VACANTE'
-    WHERE '{$periodo}' = 'mensual'
-      AND v.folio_empleado IS NULL
+    WHERE v.folio_empleado IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
 ventas_sin_coach_actual AS (
     SELECT
         la.distrito_reporte AS distrito,
         la.lider_hc AS lider,
-        COUNT(i.cuenta) AS ins_sem_actual
+        COUNT(DISTINCT i.cuenta) AS ins_sem_actual
     FROM selected_lider la
     INNER JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
@@ -849,8 +848,7 @@ ventas_sin_coach_actual AS (
        AND v.semana = {$hc_semana_actual}
        AND v.folio_empleado <> 'VACANTE'
        AND v.nombre_colaborador <> 'VACANTE'
-    WHERE '{$periodo}' = 'mensual'
-      AND v.folio_empleado IS NULL
+    WHERE v.folio_empleado IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
 sin_coach AS (
@@ -928,8 +926,7 @@ FROM (
         0 AS vacante_actual,
         0 AS hc_total_actual
     FROM sin_coach
-    WHERE '{$periodo}' = 'mensual'
-      AND (ins_sem_base + ins_sem_actual) > 0
+    WHERE (ins_sem_base + ins_sem_actual) > 0
 ) final
 WHERE
        COALESCE(ins_sem_base,0) > 0
