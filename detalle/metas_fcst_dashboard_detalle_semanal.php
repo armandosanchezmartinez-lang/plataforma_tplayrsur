@@ -83,11 +83,37 @@ for($s=1;$s<=$semana;$s++){
     mysqli_stmt_bind_param($stmt,"ii",$anio,$s); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); if($x=mysqli_fetch_assoc($res))$r=(int)$x['total']; mysqli_stmt_close($stmt);
     $labels[]='S'.$s; $serie_real[]=$r; $serie_meta[]=$m?round($r/$m*100,1):null; $serie_fcst[]=$f?round($r/$f*100,1):null;
 }
+
+/* Detalle semanal por distrito: SEM 1 a SEM seleccionada */
+$detalle_semanal = [];
+foreach($distritos as $d){
+    $detalle_semanal[$d] = [];
+    for($s=1; $s<=$semana; $s++){
+        $m=0; $f=0; $r=0;
+
+        $stmt=mysqli_prepare($conexion,"SELECT COALESCE(SUM(meta),0) total FROM metas_instalacion_semanal WHERE anio=? AND semana=? AND distrito=?");
+        if($stmt){ mysqli_stmt_bind_param($stmt,"iis",$anio,$s,$d); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); if($x=mysqli_fetch_assoc($res))$m=(int)$x['total']; mysqli_stmt_close($stmt); }
+
+        $stmt=mysqli_prepare($conexion,"SELECT COALESCE(SUM(forecast),0) total FROM metas_forecast_semanal WHERE anio=? AND semana=? AND distrito=?");
+        if($stmt){ mysqli_stmt_bind_param($stmt,"iis",$anio,$s,$d); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); if($x=mysqli_fetch_assoc($res))$f=(int)$x['total']; mysqli_stmt_close($stmt); }
+
+        $stmt=mysqli_prepare($conexion,"SELECT COUNT(cuenta) total FROM instalaciones WHERE YEAR(fecha)=? AND WEEK(fecha,1)=? AND distrito=? AND origen_prospecto <> '-'");
+        if($stmt){ mysqli_stmt_bind_param($stmt,"iis",$anio,$s,$d); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); if($x=mysqli_fetch_assoc($res))$r=(int)$x['total']; mysqli_stmt_close($stmt); }
+
+        $detalle_semanal[$d][$s] = [
+            'meta'=>$m,
+            'fcst'=>$f,
+            'real'=>$r,
+            'pm'=>div_pct($r,$m),
+            'pf'=>div_pct($r,$f)
+        ];
+    }
+}
 ?>
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>METAS-FCST Dashboard - TOTALXPEDIENT</title>
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
 <style>
-:root{--p:#7A2BFF;--b:#2563eb;--card:rgba(255,255,255,.92);--bd:#e2e8f0;--txt:#1a2540;--mut:#6b7a99}*{box-sizing:border-box}body{margin:0;font-family:Poppins,'Segoe UI',sans-serif;background:linear-gradient(180deg,#f7f8ff,#eef5ff);color:var(--txt);display:flex}.header{display:flex;justify-content:space-between;gap:20px;margin-bottom:22px}.header h1{margin:0;font-size:1.7rem}.header p{margin:6px 0;color:var(--mut)}.box,.card,.kpi{background:var(--card);border:1px solid var(--bd);border-radius:22px;box-shadow:0 14px 32px rgba(22,28,60,.08)}.box{padding:18px 22px;min-width:260px}.label{font-size:.72rem;text-transform:uppercase;color:var(--mut);font-weight:900;letter-spacing:.7px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}.kpi{padding:20px}.value{font-size:2rem;font-weight:950;color:var(--p);margin-top:8px}.sub{font-size:.78rem;color:var(--mut);font-weight:800}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:20px}.card{padding:22px;margin-bottom:20px}.full{grid-column:1/-1}.title{display:flex;justify-content:space-between;margin-bottom:16px}.title h2{margin:0;font-size:1.08rem}.title span{font-size:.78rem;color:var(--mut);font-weight:900}.heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.dcard{border:1px solid var(--bd);background:white;border-radius:18px;padding:16px;border-left:8px solid #cbd5e1}.dcard.rojo{border-left-color:#ef4444}.dcard.amarillo{border-left-color:#fbbf24}.dcard.verde{border-left-color:#65a30d}.dcard.azul{border-left-color:#2563eb}.name{font-weight:950;color:#334155}.pct{font-size:1.8rem;font-weight:950}.risk{font-size:.72rem;font-weight:950;color:#64748b}.wrap{overflow-x:auto;border:1px solid var(--bd);border-radius:16px;background:white}table{border-collapse:collapse;width:100%;min-width:920px;font-size:.78rem}th,td{padding:11px 10px;border-bottom:1px solid var(--bd);text-align:center;white-space:nowrap}th{background:#f8fafc;color:#475569;font-size:.68rem;text-transform:uppercase}td:first-child,th:first-child{text-align:left;position:sticky;left:0;background:white;font-weight:900}.pill{border-radius:999px;padding:6px 10px;font-weight:950;font-size:.75rem}.rojo{background:#fee2e2;color:#991b1b}.amarillo{background:#fef3c7;color:#92400e}.verde{background:#dcfce7;color:#166534}.azul{background:#dbeafe;color:#1d4ed8}.gris{background:#e2e8f0;color:#475569}.alerts{display:flex;flex-direction:column;gap:10px}.alert{background:white;border:1px solid var(--bd);border-radius:16px;padding:13px 14px;font-weight:800;color:#334155;font-size:.86rem}.chart{width:100%;height:270px;background:white;border:1px solid var(--bd);border-radius:18px;padding:10px}.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;font-weight:900;color:#64748b;margin-top:10px}.dot{width:12px;height:12px;border-radius:999px;display:inline-block;margin-right:6px;vertical-align:middle}.dot.real{background:#FF00B8}.dot.meta{background:#FF00B8}.dot.fcst{background:#7A2BFF}.week-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.week-btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:8px 12px;background:#fff;border:1px solid var(--bd);color:#1a2540;text-decoration:none;font-size:.78rem;font-weight:900;box-shadow:0 8px 18px rgba(22,28,60,.06)}.week-btn:hover{background:linear-gradient(135deg,rgba(122,43,255,.10),rgba(255,0,184,.08));border-color:#c4b5fd}.week-btn.active{color:#fff;background:linear-gradient(135deg,#7A2BFF,#FF00B8);border-color:transparent}@media(max-width:1100px){.kpis{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}.header{flex-direction:column}}
+:root{--p:#7A2BFF;--b:#2563eb;--card:rgba(255,255,255,.92);--bd:#e2e8f0;--txt:#1a2540;--mut:#6b7a99}*{box-sizing:border-box}body{margin:0;font-family:Poppins,'Segoe UI',sans-serif;background:linear-gradient(180deg,#f7f8ff,#eef5ff);color:var(--txt);display:flex}.header{display:flex;justify-content:space-between;gap:20px;margin-bottom:22px}.header h1{margin:0;font-size:1.7rem}.header p{margin:6px 0;color:var(--mut)}.box,.card,.kpi{background:var(--card);border:1px solid var(--bd);border-radius:22px;box-shadow:0 14px 32px rgba(22,28,60,.08)}.box{padding:18px 22px;min-width:260px}.label{font-size:.72rem;text-transform:uppercase;color:var(--mut);font-weight:900;letter-spacing:.7px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}.kpi{padding:20px}.value{font-size:2rem;font-weight:950;color:var(--p);margin-top:8px}.sub{font-size:.78rem;color:var(--mut);font-weight:800}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:20px}.card{padding:22px;margin-bottom:20px}.full{grid-column:1/-1}.title{display:flex;justify-content:space-between;margin-bottom:16px}.title h2{margin:0;font-size:1.08rem}.title span{font-size:.78rem;color:var(--mut);font-weight:900}.heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.dcard{border:1px solid var(--bd);background:white;border-radius:18px;padding:16px;border-left:8px solid #cbd5e1}.dcard.rojo{border-left-color:#ef4444}.dcard.amarillo{border-left-color:#fbbf24}.dcard.verde{border-left-color:#65a30d}.dcard.azul{border-left-color:#2563eb}.name{font-weight:950;color:#334155}.pct{font-size:1.8rem;font-weight:950}.risk{font-size:.72rem;font-weight:950;color:#64748b}.wrap{overflow-x:auto;border:1px solid var(--bd);border-radius:16px;background:white}table{border-collapse:collapse;width:100%;min-width:920px;font-size:.78rem}th,td{padding:11px 10px;border-bottom:1px solid var(--bd);text-align:center;white-space:nowrap}th{background:#f8fafc;color:#475569;font-size:.68rem;text-transform:uppercase}td:first-child,th:first-child{text-align:left;position:sticky;left:0;background:white;font-weight:900}.pill{border-radius:999px;padding:6px 10px;font-weight:950;font-size:.75rem}.rojo{background:#fee2e2;color:#991b1b}.amarillo{background:#fef3c7;color:#92400e}.verde{background:#dcfce7;color:#166534}.azul{background:#dbeafe;color:#1d4ed8}.gris{background:#e2e8f0;color:#475569}.alerts{display:flex;flex-direction:column;gap:10px}.alert{background:white;border:1px solid var(--bd);border-radius:16px;padding:13px 14px;font-weight:800;color:#334155;font-size:.86rem}.chart{width:100%;height:270px;background:white;border:1px solid var(--bd);border-radius:18px;padding:10px}.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;font-weight:900;color:#64748b;margin-top:10px}.dot{width:12px;height:12px;border-radius:999px;display:inline-block;margin-right:6px;vertical-align:middle}.dot.real{background:#FF00B8}.dot.meta{background:#FF00B8}.dot.fcst{background:#7A2BFF}.week-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.week-btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:8px 12px;background:#fff;border:1px solid var(--bd);color:#1a2540;text-decoration:none;font-size:.78rem;font-weight:900;box-shadow:0 8px 18px rgba(22,28,60,.06)}.week-btn:hover{background:linear-gradient(135deg,rgba(122,43,255,.10),rgba(255,0,184,.08));border-color:#c4b5fd}.week-btn.active{color:#fff;background:linear-gradient(135deg,#7A2BFF,#FF00B8);border-color:transparent}.detalle-wrap{overflow-x:auto;border:1px solid var(--bd);border-radius:16px;background:white}.detalle-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:.72rem}.detalle-table th,.detalle-table td{padding:9px 8px;border-bottom:1px solid var(--bd);border-right:1px solid var(--bd);text-align:center;white-space:nowrap}.detalle-table th{background:#f8fafc;color:#475569;font-weight:950;text-transform:uppercase}.detalle-table .district-sticky{position:sticky;left:0;background:white;z-index:3;text-align:left;font-weight:950;min-width:160px}.detalle-table thead .district-sticky{background:#f8fafc;z-index:4}.detalle-table .week-group{background:linear-gradient(135deg,rgba(122,43,255,.10),rgba(255,0,184,.08));color:#1a2540;border-top:1px solid var(--bd)}.detalle-table .pct-cell{font-weight:900}.detalle-note{font-size:.78rem;color:var(--mut);font-weight:800;margin-top:10px}@media(max-width:1100px){.kpis{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}.header{flex-direction:column}}
 </style></head><body>
 <?php
 $current_page = 'fcst_dashboard';
@@ -99,7 +125,44 @@ include __DIR__ . '/../includes/sidebar.php';
 <div class="grid"><section class="card"><div class="title"><h2>Semáforo regional por distrito</h2><span>% cumplimiento vs META</span></div><div class="heat"><?php foreach($rows as $r): ?><div class="dcard <?=h($r['cm'])?>"><div class="name"><?=h($r['distrito'])?></div><div class="pct"><?=h(fpct($r['pm']))?></div><div class="risk"><?=h($r['riesgo'])?></div></div><?php endforeach; ?></div></section>
 <section class="card"><div class="title"><h2>Alertas automáticas</h2><span>Riesgos y desviaciones</span></div><div class="alerts"><?php foreach(array_slice($alertas,0,8) as $a): ?><div class="alert"><?=h($a)?></div><?php endforeach; ?></div></section>
 <section class="card full"><div class="title"><h2>Tabla ejecutiva de cumplimiento · SEM <?=h($semana)?> <?=h($anio)?></h2><span>Meta · FCST · Real · Accuracy</span></div><div class="wrap"><table><thead><tr><th>Distrito</th><th>Meta</th><th>FCST</th><th>Real</th><th>% Meta</th><th>% FCST</th><th>Accuracy</th><th>Cerrados</th><th>Borradores</th></tr></thead><tbody><?php foreach($rows as $r): ?><tr><td><?=h($r['distrito'])?></td><td><?=h(fmt($r['meta']))?></td><td><?=h(fmt($r['fcst']))?></td><td><?=h(fmt($r['real']))?></td><td><span class="pill <?=h($r['cm'])?>"><?=h(fpct($r['pm']))?></span></td><td><span class="pill <?=h($r['cf'])?>"><?=h(fpct($r['pf']))?></span></td><td><?=h(fpct($r['ac']))?></td><td><?=h($r['cerrados'])?></td><td><?=h($r['borradores'])?></td></tr><?php endforeach; ?></tbody></table></div></section>
-<section class="card full"><div class="title"><h2>Tendencia regional 2026</h2><span>Instalaciones reales SEM <?=h($semana)?>: <?=h(fmt($total_real))?> · Barras: real · Líneas: %META y %FCST</span></div><canvas id="chartRegional" class="chart"></canvas><div class="legend"><span><i class="dot real"></i>Instalaciones reales</span><span><i class="dot meta"></i>% META</span><span><i class="dot fcst"></i>% FCST</span></div></section></div>
+<section class="card full"><div class="title"><h2>Tendencia regional 2026</h2><span>Instalaciones reales SEM <?=h($semana)?>: <?=h(fmt($total_real))?> · Barras: real · Líneas: %META y %FCST</span></div><canvas id="chartRegional" class="chart"></canvas><div class="legend"><span><i class="dot real"></i>Instalaciones reales</span><span><i class="dot meta"></i>% META</span><span><i class="dot fcst"></i>% FCST</span></div></section>
+<section class="card full">
+    <div class="title"><h2>Detalle semanal por distrito · 2026</h2><span>SEM 1 a SEM <?=h($semana)?> · Meta · FCST · Real · %META · %FCST</span></div>
+    <div class="detalle-wrap">
+        <table class="detalle-table">
+            <thead>
+                <tr>
+                    <th class="district-sticky" rowspan="2">Distrito</th>
+                    <?php for($s=1; $s<=$semana; $s++): ?>
+                        <th class="week-group" colspan="5">SEM <?=h($s)?></th>
+                    <?php endfor; ?>
+                </tr>
+                <tr>
+                    <?php for($s=1; $s<=$semana; $s++): ?>
+                        <th>Meta</th><th>FCST</th><th>Real</th><th>% Meta</th><th>% FCST</th>
+                    <?php endfor; ?>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach($detalle_semanal as $dist=>$semanas): ?>
+                    <tr>
+                        <td class="district-sticky"><?=h($dist)?></td>
+                        <?php for($s=1; $s<=$semana; $s++):
+                            $dsem = $semanas[$s] ?? ['meta'=>0,'fcst'=>0,'real'=>0,'pm'=>null,'pf'=>null];
+                        ?>
+                            <td><?=h(fmt($dsem['meta']))?></td>
+                            <td><?=h(fmt($dsem['fcst']))?></td>
+                            <td><?=h(fmt($dsem['real']))?></td>
+                            <td class="pct-cell"><span class="pill <?=h(cls($dsem['pm']))?>"><?=h(fpct($dsem['pm']))?></span></td>
+                            <td class="pct-cell"><span class="pill <?=h(cls($dsem['pf']))?>"><?=h(fpct($dsem['pf']))?></span></td>
+                        <?php endfor; ?>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <div class="detalle-note">La tabla se desplaza horizontalmente para consultar todas las semanas intermedias hasta la semana analizada.</div>
+</section></div>
 </main>
 <script>
 const labels=<?=json_encode($labels)?>;
