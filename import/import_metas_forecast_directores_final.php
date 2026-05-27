@@ -34,12 +34,22 @@ function normalizar_texto($txt) {
 
 function normalizar_distrito($txt) {
     $txt = normalizar_texto($txt);
+    $clean = str_replace(['/', '-'], ' ', $txt);
+    $clean = preg_replace('/\s+/', ' ', $clean);
 
-    if ($txt === 'COATZA MINA' || $txt === 'COATZAMINA' || $txt === 'COATZA/MINA') {
-        $txt = 'COATZA-MINA';
+    if (strpos($clean, 'COATZA') !== false && strpos($clean, 'MINA') !== false) {
+        return 'COATZA / MINA';
     }
 
     return $txt;
+}
+
+function distrito_where_hc($col = 'distrito') {
+    return "CASE
+        WHEN UPPER(TRIM($col)) LIKE '%COATZA%' AND UPPER(TRIM($col)) LIKE '%MINA%'
+        THEN 'COATZA / MINA'
+        ELSE UPPER(TRIM($col))
+    END";
 }
 
 function parse_semana($valor) {
@@ -77,7 +87,7 @@ function buscar_responsable_forecast($conexion, $distrito, $semana, $anio) {
                 posicion AS puesto_responsable,
                 distrito
             FROM hc
-            WHERE distrito = ?
+            WHERE " . distrito_where_hc('distrito') . " = ?
               AND posicion = 'DIRECTOR DISTRITAL'
               AND semana = ?
               AND anio = ?
@@ -109,7 +119,7 @@ function buscar_responsable_forecast($conexion, $distrito, $semana, $anio) {
                         posicion AS puesto_responsable,
                         distrito
                     FROM hc
-                    WHERE distrito = ?
+                    WHERE " . distrito_where_hc('distrito') . " = ?
                       AND posicion = 'DIRECTOR DISTRITAL'
                       AND nombre_colaborador NOT LIKE '%VACANTE%'
                       AND (
@@ -453,7 +463,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
     <div class="nota">
         Este importador identifica al responsable usando <strong>hc.posicion = 'DIRECTOR DISTRITAL'</strong>.
         No usa <strong>puesto_lr</strong>, porque ese campo representa el puesto del jefe directo.
-        Si ya existe forecast para el mismo Año + Semana + id_posicion, se actualizará.
+        Si ya existe forecast para el mismo Año + Semana + id_posicion, se actualizará. COATZA/MINA se normaliza como COATZA / MINA.
     </div>
 
     <a href="../index.php" class="back">← Volver al Dashboard</a>
