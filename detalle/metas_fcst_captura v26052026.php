@@ -41,26 +41,6 @@ function normalizar_texto($txt) {
     return $txt;
 }
 
-function normalizar_distrito_fcst($distrito) {
-    $raw = normalizar_texto($distrito);
-    $clean = str_replace(['/', '-'], ' ', $raw);
-    $clean = preg_replace('/\s+/', ' ', $clean);
-
-    if (strpos($clean, 'COATZA') !== false && strpos($clean, 'MINA') !== false) {
-        return 'COATZA / MINA';
-    }
-
-    return $raw;
-}
-
-function distrito_norm_sql($col = 'distrito') {
-    return "CASE
-        WHEN UPPER(TRIM($col)) LIKE '%COATZA%' AND UPPER(TRIM($col)) LIKE '%MINA%'
-        THEN 'COATZA / MINA'
-        ELSE UPPER(TRIM($col))
-    END";
-}
-
 function nivel_forecast_desde_posicion($posicion) {
     $p = normalizar_texto($posicion);
     if ($p === 'DIRECTOR DISTRITAL') return 'DIRECTOR_DISTRITAL';
@@ -194,12 +174,11 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
         $meta = 0;
         $fcst = 0;
 
-        $dn_inst = distrito_norm_sql('distrito');
         $sql_real = "SELECT COUNT(cuenta) AS total
                      FROM instalaciones
                      WHERE YEAR(fecha) = ?
                        AND WEEK(fecha, 1) = ?
-                       AND $dn_inst = ?
+                       AND distrito = ?
                        AND origen_prospecto <> '-'";
         $stmt = mysqli_prepare($conexion, $sql_real);
         if ($stmt) {
@@ -210,8 +189,7 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
             mysqli_stmt_close($stmt);
         }
 
-        $dn_meta = distrito_norm_sql('distrito');
-        $sql_meta = "SELECT SUM(meta) AS total FROM metas_instalacion_semanal WHERE anio = ? AND semana = ? AND $dn_meta = ?";
+        $sql_meta = "SELECT SUM(meta) AS total FROM metas_instalacion_semanal WHERE anio = ? AND semana = ? AND distrito = ?";
         $stmt = mysqli_prepare($conexion, $sql_meta);
         if ($stmt) {
             mysqli_stmt_bind_param($stmt, "iis", $anio, $sem, $distrito);
@@ -221,10 +199,9 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
             mysqli_stmt_close($stmt);
         }
 
-        $dn_fcst = distrito_norm_sql('distrito');
         $sql_fcst = "SELECT SUM(forecast) AS total
                      FROM metas_forecast_semanal
-                     WHERE anio = ? AND semana = ? AND $dn_fcst = ? AND nivel_forecast = 'DIRECTOR_DISTRITAL'";
+                     WHERE anio = ? AND semana = ? AND distrito = ? AND nivel_forecast = 'DIRECTOR_DISTRITAL'";
         $stmt = mysqli_prepare($conexion, $sql_fcst);
         if ($stmt) {
             mysqli_stmt_bind_param($stmt, "iis", $anio, $sem, $distrito);
@@ -281,7 +258,7 @@ $posicion_lr = $responsable['posicion_lr'];
 $numero_talento_gs = $responsable['numero_talento_gs'];
 $nombre_responsable = $responsable['nombre_colaborador'];
 $puesto_responsable = $responsable['puesto_responsable'];
-$distrito = normalizar_distrito_fcst($responsable['distrito']);
+$distrito = $responsable['distrito'];
 $nivel_forecast = nivel_forecast_desde_posicion($puesto_responsable);
 
 $forecast_row = cargar_forecast_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
@@ -292,7 +269,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $accion = $_POST['accion'] ?? 'guardar';
 
     $forecast = isset($_POST['forecast']) ? (int)$_POST['forecast'] : 0;
-    $distrito = normalizar_distrito_fcst($distrito);
     $impulso_semana_anterior = trim($_POST['impulso_semana_anterior'] ?? '');
     $resto_semana_anterior = trim($_POST['resto_semana_anterior'] ?? '');
     $competencia = trim($_POST['competencia'] ?? '');
