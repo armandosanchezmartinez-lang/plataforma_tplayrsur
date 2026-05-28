@@ -295,14 +295,15 @@ const serie_fcst = <?= json_encode($serie_fcst, JSON_NUMERIC_CHECK) ?>;
    ctx.fillStyle='#64748b'; ctx.font='10px Segoe UI'; ctx.textAlign='center';
    ctx.fillText(String(v),x(i),Math.max(pT+10,yy-6));
  });
- function line(series,color){
+ function line(series,color,offsetX){
    ctx.strokeStyle=color; ctx.lineWidth=3; ctx.beginPath(); let ok=false;
    series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); if(!ok){ctx.moveTo(xx,yy); ok=true;}else ctx.lineTo(xx,yy);});
    ctx.stroke();
-   series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); ctx.beginPath(); ctx.arc(xx,yy,4,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle=color; ctx.stroke(); ctx.fillStyle=color; ctx.font='10px Segoe UI'; ctx.textAlign='center'; ctx.fillText(String(v),xx,Math.max(pT+10,yy-10));});
+   series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); ctx.beginPath(); ctx.arc(xx,yy,4,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle=color; ctx.stroke(); ctx.fillStyle=color; ctx.font='10px Segoe UI'; ctx.textAlign='center'; ctx.textAlign=offsetX>=0?'left':'right';
+   ctx.fillText(String(v),xx+offsetX,Math.max(pT+10,yy-10));});
  }
- line(serie_meta,'#7A2BFF');
- line(serie_fcst,'#2563eb');
+ line(serie_meta,'#7A2BFF',16);
+ line(serie_fcst,'#2563eb',-16);
  ctx.fillStyle='#64748b'; ctx.font='11px Segoe UI'; ctx.textAlign='center';
  labels.forEach((lb,i)=>{if(i===0||i===n-1||i%2===0)ctx.fillText(lb,x(i),h-12)});
 })();

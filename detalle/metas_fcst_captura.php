@@ -706,7 +706,7 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
         ctx.fillText(String(v), x(i), Math.max(padT + 10, yy - 6));
     });
 
-    function drawLine(series, color) {
+    function drawLine(series, color, offsetX) {
         ctx.strokeStyle = color;
         ctx.lineWidth = 3;
         ctx.beginPath();
@@ -741,12 +741,13 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
             ctx.fillStyle = color;
             ctx.font = '10px Segoe UI';
             ctx.textAlign = 'center';
-            ctx.fillText(String(v), xx, Math.max(padT + 10, yy - 10));
+            ctx.textAlign = offsetX >= 0 ? 'left' : 'right';
+            ctx.fillText(String(v), xx + offsetX, Math.max(padT + 10, yy - 10));
         });
     }
 
-    drawLine(meta_abs_series, '#7A2BFF');
-    drawLine(fcst_abs_series, '#2563eb');
+    drawLine(meta_abs_series, '#7A2BFF', 16);
+    drawLine(fcst_abs_series, '#2563eb', -16);
 
     // Etiquetas de semanas
     ctx.fillStyle = '#64748b';
