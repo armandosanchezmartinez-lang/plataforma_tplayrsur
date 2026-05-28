@@ -306,7 +306,7 @@ while($row = mysqli_fetch_assoc($res_v)) {
     }
 }
 
-$colores_palette = ['#FF006C', '#7A2BFF', '#00A6FF', '#00E5FF', '#FF6500', '#7CFF00', '#2C2F3A'];
+$colores_palette = ['#2b57a7', '#10b981', '#f59e0b', '#7c3aed', '#ef4444', '#06b6d4', '#ec4899'];
 
 // ── TABLA DE PARTICIPACIÓN POR CANAL ─────────────────────────────────────────
 // Calcular totales por mes para instalaciones
@@ -607,21 +607,6 @@ include __DIR__ . '/includes/sidebar.php';
 </main>
 
 <script>
-// --- PALETA TOTAL STORE / TOTALXPEDIENT ---
-// Manual de identidad: primarios Magenta, Purpura, Azul Electrico;
-// secundarios Cian, Lima y Naranja; neutros para apoyo visual.
-const txBrandColors = {
-    magenta: '#FF006C',
-    purpura: '#7A2BFF',
-    azulElectrico: '#00A6FF',
-    cian: '#00E5FF',
-    lima: '#7CFF00',
-    naranja: '#FF6500',
-    carbon: '#030916',
-    grisOscuro: '#2C2F3A',
-    grisClaro: '#E0E3EA'
-};
-
 // --- DONUTS (MIX) ---
 const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
 const vent2p = <?= $vent_2p ?>; const vent3p = <?= $vent_3p ?>; // mostrar % en el mix
@@ -646,13 +631,13 @@ const donutOpts = () => ({
 
 new Chart(document.getElementById('cInstMix'), {
     type: 'doughnut',
-    data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: [txBrandColors.azulElectrico, txBrandColors.cian], borderWidth: 0 }] },
+    data: { labels: ['2P','3P'], datasets: [{ data: [inst2p, inst3p], backgroundColor: ['#2b57a7','#a8c4f0'], borderWidth: 0 }] },
     options: donutOpts(),
     plugins: [ChartDataLabels]
 });
 new Chart(document.getElementById('cVentMix'), {
     type: 'doughnut',
-    data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: [txBrandColors.magenta, txBrandColors.purpura], borderWidth: 0 }] },
+    data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: ['#10b981','#a7f3d0'], borderWidth: 0 }] },
     options: donutOpts(),
     plugins: [ChartDataLabels]
 });
@@ -661,17 +646,16 @@ new Chart(document.getElementById('cVentMix'), {
 const labels6 = <?= json_encode($meses_labels) ?>;
 
 const canalColores = {
-    // Paleta alineada al manual de identidad Total Store
-    'Cambaceo':                    txBrandColors.azulElectrico,
-    'Punto de Venta':              txBrandColors.magenta,
-    'Call Center':                 txBrandColors.naranja,
-    'eCommerce':                   txBrandColors.purpura,
-    'Venta Digital':               txBrandColors.cian,
-    'Winback':                     '#FF00B8',
-    'Desarrollos':                 txBrandColors.lima,
-    'Distribuidor':                '#FF8A00',
-    'Autoempresarios Autorizados': '#3B5BFF',
-    'Otro':                        txBrandColors.grisClaro,
+    'Cambaceo':                    '#2b57a7',
+    'Punto de Venta':              '#10b981',
+    'Call Center':                 '#f59e0b',
+    'eCommerce':                   '#7c3aed',
+    'Venta Digital':               '#06b6d4',
+    'Winback':                     '#ec4899',
+    'Desarrollos':                 '#84cc16',
+    'Distribuidor':                '#f97316',
+    'Autoempresarios Autorizados': '#6366f1',
+    'Otro':                        '#94a3b8',
 };
 
 // ... (Obtención de datasets igual que antes) ...
@@ -756,7 +740,7 @@ new Chart(document.getElementById('cInstEvo'), {
         datasets: instCanales.map((c, i) => ({
             label: c,
             data: instData[i],
-            backgroundColor: canalColores[c] || txBrandColors.grisClaro,
+            backgroundColor: canalColores[c] || '#94a3b8',
             borderRadius: i === instCanales.length - 1 ? 4 : 0,
         }))
     },
@@ -771,7 +755,7 @@ new Chart(document.getElementById('cVentEvo'), {
         datasets: ventCanales.map((c, i) => ({
             label: c,
             data: ventData[i],
-            backgroundColor: canalColores[c] || txBrandColors.grisClaro,
+            backgroundColor: canalColores[c] || '#94a3b8',
             borderRadius: i === ventCanales.length - 1 ? 4 : 0,
         }))
     },
