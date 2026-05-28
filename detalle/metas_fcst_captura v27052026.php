@@ -270,14 +270,11 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
     ];
 }
 
-$anio_actual = isset($_GET['anio']) ? (int)$_GET['anio'] : (int)date('Y');
-$semana_actual = isset($_GET['semana']) ? (int)$_GET['semana'] : (int)date('W');
-$id_posicion_consulta = isset($_GET['id_posicion']) ? trim((string)$_GET['id_posicion']) : $id_posicion_sesion;
+$anio_actual = (int)date('Y');
+$semana_actual = (int)date('W');
 list($semana_anterior, $anio_semana_anterior) = semana_anterior_calc($semana_actual, $anio_actual);
 
-$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_consulta, '', $usuario, $rol);
-$modo_consulta = true;
-$back_url = 'metas_fcst_dashboard.php?anio=' . urlencode((string)$anio_actual) . '&semana=' . urlencode((string)$semana_actual);
+$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
 
 $id_posicion = (string)$responsable['id_posicion'];
 $posicion_lr = $responsable['posicion_lr'];
@@ -291,7 +288,7 @@ $forecast_row = cargar_forecast_actual($conexion, $anio_actual, $semana_actual, 
 $compromiso_row = cargar_compromiso_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
 $esta_cerrado = ($compromiso_row && $compromiso_row['estatus'] === 'CERRADO');
 
-if (false && $_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $accion = $_POST['accion'] ?? 'guardar';
 
     $forecast = isset($_POST['forecast']) ? (int)$_POST['forecast'] : 0;
@@ -407,20 +404,19 @@ $acciones = $compromiso_row['acciones_clave'] ?? '';
 $necesidades = $compromiso_row['necesidades_apoyo'] ?? '';
 $estatus = $compromiso_row['estatus'] ?? 'BORRADOR';
 
-$disabled = 'disabled';
-$readonly_class = 'readonly';
+$disabled = $esta_cerrado ? 'disabled' : '';
+$readonly_class = $esta_cerrado ? 'readonly' : '';
 
 $semaforo = construir_semaforo_2026($conexion, $anio_actual, $distrito, $semana_actual);
 $datos_semaforo = $semaforo['datos'];
 $meta_pct_series = $semaforo['meta_pct_series'];
 $fcst_pct_series = $semaforo['fcst_pct_series'];
-$real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_semaforo);
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Consulta METAS-FCST - TOTALXPEDIENT</title>
+    <title>METAS-FCST - TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
     <style>
         :root {
@@ -465,7 +461,7 @@ $real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_
         .dot.rojo{background:#ef4444}.dot.amarillo{background:#fbbf24}.dot.verde{background:#65a30d}.dot.azul{background:#2563eb}.dot.gris{background:#cbd5e1}
         .legend{display:flex;flex-wrap:wrap;gap:16px;margin:14px 0 12px;font-size:.76rem;color:#475569;font-weight:800}
         .legend-item{display:flex;align-items:center;gap:7px}
-        .mini-chart{width:100%;height:270px;margin-top:8px;background:rgba(255,255,255,.65);border:1px solid #e2e8f0;border-radius:16px;padding:10px}
+        .mini-chart{width:100%;height:190px;margin-top:8px;background:rgba(255,255,255,.65);border:1px solid #e2e8f0;border-radius:16px;padding:10px}
         .chart-title{margin-top:16px;margin-bottom:6px;font-size:.78rem;text-transform:uppercase;font-weight:900;letter-spacing:.5px;color:var(--tx-muted)}
         .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}
         .btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}
@@ -479,22 +475,22 @@ $real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_
 </head>
 <body>
 <?php
-$current_page = 'fcst_dashboard';
+$current_page = 'fcst_captura';
 include __DIR__ . '/../includes/sidebar.php';
 ?>
 
 <main class="main">
     <div class="page-header">
         <div class="page-title">
-            <h1>🎯 Consulta METAS-FCST</h1>
-            <p>Consulta de forecast, hallazgos y compromisos de ejecución del subordinado seleccionado.</p>
+            <h1>🎯 METAS-FCST</h1>
+            <p>Captura semanal de forecast, hallazgos y compromisos de ejecución.</p>
             <div class="pill-row">
                 <span class="pill active">SEMANAL</span>
                 <span class="pill disabled">MENSUAL · Próximamente</span>
             </div>
         </div>
         <div class="status-card">
-            <div class="status-label">Semana analizada</div>
+            <div class="status-label">Semana actual</div>
             <div class="status-main">
                 <div>
                     <strong>SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></strong><br>
@@ -603,17 +599,23 @@ include __DIR__ . '/../includes/sidebar.php';
                     <span class="legend-item"><span class="dot verde"></span> VERDE ≥ 100% y &lt; 120%</span>
                     <span class="legend-item"><span class="dot azul"></span> AZUL ≥ 120%</span>
                 </div>
-                <div class="chart-title">Evolución 2026 · Barras: instalaciones reales · Líneas: %META y %FCST</div>
+                <div class="chart-title">Evolución % cumplimiento 2026</div>
                 <canvas id="miniGrafico" class="mini-chart"></canvas>
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>Consulta de compromiso</h2><span>Solo lectura</span></div>
-                <div class="helper">
-                    Este tablero es únicamente de consulta. Para editar o cerrar compromisos, el responsable debe entrar desde Captura FCST con su usuario.
-                </div>
+                <div class="card-title"><h2>Control de compromiso</h2><span><?= $esta_cerrado ? 'Solo lectura' : 'Editable hasta cerrar' ?></span></div>
+                <?php if ($esta_cerrado): ?>
+                    <div class="helper">Este compromiso fue cerrado por <strong><?= h($compromiso_row['cerrado_por'] ?? '') ?></strong> el <strong><?= h($compromiso_row['cerrado_en'] ?? '') ?></strong>. Ya no puede modificarse.</div>
+                <?php else: ?>
+                    <div class="helper">Puedes guardar como borrador y regresar a editar. Al seleccionar <strong>Cerrar compromiso</strong>, la información quedará bloqueada.</div>
+                <?php endif; ?>
                 <div class="actions">
-                    <a href="<?= h($back_url) ?>" class="btn btn-secondary">← Volver al Dashboard FCST</a>
+                    <a href="../index.php" class="btn btn-secondary">Volver</a>
+                    <div class="actions-right">
+                        <button type="submit" name="accion" value="guardar" class="btn btn-primary" <?= $disabled ?>>Guardar borrador</button>
+                        <button type="submit" name="accion" value="cerrar" class="btn btn-danger" <?= $disabled ?> onclick="return confirm('¿Confirmas cerrar el compromiso? Una vez cerrado ya no podrá modificarse.');">Cerrar compromiso</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -623,7 +625,6 @@ include __DIR__ . '/../includes/sidebar.php';
 <script>
 const meta_pct_series = <?= json_encode($meta_pct_series, JSON_NUMERIC_CHECK) ?>;
 const fcst_pct_series = <?= json_encode($fcst_pct_series, JSON_NUMERIC_CHECK) ?>;
-const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
 
 (function dibujarMiniGrafico(){
     const canvas = document.getElementById('miniGrafico');
@@ -639,88 +640,49 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
 
     const w = rect.width;
     const h = rect.height;
-    const padL = 48;
-    const padR = 52;
-    const padT = 28;
-    const padB = 38;
-    const plotW = w - padL - padR;
-    const plotH = h - padT - padB;
+    const pad = 34;
 
     ctx.clearRect(0, 0, w, h);
 
-    const pctValores = meta_pct_series.concat(fcst_pct_series).filter(v => v !== null && !isNaN(v));
-    const maxPct = Math.max(140, ...pctValores);
-    const maxReal = Math.max(10, ...real_series);
-    const total = Math.max(real_series.length, meta_pct_series.length, fcst_pct_series.length);
+    const valores = meta_pct_series.concat(fcst_pct_series).filter(v => v !== null && !isNaN(v));
+    const maxV = Math.max(140, ...valores);
+    const minV = 0;
 
-    function x(i) {
-        if (total <= 1) return padL;
-        return padL + (i * plotW / (total - 1));
+    function x(i, total) {
+        if (total <= 1) return pad;
+        return pad + (i * (w - pad * 2) / (total - 1));
     }
 
-    function yPct(v) {
+    function y(v) {
         if (v === null || isNaN(v)) return null;
-        return padT + plotH - (v / maxPct) * plotH;
-    }
-
-    function yReal(v) {
-        return padT + plotH - (v / maxReal) * plotH;
+        return h - pad - ((v - minV) / (maxV - minV)) * (h - pad * 2);
     }
 
     ctx.font = '11px Segoe UI';
+    ctx.strokeStyle = '#e2e8f0';
     ctx.lineWidth = 1;
 
-    // Grid y eje izquierdo porcentual
     [0, 50, 90, 100, 120, 140].forEach(val => {
-        const yy = yPct(val);
+        const yy = y(val);
         if (yy === null) return;
         ctx.beginPath();
-        ctx.strokeStyle = '#e2e8f0';
-        ctx.moveTo(padL, yy);
-        ctx.lineTo(w - padR, yy);
+        ctx.moveTo(pad, yy);
+        ctx.lineTo(w - pad, yy);
         ctx.stroke();
-
         ctx.fillStyle = '#64748b';
-        ctx.fillText(val + '%', 8, yy + 4);
-    });
-
-    // Eje derecho instalaciones
-    ctx.fillStyle = '#0f766e';
-    ctx.font = '11px Segoe UI';
-    ctx.fillText('Inst.', w - padR + 10, padT + 4);
-    [0, Math.round(maxReal / 2), maxReal].forEach(val => {
-        const yy = yReal(val);
-        ctx.fillText(String(val), w - padR + 10, yy + 4);
-    });
-
-    // Barras de instalaciones reales
-    const barW = Math.max(8, Math.min(28, plotW / Math.max(total, 1) * 0.42));
-    real_series.forEach((v, i) => {
-        const xx = x(i) - barW / 2;
-        const yy = yReal(v);
-        const bh = padT + plotH - yy;
-
-        ctx.fillStyle = '#FF00B8';
-        ctx.fillRect(xx, yy, barW, bh);
-
-        // Número arriba de cada barra
-        ctx.fillStyle = '#64748b';
-        ctx.font = '10px Segoe UI';
-        ctx.textAlign = 'center';
-        ctx.fillText(String(v), x(i), Math.max(padT + 10, yy - 6));
-        ctx.textAlign = 'left';
+        ctx.fillText(val + '%', 4, yy + 4);
     });
 
     function drawLine(series, color) {
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
 
         let started = false;
         series.forEach((v, i) => {
-            const yy = yPct(v);
+            const yy = y(v);
             if (yy === null) return;
-            const xx = x(i);
+            const xx = x(i, series.length);
 
             if (!started) {
                 ctx.moveTo(xx, yy);
@@ -732,46 +694,26 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
         ctx.stroke();
 
         series.forEach((v, i) => {
-            const yy = yPct(v);
+            const yy = y(v);
             if (yy === null) return;
-            const xx = x(i);
+            const xx = x(i, series.length);
             ctx.beginPath();
-            ctx.arc(xx, yy, 4, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
+            ctx.arc(xx, yy, 3.2, 0, Math.PI * 2);
+            ctx.fillStyle = color;
             ctx.fill();
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = color;
-            ctx.stroke();
         });
     }
 
     drawLine(meta_pct_series, '#7A2BFF');
     drawLine(fcst_pct_series, '#2563eb');
 
-    // Etiquetas de semanas, mostrando de forma ligera para no saturar
-    ctx.fillStyle = '#64748b';
-    ctx.font = '11px Segoe UI';
-    ctx.textAlign = 'center';
-    for (let i = 0; i < total; i++) {
-        if (i === 0 || i === total - 1 || i % 2 === 0) {
-            ctx.fillText('S' + (i + 1), x(i), h - 12);
-        }
-    }
-    ctx.textAlign = 'left';
-
-    // Leyenda interna
-    const legendY = 14;
-    ctx.fillStyle = '#FF00B8';
-    ctx.beginPath(); ctx.arc(w - 290, legendY, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText('Instalaciones reales', w - 278, legendY + 4);
-
     ctx.fillStyle = '#7A2BFF';
-    ctx.beginPath(); ctx.arc(w - 160, legendY, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText('% META', w - 148, legendY + 4);
+    ctx.fillRect(w - 132, 14, 12, 3);
+    ctx.fillText('META', w - 114, 18);
 
     ctx.fillStyle = '#2563eb';
-    ctx.beginPath(); ctx.arc(w - 88, legendY, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText('% FCST', w - 76, legendY + 4);
+    ctx.fillRect(w - 72, 14, 12, 3);
+    ctx.fillText('FCST', w - 54, 18);
 })();
 </script>
 </body>

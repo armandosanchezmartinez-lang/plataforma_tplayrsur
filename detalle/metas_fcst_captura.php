@@ -411,6 +411,7 @@ $semaforo = construir_semaforo_2026($conexion, $anio_actual, $distrito, $semana_
 $datos_semaforo = $semaforo['datos'];
 $meta_pct_series = $semaforo['meta_pct_series'];
 $fcst_pct_series = $semaforo['fcst_pct_series'];
+$real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_semaforo);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -461,7 +462,7 @@ $fcst_pct_series = $semaforo['fcst_pct_series'];
         .dot.rojo{background:#ef4444}.dot.amarillo{background:#fbbf24}.dot.verde{background:#65a30d}.dot.azul{background:#2563eb}.dot.gris{background:#cbd5e1}
         .legend{display:flex;flex-wrap:wrap;gap:16px;margin:14px 0 12px;font-size:.76rem;color:#475569;font-weight:800}
         .legend-item{display:flex;align-items:center;gap:7px}
-        .mini-chart{width:100%;height:190px;margin-top:8px;background:rgba(255,255,255,.65);border:1px solid #e2e8f0;border-radius:16px;padding:10px}
+        .mini-chart{width:100%;height:270px;margin-top:8px;background:rgba(255,255,255,.65);border:1px solid #e2e8f0;border-radius:16px;padding:10px}
         .chart-title{margin-top:16px;margin-bottom:6px;font-size:.78rem;text-transform:uppercase;font-weight:900;letter-spacing:.5px;color:var(--tx-muted)}
         .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}
         .btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}
@@ -599,7 +600,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <span class="legend-item"><span class="dot verde"></span> VERDE ≥ 100% y &lt; 120%</span>
                     <span class="legend-item"><span class="dot azul"></span> AZUL ≥ 120%</span>
                 </div>
-                <div class="chart-title">Evolución % cumplimiento 2026</div>
+                <div class="chart-title">Evolución 2026 · Barras: instalaciones reales · Líneas: %META y %FCST</div>
                 <canvas id="miniGrafico" class="mini-chart"></canvas>
             </div>
 
@@ -625,6 +626,7 @@ include __DIR__ . '/../includes/sidebar.php';
 <script>
 const meta_pct_series = <?= json_encode($meta_pct_series, JSON_NUMERIC_CHECK) ?>;
 const fcst_pct_series = <?= json_encode($fcst_pct_series, JSON_NUMERIC_CHECK) ?>;
+const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
 
 (function dibujarMiniGrafico(){
     const canvas = document.getElementById('miniGrafico');
@@ -640,49 +642,88 @@ const fcst_pct_series = <?= json_encode($fcst_pct_series, JSON_NUMERIC_CHECK) ?>
 
     const w = rect.width;
     const h = rect.height;
-    const pad = 34;
+    const padL = 48;
+    const padR = 52;
+    const padT = 28;
+    const padB = 38;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
 
     ctx.clearRect(0, 0, w, h);
 
-    const valores = meta_pct_series.concat(fcst_pct_series).filter(v => v !== null && !isNaN(v));
-    const maxV = Math.max(140, ...valores);
-    const minV = 0;
+    const pctValores = meta_pct_series.concat(fcst_pct_series).filter(v => v !== null && !isNaN(v));
+    const maxPct = Math.max(140, ...pctValores);
+    const maxReal = Math.max(10, ...real_series);
+    const total = Math.max(real_series.length, meta_pct_series.length, fcst_pct_series.length);
 
-    function x(i, total) {
-        if (total <= 1) return pad;
-        return pad + (i * (w - pad * 2) / (total - 1));
+    function x(i) {
+        if (total <= 1) return padL;
+        return padL + (i * plotW / (total - 1));
     }
 
-    function y(v) {
+    function yPct(v) {
         if (v === null || isNaN(v)) return null;
-        return h - pad - ((v - minV) / (maxV - minV)) * (h - pad * 2);
+        return padT + plotH - (v / maxPct) * plotH;
+    }
+
+    function yReal(v) {
+        return padT + plotH - (v / maxReal) * plotH;
     }
 
     ctx.font = '11px Segoe UI';
-    ctx.strokeStyle = '#e2e8f0';
     ctx.lineWidth = 1;
 
+    // Grid y eje izquierdo porcentual
     [0, 50, 90, 100, 120, 140].forEach(val => {
-        const yy = y(val);
+        const yy = yPct(val);
         if (yy === null) return;
         ctx.beginPath();
-        ctx.moveTo(pad, yy);
-        ctx.lineTo(w - pad, yy);
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.moveTo(padL, yy);
+        ctx.lineTo(w - padR, yy);
         ctx.stroke();
+
         ctx.fillStyle = '#64748b';
-        ctx.fillText(val + '%', 4, yy + 4);
+        ctx.fillText(val + '%', 8, yy + 4);
+    });
+
+    // Eje derecho instalaciones
+    ctx.fillStyle = '#0f766e';
+    ctx.font = '11px Segoe UI';
+    ctx.fillText('Inst.', w - padR + 10, padT + 4);
+    [0, Math.round(maxReal / 2), maxReal].forEach(val => {
+        const yy = yReal(val);
+        ctx.fillText(String(val), w - padR + 10, yy + 4);
+    });
+
+    // Barras de instalaciones reales
+    const barW = Math.max(8, Math.min(28, plotW / Math.max(total, 1) * 0.42));
+    real_series.forEach((v, i) => {
+        const xx = x(i) - barW / 2;
+        const yy = yReal(v);
+        const bh = padT + plotH - yy;
+
+        ctx.fillStyle = '#FF00B8';
+        ctx.fillRect(xx, yy, barW, bh);
+
+        // Número arriba de cada barra
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px Segoe UI';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(v), x(i), Math.max(padT + 10, yy - 6));
+        ctx.textAlign = 'left';
     });
 
     function drawLine(series, color) {
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
+        ctx.lineWidth = 3;
         ctx.beginPath();
 
         let started = false;
         series.forEach((v, i) => {
-            const yy = y(v);
+            const yy = yPct(v);
             if (yy === null) return;
-            const xx = x(i, series.length);
+            const xx = x(i);
 
             if (!started) {
                 ctx.moveTo(xx, yy);
@@ -694,26 +735,46 @@ const fcst_pct_series = <?= json_encode($fcst_pct_series, JSON_NUMERIC_CHECK) ?>
         ctx.stroke();
 
         series.forEach((v, i) => {
-            const yy = y(v);
+            const yy = yPct(v);
             if (yy === null) return;
-            const xx = x(i, series.length);
+            const xx = x(i);
             ctx.beginPath();
-            ctx.arc(xx, yy, 3.2, 0, Math.PI * 2);
-            ctx.fillStyle = color;
+            ctx.arc(xx, yy, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
             ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = color;
+            ctx.stroke();
         });
     }
 
     drawLine(meta_pct_series, '#7A2BFF');
     drawLine(fcst_pct_series, '#2563eb');
 
+    // Etiquetas de semanas, mostrando de forma ligera para no saturar
+    ctx.fillStyle = '#64748b';
+    ctx.font = '11px Segoe UI';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < total; i++) {
+        if (i === 0 || i === total - 1 || i % 2 === 0) {
+            ctx.fillText('S' + (i + 1), x(i), h - 12);
+        }
+    }
+    ctx.textAlign = 'left';
+
+    // Leyenda interna
+    const legendY = 14;
+    ctx.fillStyle = '#FF00B8';
+    ctx.beginPath(); ctx.arc(w - 290, legendY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText('Instalaciones reales', w - 278, legendY + 4);
+
     ctx.fillStyle = '#7A2BFF';
-    ctx.fillRect(w - 132, 14, 12, 3);
-    ctx.fillText('META', w - 114, 18);
+    ctx.beginPath(); ctx.arc(w - 160, legendY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText('% META', w - 148, legendY + 4);
 
     ctx.fillStyle = '#2563eb';
-    ctx.fillRect(w - 72, 14, 12, 3);
-    ctx.fillText('FCST', w - 54, 18);
+    ctx.beginPath(); ctx.arc(w - 88, legendY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText('% FCST', w - 76, legendY + 4);
 })();
 </script>
 </body>
