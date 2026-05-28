@@ -299,10 +299,11 @@ const serie_fcst = <?= json_encode($serie_fcst, JSON_NUMERIC_CHECK) ?>;
    ctx.fillText(String(v),x(i),Math.max(pT+10,yy-6));
  });
  function line(series,color,nombre){
-   ctx.strokeStyle=color; ctx.lineWidth=3; ctx.beginPath(); let ok=false;
+   ctx.strokeStyle=color; ctx.lineWidth=4; ctx.beginPath(); let ok=false;
    series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); if(!ok){ctx.moveTo(xx,yy); ok=true;}else ctx.lineTo(xx,yy);});
    ctx.stroke();
-   series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); ctx.beginPath(); ctx.arc(xx,yy,4,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle=color; ctx.stroke(); ctx.fillStyle=color; ctx.font='10px Segoe UI'; ctx.textAlign='center'; // Etiquetas de META/FCST ocultas: se muestran con tooltip al pasar el puntero.});
+   series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); ctx.beginPath(); ctx.arc(xx,yy,4,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=4; ctx.strokeStyle=color; ctx.stroke(); ctx.fillStyle=color; ctx.font='10px Segoe UI'; ctx.textAlign='center'; // Etiquetas de META/FCST ocultas: se muestran con tooltip al pasar el puntero.
+   });
  }
  line(serie_meta,'#00BFFF','META');
  line(serie_fcst,'#8A2BE2','FCST');
