@@ -41,6 +41,26 @@ function normalizar_texto($txt) {
     return $txt;
 }
 
+function normalizar_distrito_fcst($distrito) {
+    $raw = normalizar_texto($distrito);
+    $clean = str_replace(['/', '-'], ' ', $raw);
+    $clean = preg_replace('/\s+/', ' ', $clean);
+
+    if (strpos($clean, 'COATZA') !== false && strpos($clean, 'MINA') !== false) {
+        return 'COATZA / MINA';
+    }
+
+    return $raw;
+}
+
+function distrito_norm_sql($col = 'distrito') {
+    return "CASE
+        WHEN UPPER(TRIM($col)) LIKE '%COATZA%' AND UPPER(TRIM($col)) LIKE '%MINA%'
+        THEN 'COATZA / MINA'
+        ELSE UPPER(TRIM($col))
+    END";
+}
+
 function nivel_forecast_desde_posicion($posicion) {
     $p = normalizar_texto($posicion);
     if ($p === 'DIRECTOR DISTRITAL') return 'DIRECTOR_DISTRITAL';
@@ -174,11 +194,12 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
         $meta = 0;
         $fcst = 0;
 
+        $dn_inst = distrito_norm_sql('distrito');
         $sql_real = "SELECT COUNT(cuenta) AS total
                      FROM instalaciones
                      WHERE YEAR(fecha) = ?
                        AND WEEK(fecha, 1) = ?
-                       AND distrito = ?
+                       AND $dn_inst = ?
                        AND origen_prospecto <> '-'";
         $stmt = mysqli_prepare($conexion, $sql_real);
         if ($stmt) {
@@ -189,7 +210,8 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
             mysqli_stmt_close($stmt);
         }
 
-        $sql_meta = "SELECT SUM(meta) AS total FROM metas_instalacion_semanal WHERE anio = ? AND semana = ? AND distrito = ?";
+        $dn_meta = distrito_norm_sql('distrito');
+        $sql_meta = "SELECT SUM(meta) AS total FROM metas_instalacion_semanal WHERE anio = ? AND semana = ? AND $dn_meta = ?";
         $stmt = mysqli_prepare($conexion, $sql_meta);
         if ($stmt) {
             mysqli_stmt_bind_param($stmt, "iis", $anio, $sem, $distrito);
@@ -199,9 +221,10 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
             mysqli_stmt_close($stmt);
         }
 
+        $dn_fcst = distrito_norm_sql('distrito');
         $sql_fcst = "SELECT SUM(forecast) AS total
                      FROM metas_forecast_semanal
-                     WHERE anio = ? AND semana = ? AND distrito = ? AND nivel_forecast = 'DIRECTOR_DISTRITAL'";
+                     WHERE anio = ? AND semana = ? AND $dn_fcst = ? AND nivel_forecast = 'DIRECTOR_DISTRITAL'";
         $stmt = mysqli_prepare($conexion, $sql_fcst);
         if ($stmt) {
             mysqli_stmt_bind_param($stmt, "iis", $anio, $sem, $distrito);
@@ -247,28 +270,32 @@ function construir_semaforo_2026($conexion, $anio, $distrito, $semana_actual) {
     ];
 }
 
-$anio_actual = (int)date('Y');
-$semana_actual = (int)date('W');
+$anio_actual = isset($_GET['anio']) ? (int)$_GET['anio'] : (int)date('Y');
+$semana_actual = isset($_GET['semana']) ? (int)$_GET['semana'] : (int)date('W');
+$id_posicion_consulta = isset($_GET['id_posicion']) ? trim((string)$_GET['id_posicion']) : $id_posicion_sesion;
 list($semana_anterior, $anio_semana_anterior) = semana_anterior_calc($semana_actual, $anio_actual);
 
-$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
+$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_consulta, '', $usuario, $rol);
+$modo_consulta = true;
+$back_url = 'metas_fcst_dashboard.php?anio=' . urlencode((string)$anio_actual) . '&semana=' . urlencode((string)$semana_actual);
 
 $id_posicion = (string)$responsable['id_posicion'];
 $posicion_lr = $responsable['posicion_lr'];
 $numero_talento_gs = $responsable['numero_talento_gs'];
 $nombre_responsable = $responsable['nombre_colaborador'];
 $puesto_responsable = $responsable['puesto_responsable'];
-$distrito = $responsable['distrito'];
+$distrito = normalizar_distrito_fcst($responsable['distrito']);
 $nivel_forecast = nivel_forecast_desde_posicion($puesto_responsable);
 
 $forecast_row = cargar_forecast_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
 $compromiso_row = cargar_compromiso_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
 $esta_cerrado = ($compromiso_row && $compromiso_row['estatus'] === 'CERRADO');
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $accion = $_POST['accion'] ?? 'guardar';
 
     $forecast = isset($_POST['forecast']) ? (int)$_POST['forecast'] : 0;
+    $distrito = normalizar_distrito_fcst($distrito);
     $impulso_semana_anterior = trim($_POST['impulso_semana_anterior'] ?? '');
     $resto_semana_anterior = trim($_POST['resto_semana_anterior'] ?? '');
     $competencia = trim($_POST['competencia'] ?? '');
@@ -380,8 +407,8 @@ $acciones = $compromiso_row['acciones_clave'] ?? '';
 $necesidades = $compromiso_row['necesidades_apoyo'] ?? '';
 $estatus = $compromiso_row['estatus'] ?? 'BORRADOR';
 
-$disabled = $esta_cerrado ? 'disabled' : '';
-$readonly_class = $esta_cerrado ? 'readonly' : '';
+$disabled = 'disabled';
+$readonly_class = 'readonly';
 
 $semaforo = construir_semaforo_2026($conexion, $anio_actual, $distrito, $semana_actual);
 $datos_semaforo = $semaforo['datos'];
@@ -392,7 +419,7 @@ $fcst_pct_series = $semaforo['fcst_pct_series'];
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>METAS-FCST - TOTALXPEDIENT</title>
+    <title>Consulta METAS-FCST - TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
     <style>
         :root {
@@ -451,22 +478,22 @@ $fcst_pct_series = $semaforo['fcst_pct_series'];
 </head>
 <body>
 <?php
-$current_page = 'fcst_captura';
+$current_page = 'fcst_dashboard';
 include __DIR__ . '/../includes/sidebar.php';
 ?>
 
 <main class="main">
     <div class="page-header">
         <div class="page-title">
-            <h1>🎯 METAS-FCST</h1>
-            <p>Captura semanal de forecast, hallazgos y compromisos de ejecución.</p>
+            <h1>🎯 Consulta METAS-FCST</h1>
+            <p>Consulta de forecast, hallazgos y compromisos de ejecución del subordinado seleccionado.</p>
             <div class="pill-row">
                 <span class="pill active">SEMANAL</span>
                 <span class="pill disabled">MENSUAL · Próximamente</span>
             </div>
         </div>
         <div class="status-card">
-            <div class="status-label">Semana actual</div>
+            <div class="status-label">Semana analizada</div>
             <div class="status-main">
                 <div>
                     <strong>SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></strong><br>
@@ -580,18 +607,12 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>Control de compromiso</h2><span><?= $esta_cerrado ? 'Solo lectura' : 'Editable hasta cerrar' ?></span></div>
-                <?php if ($esta_cerrado): ?>
-                    <div class="helper">Este compromiso fue cerrado por <strong><?= h($compromiso_row['cerrado_por'] ?? '') ?></strong> el <strong><?= h($compromiso_row['cerrado_en'] ?? '') ?></strong>. Ya no puede modificarse.</div>
-                <?php else: ?>
-                    <div class="helper">Puedes guardar como borrador y regresar a editar. Al seleccionar <strong>Cerrar compromiso</strong>, la información quedará bloqueada.</div>
-                <?php endif; ?>
+                <div class="card-title"><h2>Consulta de compromiso</h2><span>Solo lectura</span></div>
+                <div class="helper">
+                    Este tablero es únicamente de consulta. Para editar o cerrar compromisos, el responsable debe entrar desde Captura FCST con su usuario.
+                </div>
                 <div class="actions">
-                    <a href="../index.php" class="btn btn-secondary">Volver</a>
-                    <div class="actions-right">
-                        <button type="submit" name="accion" value="guardar" class="btn btn-primary" <?= $disabled ?>>Guardar borrador</button>
-                        <button type="submit" name="accion" value="cerrar" class="btn btn-danger" <?= $disabled ?> onclick="return confirm('¿Confirmas cerrar el compromiso? Una vez cerrado ya no podrá modificarse.');">Cerrar compromiso</button>
-                    </div>
+                    <a href="<?= h($back_url) ?>" class="btn btn-secondary">← Volver al Dashboard FCST</a>
                 </div>
             </div>
         </div>
