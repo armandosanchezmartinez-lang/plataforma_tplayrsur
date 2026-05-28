@@ -409,9 +409,9 @@ $readonly_class = $esta_cerrado ? 'readonly' : '';
 
 $semaforo = construir_semaforo_2026($conexion, $anio_actual, $distrito, $semana_actual);
 $datos_semaforo = $semaforo['datos'];
-$meta_pct_series = $semaforo['meta_pct_series'];
-$fcst_pct_series = $semaforo['fcst_pct_series'];
-$real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_semaforo);
+$meta_abs_series = array_map(function($d){ return (int)($d['meta'] ?? 0); }, $datos_semaforo);
+$fcst_abs_series = array_map(function($d){ return (int)($d['fcst'] ?? 0); }, $datos_semaforo);
+$real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_semaforo);$real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_semaforo);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -600,7 +600,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <span class="legend-item"><span class="dot verde"></span> VERDE ≥ 100% y &lt; 120%</span>
                     <span class="legend-item"><span class="dot azul"></span> AZUL ≥ 120%</span>
                 </div>
-                <div class="chart-title">Evolución 2026 · Barras: instalaciones reales · Líneas: %META y %FCST</div>
+                <div class="chart-title">Evolución 2026 · Barras: instalaciones reales · Líneas: META y FCST</div>
                 <canvas id="miniGrafico" class="mini-chart"></canvas>
             </div>
 
@@ -624,8 +624,8 @@ include __DIR__ . '/../includes/sidebar.php';
 </main>
 
 <script>
-const meta_pct_series = <?= json_encode($meta_pct_series, JSON_NUMERIC_CHECK) ?>;
-const fcst_pct_series = <?= json_encode($fcst_pct_series, JSON_NUMERIC_CHECK) ?>;
+const meta_abs_series = <?= json_encode($meta_abs_series, JSON_NUMERIC_CHECK) ?>;
+const fcst_abs_series = <?= json_encode($fcst_abs_series, JSON_NUMERIC_CHECK) ?>;
 const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
 
 (function dibujarMiniGrafico(){
@@ -642,40 +642,37 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
 
     const w = rect.width;
     const h = rect.height;
-    const padL = 48;
-    const padR = 52;
-    const padT = 28;
+    const padL = 56;
+    const padR = 28;
+    const padT = 30;
     const padB = 38;
     const plotW = w - padL - padR;
     const plotH = h - padT - padB;
 
     ctx.clearRect(0, 0, w, h);
 
-    const pctValores = meta_pct_series.concat(fcst_pct_series).filter(v => v !== null && !isNaN(v));
-    const maxPct = Math.max(140, ...pctValores);
-    const maxReal = Math.max(10, ...real_series);
-    const total = Math.max(real_series.length, meta_pct_series.length, fcst_pct_series.length);
+    const valores = real_series.concat(meta_abs_series, fcst_abs_series).filter(v => v !== null && !isNaN(v));
+    const maxVal = Math.max(10, ...valores);
+    const escalaMax = Math.ceil(maxVal * 1.15 / 10) * 10;
+    const total = Math.max(real_series.length, meta_abs_series.length, fcst_abs_series.length);
 
     function x(i) {
         if (total <= 1) return padL;
         return padL + (i * plotW / (total - 1));
     }
 
-    function yPct(v) {
+    function y(v) {
         if (v === null || isNaN(v)) return null;
-        return padT + plotH - (v / maxPct) * plotH;
-    }
-
-    function yReal(v) {
-        return padT + plotH - (v / maxReal) * plotH;
+        return padT + plotH - (v / escalaMax) * plotH;
     }
 
     ctx.font = '11px Segoe UI';
     ctx.lineWidth = 1;
 
-    // Grid y eje izquierdo porcentual
-    [0, 50, 90, 100, 120, 140].forEach(val => {
-        const yy = yPct(val);
+    // Grid absoluto
+    const ticks = [0, Math.round(escalaMax * .25), Math.round(escalaMax * .5), Math.round(escalaMax * .75), escalaMax];
+    ticks.forEach(val => {
+        const yy = y(val);
         if (yy === null) return;
         ctx.beginPath();
         ctx.strokeStyle = '#e2e8f0';
@@ -684,34 +681,29 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
         ctx.stroke();
 
         ctx.fillStyle = '#64748b';
-        ctx.fillText(val + '%', 8, yy + 4);
+        ctx.textAlign = 'right';
+        ctx.fillText(String(val), padL - 10, yy + 4);
     });
 
-    // Eje derecho instalaciones
-    ctx.fillStyle = '#0f766e';
-    ctx.font = '11px Segoe UI';
-    ctx.fillText('Inst.', w - padR + 10, padT + 4);
-    [0, Math.round(maxReal / 2), maxReal].forEach(val => {
-        const yy = yReal(val);
-        ctx.fillText(String(val), w - padR + 10, yy + 4);
-    });
+    ctx.fillStyle = '#64748b';
+    ctx.textAlign = 'left';
+    ctx.fillText('Inst.', padL, padT - 12);
 
     // Barras de instalaciones reales
     const barW = Math.max(8, Math.min(28, plotW / Math.max(total, 1) * 0.42));
     real_series.forEach((v, i) => {
+        const yy = y(v);
+        if (yy === null) return;
         const xx = x(i) - barW / 2;
-        const yy = yReal(v);
         const bh = padT + plotH - yy;
 
         ctx.fillStyle = '#FF00B8';
         ctx.fillRect(xx, yy, barW, bh);
 
-        // Número arriba de cada barra
         ctx.fillStyle = '#64748b';
         ctx.font = '10px Segoe UI';
         ctx.textAlign = 'center';
         ctx.fillText(String(v), x(i), Math.max(padT + 10, yy - 6));
-        ctx.textAlign = 'left';
     });
 
     function drawLine(series, color) {
@@ -721,7 +713,7 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
 
         let started = false;
         series.forEach((v, i) => {
-            const yy = yPct(v);
+            const yy = y(v);
             if (yy === null) return;
             const xx = x(i);
 
@@ -735,7 +727,7 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
         ctx.stroke();
 
         series.forEach((v, i) => {
-            const yy = yPct(v);
+            const yy = y(v);
             if (yy === null) return;
             const xx = x(i);
             ctx.beginPath();
@@ -745,13 +737,18 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
             ctx.lineWidth = 3;
             ctx.strokeStyle = color;
             ctx.stroke();
+
+            ctx.fillStyle = color;
+            ctx.font = '10px Segoe UI';
+            ctx.textAlign = 'center';
+            ctx.fillText(String(v), xx, Math.max(padT + 10, yy - 10));
         });
     }
 
-    drawLine(meta_pct_series, '#7A2BFF');
-    drawLine(fcst_pct_series, '#2563eb');
+    drawLine(meta_abs_series, '#7A2BFF');
+    drawLine(fcst_abs_series, '#2563eb');
 
-    // Etiquetas de semanas, mostrando de forma ligera para no saturar
+    // Etiquetas de semanas
     ctx.fillStyle = '#64748b';
     ctx.font = '11px Segoe UI';
     ctx.textAlign = 'center';
@@ -760,21 +757,21 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
             ctx.fillText('S' + (i + 1), x(i), h - 12);
         }
     }
-    ctx.textAlign = 'left';
 
     // Leyenda interna
     const legendY = 14;
+    ctx.textAlign = 'left';
     ctx.fillStyle = '#FF00B8';
-    ctx.beginPath(); ctx.arc(w - 290, legendY, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText('Instalaciones reales', w - 278, legendY + 4);
+    ctx.beginPath(); ctx.arc(w - 300, legendY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText('Instalaciones reales', w - 288, legendY + 4);
 
     ctx.fillStyle = '#7A2BFF';
-    ctx.beginPath(); ctx.arc(w - 160, legendY, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText('% META', w - 148, legendY + 4);
+    ctx.beginPath(); ctx.arc(w - 162, legendY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText('META', w - 150, legendY + 4);
 
     ctx.fillStyle = '#2563eb';
-    ctx.beginPath(); ctx.arc(w - 88, legendY, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText('% FCST', w - 76, legendY + 4);
+    ctx.beginPath(); ctx.arc(w - 90, legendY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText('FCST', w - 78, legendY + 4);
 })();
 </script>
 </body>

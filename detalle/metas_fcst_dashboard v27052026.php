@@ -206,7 +206,7 @@ for($s=1;$s<=$semana;$s++){
         $detalle_semanal[$label][$s]=['meta'=>$meta,'fcst'=>$fcst,'real'=>$real,'pm'=>div_pct($real,$meta),'pf'=>div_pct($real,$fcst)];
         $tm+=$meta; $tf+=$fcst; $tr+=$real;
     }
-    $labels[]='S'.$s; $serie_real[]=$tr; $serie_meta[]=$tm; $serie_fcst[]=$tf;
+    $labels[]='S'.$s; $serie_real[]=$tr; $serie_meta[]=$tm?round($tr/$tm*100,1):null; $serie_fcst[]=$tf?round($tr/$tf*100,1):null;
 }
 ?><!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>METAS-FCST Dashboard - TOTALXPEDIENT</title>
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
@@ -228,7 +228,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </a>
 <?php endforeach; ?></div></section>
 <section class="card"><div class="title"><h2>Alertas automáticas</h2><span>Riesgos y desviaciones</span></div><div class="alerts"><?php foreach(array_slice($alertas,0,8) as $a): ?><div class="alert"><?=h($a)?></div><?php endforeach; ?></div></section>
-<section class="card full"><div class="title"><h2>Tabla ejecutiva jerárquica · SEM <?=h($semana)?> <?=h($anio)?></h2><span>Meta · FCST · Real · Accuracy</span></div><div class="wrap"><table><thead><tr><th><?=h($scope['label'])?></th><th>Meta</th><th>FCST</th><th>Real</th><th>% Meta</th><th>FCST</th><th>Accuracy</th><th>Cerrados</th><th>Borradores</th></tr></thead><tbody><?php foreach($rows as $r): ?><tr><td><?=h($r['distrito'])?></td><td><?=h(fmt($r['meta']))?></td><td><?=h(fmt($r['fcst']))?></td><td><?=h(fmt($r['real']))?></td><td><span class="pill <?=h($r['cm'])?>"><?=h(fpct($r['pm']))?></span></td><td><span class="pill <?=h($r['cf'])?>"><?=h(fpct($r['pf']))?></span></td><td><?=h(fpct($r['ac']))?></td><td><?=h($r['cerrados'])?></td><td><?=h($r['borradores'])?></td></tr><?php endforeach; ?>
+<section class="card full"><div class="title"><h2>Tabla ejecutiva jerárquica · SEM <?=h($semana)?> <?=h($anio)?></h2><span>Meta · FCST · Real · Accuracy</span></div><div class="wrap"><table><thead><tr><th><?=h($scope['label'])?></th><th>Meta</th><th>FCST</th><th>Real</th><th>% Meta</th><th>% FCST</th><th>Accuracy</th><th>Cerrados</th><th>Borradores</th></tr></thead><tbody><?php foreach($rows as $r): ?><tr><td><?=h($r['distrito'])?></td><td><?=h(fmt($r['meta']))?></td><td><?=h(fmt($r['fcst']))?></td><td><?=h(fmt($r['real']))?></td><td><span class="pill <?=h($r['cm'])?>"><?=h(fpct($r['pm']))?></span></td><td><span class="pill <?=h($r['cf'])?>"><?=h(fpct($r['pf']))?></span></td><td><?=h(fpct($r['ac']))?></td><td><?=h($r['cerrados'])?></td><td><?=h($r['borradores'])?></td></tr><?php endforeach; ?>
 <tr class="total-row">
 <td>TOTAL</td>
 <td><?=h(fmt($total_meta))?></td>
@@ -241,7 +241,7 @@ include __DIR__ . '/../includes/sidebar.php';
 <td><?=h(array_sum(array_column($rows,'borradores')))?></td>
 </tr>
 </tbody></table></div></section>
-<section class="card full"><div class="title"><h2>Tendencia jerárquica 2026</h2><span>Instalaciones reales SEM <?=h($semana)?>: <?=h(fmt($total_real))?> · Barras: real · Líneas: META y FCST</span></div><canvas id="chartRegional" class="chart"></canvas><div class="legend"><span><i class="dot real"></i>Instalaciones reales</span><span><i class="dot meta"></i>META</span><span><i class="dot fcst"></i>FCST</span></div></section>
+<section class="card full"><div class="title"><h2>Tendencia jerárquica 2026</h2><span>Instalaciones reales SEM <?=h($semana)?>: <?=h(fmt($total_real))?> · Barras: real · Líneas: %META y %FCST</span></div><canvas id="chartRegional" class="chart"></canvas><div class="legend"><span><i class="dot real"></i>Instalaciones reales</span><span><i class="dot meta"></i>% META</span><span><i class="dot fcst"></i>% FCST</span></div></section>
 
 <section class="card full">
 <div class="title"><h2>Detalle semanal jerárquico · 2026</h2><span>SEM 1 a SEM <?=h($semana)?> · Meta · FCST · Real · %META · %FCST</span></div>
@@ -249,7 +249,7 @@ include __DIR__ . '/../includes/sidebar.php';
 <table class="detalle-table">
 <thead>
 <tr><th class="district-sticky" rowspan="2"><?=h($scope['label'])?></th><?php for($s=1;$s<=$semana;$s++): ?><th class="week-group" colspan="5">SEM <?=h($s)?></th><?php endfor; ?></tr>
-<tr><?php for($s=1;$s<=$semana;$s++): ?><th>Meta</th><th>FCST</th><th>Real</th><th>% Meta</th><th>FCST</th><?php endfor; ?></tr>
+<tr><?php for($s=1;$s<=$semana;$s++): ?><th>Meta</th><th>FCST</th><th>Real</th><th>% Meta</th><th>% FCST</th><?php endfor; ?></tr>
 </thead>
 <tbody>
 <?php foreach($detalle_semanal as $dist=>$semanas): ?>
@@ -263,47 +263,110 @@ include __DIR__ . '/../includes/sidebar.php';
 </section></div>
 </main>
 <script>
-const labels = <?= json_encode($labels) ?>;
-const serie_real = <?= json_encode($serie_real, JSON_NUMERIC_CHECK) ?>;
-const serie_meta = <?= json_encode($serie_meta, JSON_NUMERIC_CHECK) ?>;
-const serie_fcst = <?= json_encode($serie_fcst, JSON_NUMERIC_CHECK) ?>;
+const labels=<?=json_encode($labels)?>;
+const serieReal=<?=json_encode($serie_real,JSON_NUMERIC_CHECK)?>;
+const serieMeta=<?=json_encode($serie_meta,JSON_NUMERIC_CHECK)?>;
+const serieFcst=<?=json_encode($serie_fcst,JSON_NUMERIC_CHECK)?>;
 
 (function(){
- const c=document.getElementById('chartRegional'); if(!c)return;
- const ctx=c.getContext('2d'), dpr=window.devicePixelRatio||1, r=c.getBoundingClientRect();
- c.width=r.width*dpr; c.height=r.height*dpr; ctx.scale(dpr,dpr);
- const w=r.width,h=r.height,pL=58,pR=28,pT=30,pB=38,pW=w-pL-pR,pH=h-pT-pB;
- const vals=serie_real.concat(serie_meta,serie_fcst).filter(v=>v!==null&&!isNaN(v));
- const maxVal=Math.max(10,...vals);
- const escalaMax=Math.ceil(maxVal*1.15/10)*10;
- const n=labels.length;
- function x(i){return n<=1?pL:pL+(i*pW/(n-1))}
- function y(v){return v===null||isNaN(v)?null:pT+pH-(v/escalaMax)*pH}
- ctx.clearRect(0,0,w,h);
- ctx.font='11px Segoe UI';
- [0,.25,.5,.75,1].forEach(f=>{
-   const val=Math.round(escalaMax*f), yy=y(val);
-   ctx.beginPath(); ctx.strokeStyle='#e2e8f0'; ctx.moveTo(pL,yy); ctx.lineTo(w-pR,yy); ctx.stroke();
-   ctx.fillStyle='#64748b'; ctx.textAlign='right'; ctx.fillText(String(val),pL-10,yy+4);
- });
- ctx.fillStyle='#64748b'; ctx.textAlign='left'; ctx.fillText('Inst.',pL,pT-12);
+    const c=document.getElementById('chartRegional');
+    if(!c)return;
 
- const barW=Math.max(8,Math.min(28,pW/Math.max(n,1)*.42));
- serie_real.forEach((v,i)=>{
-   const yy=y(v); if(yy===null)return;
-   ctx.fillStyle='#FF00B8'; ctx.fillRect(x(i)-barW/2,yy,barW,pT+pH-yy);
-   ctx.fillStyle='#64748b'; ctx.font='10px Segoe UI'; ctx.textAlign='center';
-   ctx.fillText(String(v),x(i),Math.max(pT+10,yy-6));
- });
- function line(series,color){
-   ctx.strokeStyle=color; ctx.lineWidth=3; ctx.beginPath(); let ok=false;
-   series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); if(!ok){ctx.moveTo(xx,yy); ok=true;}else ctx.lineTo(xx,yy);});
-   ctx.stroke();
-   series.forEach((v,i)=>{const yy=y(v); if(yy===null)return; const xx=x(i); ctx.beginPath(); ctx.arc(xx,yy,4,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle=color; ctx.stroke(); ctx.fillStyle=color; ctx.font='10px Segoe UI'; ctx.textAlign='center'; ctx.fillText(String(v),xx,Math.max(pT+10,yy-10));});
- }
- line(serie_meta,'#7A2BFF');
- line(serie_fcst,'#2563eb');
- ctx.fillStyle='#64748b'; ctx.font='11px Segoe UI'; ctx.textAlign='center';
- labels.forEach((lb,i)=>{if(i===0||i===n-1||i%2===0)ctx.fillText(lb,x(i),h-12)});
+    const ctx=c.getContext('2d');
+    const dpr=window.devicePixelRatio||1;
+    const r=c.getBoundingClientRect();
+
+    c.width=r.width*dpr;
+    c.height=r.height*dpr;
+    ctx.scale(dpr,dpr);
+
+    const w=r.width,h=r.height,padL=48,padR=52,padT=22,padB=34;
+    const chartW=w-padL-padR;
+    const chartH=h-padT-padB;
+
+    const maxReal=Math.max(10,...serieReal.filter(v=>v!==null&&!isNaN(v)));
+    const pctVals=serieMeta.concat(serieFcst).filter(v=>v!==null&&!isNaN(v));
+    const maxPct=Math.max(140,...pctVals);
+    const minPct=0;
+
+    function x(i,total){return total<=1?padL:padL+i*chartW/(total-1);}
+    function yPct(v){return v===null||isNaN(v)?null:padT+chartH-((v-minPct)/(maxPct-minPct))*chartH;}
+    function yReal(v){return padT+chartH-(v/maxReal)*chartH;}
+
+    ctx.clearRect(0,0,w,h);
+    ctx.font='11px Segoe UI';
+    ctx.lineWidth=1;
+
+    [0,50,90,100,120,140].forEach(v=>{
+        const yy=yPct(v);
+        ctx.strokeStyle='#e2e8f0';
+        ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(w-padR,yy);ctx.stroke();
+        ctx.fillStyle='#64748b';ctx.fillText(v+'%',5,yy+4);
+    });
+
+    [0, Math.round(maxReal/2), maxReal].forEach(v=>{
+        const yy=yReal(v);
+        ctx.fillStyle='#0f766e';
+        ctx.fillText(String(v), w-padR+10, yy+4);
+    });
+
+    const total=labels.length;
+    const barW=Math.max(8, Math.min(22, chartW/(Math.max(total,1)*1.8)));
+
+    serieReal.forEach((v,i)=>{
+        if(v===null||isNaN(v))return;
+        const xx=x(i,total)-barW/2;
+        const yy=yReal(v);
+        const hh=padT+chartH-yy;
+        ctx.fillStyle='#FF00B8';
+        ctx.fillRect(xx,yy,barW,hh);
+
+        ctx.fillStyle='#334155';
+        ctx.font='10px Segoe UI';
+        ctx.textAlign='center';
+        ctx.fillText(String(v), xx + barW/2, yy - 6);
+        ctx.textAlign='left';
+    });
+
+    function line(series,color){
+        ctx.strokeStyle=color;
+        ctx.lineWidth=3;
+        ctx.beginPath();
+        let st=false;
+        series.forEach((v,i)=>{
+            const yy=yPct(v);
+            if(yy===null)return;
+            const xx=x(i,total);
+            if(!st){ctx.moveTo(xx,yy);st=true}else ctx.lineTo(xx,yy);
+        });
+        ctx.stroke();
+
+        series.forEach((v,i)=>{
+            const yy=yPct(v);
+            if(yy===null)return;
+            const xx=x(i,total);
+            ctx.beginPath();
+            ctx.arc(xx,yy,3.6,0,Math.PI*2);
+            ctx.fillStyle=color;
+            ctx.fill();
+            ctx.strokeStyle='white';
+            ctx.lineWidth=1.4;
+            ctx.stroke();
+        });
+    }
+
+    line(serieMeta,'#FF00B8');
+    line(serieFcst,'#7A2BFF');
+
+    ctx.fillStyle='#64748b';
+    ctx.font='10px Segoe UI';
+    labels.forEach((lb,i)=>{
+        if(i%2!==0 && labels.length>14)return;
+        ctx.fillText(lb, x(i,total)-8, h-10);
+    });
+
+    ctx.fillStyle='#64748b';
+    ctx.fillText('% cumplimiento', 5, 12);
+    ctx.fillText('Inst.', w-45, 12);
 })();
 </script></body></html>
