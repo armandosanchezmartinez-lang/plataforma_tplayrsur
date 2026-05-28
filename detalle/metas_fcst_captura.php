@@ -421,7 +421,7 @@ $real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
     <style>
         :root {
-            --tx-purple:#7A2BFF; --tx-pink:#FF00B8; --tx-blue:#2563eb;
+            --tx-purple:#00BFFF; --tx-pink:#FF1493; --tx-blue:#8A2BE2;
             --tx-card:rgba(255,255,255,.90); --tx-border:#e2e8f0;
             --tx-text:#1a2540; --tx-muted:#6b7a99; --sidebar:200px;
         }
@@ -459,7 +459,7 @@ $real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_
         .semaforo-table th{background:#f8fafc;font-weight:900;color:#475569}
         .semaforo-table td:first-child,.semaforo-table th:first-child{position:sticky;left:0;background:#f8fafc;font-weight:900;z-index:1}
         .dot{width:15px;height:15px;display:inline-block;border-radius:999px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.13)}
-        .dot.rojo{background:#ef4444}.dot.amarillo{background:#fbbf24}.dot.verde{background:#65a30d}.dot.azul{background:#2563eb}.dot.gris{background:#cbd5e1}
+        .dot.rojo{background:#ef4444}.dot.amarillo{background:#fbbf24}.dot.verde{background:#65a30d}.dot.azul{background:#8A2BE2}.dot.gris{background:#cbd5e1}
         .legend{display:flex;flex-wrap:wrap;gap:16px;margin:14px 0 12px;font-size:.76rem;color:#475569;font-weight:800}
         .legend-item{display:flex;align-items:center;gap:7px}
         .mini-chart{width:100%;height:270px;margin-top:8px;background:rgba(255,255,255,.65);border:1px solid #e2e8f0;border-radius:16px;padding:10px}
@@ -472,6 +472,9 @@ $real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_
         .alert{border-radius:16px;padding:14px 16px;margin-bottom:18px;line-height:1.45;font-weight:700}.alert.exito{background:#dcfce7;color:#166534}.alert.error{background:#fee2e2;color:#991b1b}
         .helper{font-size:.78rem;color:var(--tx-muted);line-height:1.45;margin-top:8px}
         @media(max-width:1100px){.grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
+    .chart-box-tooltip{position:relative}
+        .chart-tooltip{position:absolute;display:none;z-index:10;background:#1a2540;color:white;border-radius:10px;padding:8px 10px;font-size:.78rem;font-weight:800;box-shadow:0 10px 24px rgba(15,23,42,.22);pointer-events:none;white-space:nowrap}
+        .chart-tooltip .muted{opacity:.75;font-weight:700}
     </style>
 </head>
 <body>
@@ -601,7 +604,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <span class="legend-item"><span class="dot azul"></span> AZUL ≥ 120%</span>
                 </div>
                 <div class="chart-title">Evolución 2026 · Barras: instalaciones reales · Líneas: META y FCST</div>
-                <canvas id="miniGrafico" class="mini-chart"></canvas>
+                <div class="chart-box-tooltip"><canvas id="miniGrafico" class="mini-chart"></canvas><div id="tooltipMiniGrafico" class="chart-tooltip"></div></div>
             </div>
 
             <div class="card full">
@@ -697,7 +700,7 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
         const xx = x(i) - barW / 2;
         const bh = padT + plotH - yy;
 
-        ctx.fillStyle = '#FF00B8';
+        ctx.fillStyle = '#FF1493';
         ctx.fillRect(xx, yy, barW, bh);
 
         ctx.fillStyle = '#64748b';
@@ -706,9 +709,9 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
         ctx.fillText(String(v), x(i), Math.max(padT + 10, yy - 6));
     });
 
-    function drawLine(series, color, offsetX) {
+    function drawLine(series, color, nombre) {
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
         ctx.beginPath();
 
         let started = false;
@@ -734,20 +737,19 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
             ctx.arc(xx, yy, 4, 0, Math.PI * 2);
             ctx.fillStyle = '#ffffff';
             ctx.fill();
-            ctx.lineWidth = 3;
+            ctx.lineWidth = 4;
             ctx.strokeStyle = color;
             ctx.stroke();
 
             ctx.fillStyle = color;
             ctx.font = '10px Segoe UI';
             ctx.textAlign = 'center';
-            ctx.textAlign = offsetX >= 0 ? 'left' : 'right';
-            ctx.fillText(String(v), xx + offsetX, Math.max(padT + 10, yy - 10));
+            // Etiquetas de META/FCST ocultas: se muestran con tooltip al pasar el puntero.
         });
     }
 
-    drawLine(meta_abs_series, '#7A2BFF', 16);
-    drawLine(fcst_abs_series, '#2563eb', -16);
+    drawLine(meta_abs_series, '#00BFFF', 'META');
+    drawLine(fcst_abs_series, '#8A2BE2', 'FCST');
 
     // Etiquetas de semanas
     ctx.fillStyle = '#64748b';
@@ -762,17 +764,55 @@ const real_series = <?= json_encode($real_series, JSON_NUMERIC_CHECK) ?>;
     // Leyenda interna
     const legendY = 14;
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#FF00B8';
+    ctx.fillStyle = '#FF1493';
     ctx.beginPath(); ctx.arc(w - 300, legendY, 5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#64748b'; ctx.fillText('Instalaciones reales', w - 288, legendY + 4);
 
-    ctx.fillStyle = '#7A2BFF';
+    ctx.fillStyle = '#00BFFF';
     ctx.beginPath(); ctx.arc(w - 162, legendY, 5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#64748b'; ctx.fillText('META', w - 150, legendY + 4);
 
-    ctx.fillStyle = '#2563eb';
+    ctx.fillStyle = '#8A2BE2';
     ctx.beginPath(); ctx.arc(w - 90, legendY, 5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#64748b'; ctx.fillText('FCST', w - 78, legendY + 4);
+
+    const puntosTooltip = [];
+    function registrarPuntos(series, nombre) {
+        series.forEach((v, i) => {
+            const yy = y(v);
+            if (yy === null) return;
+            puntosTooltip.push({x: x(i), y: yy, valor: v, serie: nombre, semana: 'S' + (i + 1)});
+        });
+    }
+    registrarPuntos(meta_abs_series, 'META');
+    registrarPuntos(fcst_abs_series, 'FCST');
+
+    const tooltip = document.getElementById('tooltipMiniGrafico');
+    canvas.addEventListener('mousemove', function(ev){
+        if (!tooltip || !puntosTooltip.length) return;
+        const box = canvas.getBoundingClientRect();
+        const mx = ev.clientX - box.left;
+        const my = ev.clientY - box.top;
+        let nearest = null;
+        let best = 9999;
+
+        puntosTooltip.forEach(p => {
+            const d = Math.hypot(mx - p.x, my - p.y);
+            if (d < best) { best = d; nearest = p; }
+        });
+
+        if (nearest && best <= 14) {
+            tooltip.style.display = 'block';
+            tooltip.style.left = (nearest.x + 14) + 'px';
+            tooltip.style.top = (nearest.y - 38) + 'px';
+            tooltip.innerHTML = '<span class="muted">' + nearest.semana + '</span> · ' + nearest.serie + ': ' + nearest.valor;
+        } else {
+            tooltip.style.display = 'none';
+        }
+    });
+    canvas.addEventListener('mouseleave', function(){
+        if (tooltip) tooltip.style.display = 'none';
+    });
 })();
 </script>
 </body>
