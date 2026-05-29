@@ -359,19 +359,7 @@ $anio_actual = (int)date('Y');
 $semana_actual = (int)date('W');
 list($semana_anterior, $anio_semana_anterior) = semana_anterior_calc($semana_actual, $anio_actual);
 
-/*
- * Regla HC / Línea de reporte:
- * - Para semana corriente, la estructura jerárquica se toma de HC semana anterior.
- * - Para semanas históricas, debe tomarse HC de la misma semana consultada.
- * En esta pantalla de captura se trabaja la semana corriente; por eso HC usa SEM actual - 1.
- */
-$anio_hc = $anio_actual;
-$semana_hc = $semana_actual;
-if ($anio_actual === (int)date('Y') && $semana_actual === (int)date('W')) {
-    list($semana_hc, $anio_hc) = semana_anterior_calc($semana_actual, $anio_actual);
-}
-
-$responsable = buscar_responsable_sesion($conexion, $anio_hc, $semana_hc, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
+$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
 $id_posicion = (string)$responsable['id_posicion'];
 $posicion_lr = $responsable['posicion_lr'] ?? null;
 $numero_talento_gs = $responsable['numero_talento_gs'] ?? '';
@@ -431,7 +419,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $acciones_estatus = $_POST['accion_estatus'] ?? [];
         $acciones_comentario = $_POST['accion_comentario'] ?? [];
 
-        $subordinados_tmp = cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado);
+        $subordinados_tmp = cargar_subordinados_directos($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_subordinado);
         $meta_responsable_tmp = obtener_meta_responsable($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_ejecucion, $distrito);
         $meta_distribuida_tmp = 0;
         foreach ($subordinados_tmp as $sub) {
@@ -650,7 +638,7 @@ $observaciones = $plan_row['observaciones'] ?? '';
 $palancas = cargar_palancas($conexion);
 $palancas_seleccionadas = cargar_palancas_seleccionadas($conexion, $id_ejecucion);
 $acciones_guardadas = cargar_acciones($conexion, $id_ejecucion);
-$subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado) : [];
+$subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_subordinado) : [];
 $metas_asignadas = cargar_metas_asignadas_por_superior($conexion, $anio_actual, $semana_actual, $id_posicion);
 
 $meta_distribuida = 0;
@@ -703,7 +691,7 @@ include __DIR__ . '/../includes/sidebar.php';
             <div class="pill-row">
                 <span class="pill active">CAPTURA</span>
                 <span class="pill"><?= h(etiqueta_nivel($nivel_ejecucion)) ?></span>
-                <span class="pill">SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span><span class="pill">HC SEM <?= h($semana_hc) ?> · <?= h($anio_hc) ?></span>
+                <span class="pill">SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span>
             </div>
         </div>
         <div class="status-card">
@@ -734,27 +722,6 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
 
         <div class="grid" style="margin-top:20px;">
-            <div class="card">
-                <div class="card-title"><h2>1. Compromiso FCST</h2><span>¿A qué me comprometo?</span></div>
-                <div class="field">
-                    <label>Forecast compromiso de la semana actual</label>
-                    <input type="number" name="forecast" min="0" step="1" value="<?= h($forecast_valor) ?>" <?= $disabled ?>>
-                    <div class="helper">Se guarda en <strong>metas_forecast_semanal</strong> con nivel <?= h($nivel_ejecucion) ?>.</div>
-                </div>
-                <div class="field"><label>Lo que me impulsó en la semana anterior</label><textarea name="impulso_semana_anterior" <?= $disabled ?>><?= h($impulso) ?></textarea></div>
-                <div class="field"><label>Lo que me restó en la semana anterior</label><textarea name="resto_semana_anterior" <?= $disabled ?>><?= h($resto) ?></textarea></div>
-            </div>
-
-            <div class="card">
-                <div class="card-title"><h2>2. Contexto y ejecución</h2><span>FCST reforzado</span></div>
-                <div class="field"><label>Información clave de la competencia</label><textarea name="competencia" <?= $disabled ?>><?= h($competencia_txt) ?></textarea></div>
-                <div class="field"><label>Acciones clave a ejecutar</label><textarea name="acciones_clave" <?= $disabled ?>><?= h($acciones_fcst) ?></textarea></div>
-                <div class="field"><label>Necesidades y apoyos requeridos</label><textarea name="necesidades_apoyo" <?= $disabled ?>><?= h($necesidades) ?></textarea></div>
-            </div>
-
-            <div class="card full">
-                <div class="card-title"><h2>3. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
-                <div class="grid">
             <div class="card full">
                 <div class="card-title"><h2>1. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
                     <div class="field"><label>Estrategia general</label><textarea name="estrategia_general" <?= $disabled ?>><?= h($estrategia_general) ?></textarea></div>
@@ -763,7 +730,6 @@ include __DIR__ . '/../includes/sidebar.php';
                     <div class="field"><label>Observaciones</label><textarea name="observaciones" <?= $disabled ?>><?= h($observaciones) ?></textarea></div>
                 </div>
             </div>
-
             <div class="card full">
                 <div class="card-title"><h2>2. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
                 <?php if (empty($palancas)): ?>
