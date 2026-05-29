@@ -7,12 +7,12 @@
  *   include __DIR__ . '/includes/sidebar.php';
  *
  * Uso desde /plataforma/detalle/*.php:
- *   $current_page = 'ranking'; // hc | reai | fcst_captura | fcst_dashboard | ejecucion_operativa_captura
+ *   $current_page = 'ranking'; // hc | reai | fcst_captura | fcst_dashboard
  *   include __DIR__ . '/../includes/sidebar.php';
  */
 $current_page = $current_page ?? '';
 
-$is_detalle = in_array($current_page, ['ranking', 'hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta'], true);
+$is_detalle = in_array($current_page, ['ranking', 'hc', 'reai', 'fcst_captura', 'fcst_dashboard'], true);
 $root_path  = $is_detalle ? '../' : '';
 $det_path   = $is_detalle ? '' : 'detalle/';
 
@@ -43,10 +43,6 @@ function txp_nav_active($page, $current_page) {
     </a>
     <a href="<?= $det_path ?>metas_fcst_dashboard.php" class="nav-item<?= txp_nav_active('fcst_dashboard', $current_page) ?>">
         <span class="nav-icon">🚦</span> Dashboard FCST
-    </a>
-
-    <a href="<?= $det_path ?>ejecucion_operativa_captura.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_captura', $current_page) ?>">
-        <span class="nav-icon">🚀</span> Ejecución Operativa
     </a>
 
     <div class="sidebar-bottom">
