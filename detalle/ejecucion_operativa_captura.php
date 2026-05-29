@@ -722,6 +722,7 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
 
         <div class="grid" style="margin-top:20px;">
+            div class="card full">
                 <div class="card-title"><h2>1. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
 <<<<<<< HEAD
                 <div class="grid">
@@ -732,6 +733,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <div class="field"><label>Apoyos requeridos</label><textarea name="apoyos_requeridos" <?= $disabled ?>><?= h($apoyos_requeridos) ?></textarea></div>
                     <div class="field"><label>Observaciones</label><textarea name="observaciones" <?= $disabled ?>><?= h($observaciones) ?></textarea></div>
                 </div>
+            </div>
             <div class="card full">
                 <div class="card-title"><h2>2. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
                 <?php if (empty($palancas)): ?>
