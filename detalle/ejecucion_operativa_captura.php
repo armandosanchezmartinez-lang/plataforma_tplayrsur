@@ -722,7 +722,7 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
 
         <div class="grid" style="margin-top:20px;">
-            div class="card full">
+            <div class="card full">
                 <div class="card-title"><h2>1. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
                     <div class="field"><label>Estrategia general</label><textarea name="estrategia_general" <?= $disabled ?>><?= h($estrategia_general) ?></textarea></div>
                     <div class="field"><label>Riesgos detectados</label><textarea name="riesgos_detectados" <?= $disabled ?>><?= h($riesgos_detectados) ?></textarea></div>
