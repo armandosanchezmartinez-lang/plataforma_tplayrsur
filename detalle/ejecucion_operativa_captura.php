@@ -732,7 +732,7 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>4. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
+                <div class="card-title"><h2>2. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
                 <?php if (empty($palancas)): ?>
                     <div class="alert error">No hay palancas activas cargadas en <strong>ejecucion_operativa_palancas</strong>.</div>
                 <?php else: ?>
@@ -762,7 +762,7 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>5. Distribución de metas</h2><span><?= h(etiqueta_nivel($nivel_ejecucion)) ?> → <?= h(etiqueta_nivel($nivel_subordinado)) ?></span></div>
+                <div class="card-title"><h2>3. Distribución de metas</h2><span><?= h(etiqueta_nivel($nivel_ejecucion)) ?> → <?= h(etiqueta_nivel($nivel_subordinado)) ?></span></div>
                 <div class="helper" style="margin-bottom:12px;">Regla: para enviar el plan, la suma asignada debe ser igual o superior a tu meta semanal.</div>
                 <div class="table-wrap">
                     <table>
@@ -794,7 +794,7 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>6. Acciones clave</h2><span>Compromisos de ejecución</span></div>
+                <div class="card-title"><h2>4. Acciones clave</h2><span>Compromisos de ejecución</span></div>
                 <div class="table-wrap">
                     <table class="actions-grid">
                         <thead><tr><th>Acción</th><th>Descripción</th><th>Responsable</th><th>Fecha</th><th>Prioridad</th><th>Estatus</th><th>Comentario</th></tr></thead>
