@@ -722,27 +722,8 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
 
         <div class="grid" style="margin-top:20px;">
-            <div class="card">
-                <div class="card-title"><h2>1. Compromiso FCST</h2><span>¿A qué me comprometo?</span></div>
-                <div class="field">
-                    <label>Forecast compromiso de la semana actual</label>
-                    <input type="number" name="forecast" min="0" step="1" value="<?= h($forecast_valor) ?>" <?= $disabled ?>>
-                    <div class="helper">Se guarda en <strong>metas_forecast_semanal</strong> con nivel <?= h($nivel_ejecucion) ?>.</div>
-                </div>
-                <div class="field"><label>Lo que me impulsó en la semana anterior</label><textarea name="impulso_semana_anterior" <?= $disabled ?>><?= h($impulso) ?></textarea></div>
-                <div class="field"><label>Lo que me restó en la semana anterior</label><textarea name="resto_semana_anterior" <?= $disabled ?>><?= h($resto) ?></textarea></div>
-            </div>
-
-            <div class="card">
-                <div class="card-title"><h2>2. Contexto y ejecución</h2><span>FCST reforzado</span></div>
-                <div class="field"><label>Información clave de la competencia</label><textarea name="competencia" <?= $disabled ?>><?= h($competencia_txt) ?></textarea></div>
-                <div class="field"><label>Acciones clave a ejecutar</label><textarea name="acciones_clave" <?= $disabled ?>><?= h($acciones_fcst) ?></textarea></div>
-                <div class="field"><label>Necesidades y apoyos requeridos</label><textarea name="necesidades_apoyo" <?= $disabled ?>><?= h($necesidades) ?></textarea></div>
-            </div>
-
             <div class="card full">
-                <div class="card-title"><h2>3. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
-                <div class="grid">
+                <div class="card-title"><h2>1. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
                     <div class="field"><label>Estrategia general</label><textarea name="estrategia_general" <?= $disabled ?>><?= h($estrategia_general) ?></textarea></div>
                     <div class="field"><label>Riesgos detectados</label><textarea name="riesgos_detectados" <?= $disabled ?>><?= h($riesgos_detectados) ?></textarea></div>
                     <div class="field"><label>Apoyos requeridos</label><textarea name="apoyos_requeridos" <?= $disabled ?>><?= h($apoyos_requeridos) ?></textarea></div>
