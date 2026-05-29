@@ -721,7 +721,7 @@ $modo_semana = $es_semana_pasada ? 'CONSULTA HISTÓRICA' : ($es_semana_futura ? 
         .alert{border-radius:16px;padding:14px 16px;margin-bottom:18px;line-height:1.45;font-weight:700}.alert.exito{background:#dcfce7;color:#166534}.alert.error{background:#fee2e2;color:#991b1b}.helper{font-size:.78rem;color:var(--tx-muted);line-height:1.45;margin-top:8px}
         .table-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:16px;background:rgba(255,255,255,.70)}table{width:100%;border-collapse:collapse;font-size:.8rem}th,td{padding:12px 10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}th{background:#f8fafc;color:#475569;text-transform:uppercase;letter-spacing:.45px;font-size:.7rem;font-weight:900}tr:last-child td{border-bottom:none}.num{text-align:right}.sub-name{font-weight:900}.sub-meta-input{max-width:120px;text-align:right;font-weight:900}.mini{font-size:.72rem;color:var(--tx-muted);font-weight:700;margin-top:2px}
         .palanca-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.palanca-item{border:1px solid #e2e8f0;background:rgba(255,255,255,.68);border-radius:18px;padding:14px}.palanca-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}.palanca-top input{width:auto}.palanca-name{font-weight:900}.actions-grid td input,.actions-grid td textarea,.actions-grid td select{font-size:.78rem;padding:9px;border-radius:12px}.actions-grid textarea{min-height:50px}
-        .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn-add{background:#e8eef7;color:#1a2540;border:1px solid var(--tx-border);margin-top:14px}.week-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.week-nav a,.week-nav span{display:inline-flex;align-items:center;border-radius:999px;padding:9px 14px;font-size:.78rem;font-weight:900;text-decoration:none}.week-nav a{border:1px solid var(--tx-border);background:rgba(255,255,255,.88);color:var(--tx-text)}.week-nav .current{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%)}.week-nav .disabled{opacity:.45;background:#e8eef7;color:#64748b}.mode-note{font-size:.74rem;color:var(--tx-muted);font-weight:800;margin-top:8px}
+        .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}.week-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.week-nav a,.week-nav span{display:inline-flex;align-items:center;border-radius:999px;padding:9px 14px;font-size:.78rem;font-weight:900;text-decoration:none}.week-nav a{border:1px solid var(--tx-border);background:rgba(255,255,255,.88);color:var(--tx-text)}.week-nav .current{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%)}.week-nav .disabled{opacity:.45;background:#e8eef7;color:#64748b}.mode-note{font-size:.74rem;color:var(--tx-muted);font-weight:800;margin-top:8px}
         @media(max-width:1150px){.grid{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}.palanca-grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
     </style>
 </head>
@@ -857,7 +857,7 @@ include __DIR__ . '/../includes/sidebar.php';
                 <div class="table-wrap">
                     <table class="actions-grid">
                         <thead><tr><th>Acción</th><th>Descripción</th><th>Responsable</th><th>Fecha</th><th>Prioridad</th><th>Estatus</th><th>Comentario</th></tr></thead>
-                        <tbody id="accionesBody">
+                        <tbody>
                         <?php foreach ($acciones_guardadas as $i => $a): ?>
                             <tr>
                                 <td><input type="text" name="accion_item[]" value="<?= h($a['accion'] ?? '') ?>" <?= $disabled ?>></td>
@@ -872,9 +872,6 @@ include __DIR__ . '/../includes/sidebar.php';
                         </tbody>
                     </table>
                 </div>
-                <?php if (!$bloqueado): ?>
-                    <button type="button" class="btn btn-add" id="btnAgregarAccion">+ Agregar acción clave</button>
-                <?php endif; ?>
             </div>
 
             <div class="card full">
@@ -897,47 +894,5 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
     </form>
 </main>
-
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const btn = document.getElementById('btnAgregarAccion');
-    const tbody = document.getElementById('accionesBody');
-
-    if (!btn || !tbody) return;
-
-    btn.addEventListener('click', function () {
-        const tr = document.createElement('tr');
-
-        tr.innerHTML = `
-            <td><input type="text" name="accion_item[]" value=""></td>
-            <td><textarea name="accion_desc[]"></textarea></td>
-            <td><input type="text" name="accion_resp[]" value=""></td>
-            <td><input type="date" name="accion_fecha[]" value=""></td>
-            <td>
-                <select name="accion_prioridad[]">
-                    <option value="ALTA">Alta</option>
-                    <option value="MEDIA" selected>Media</option>
-                    <option value="BAJA">Baja</option>
-                </select>
-            </td>
-            <td>
-                <select name="accion_estatus[]">
-                    <option value="PENDIENTE" selected>Pendiente</option>
-                    <option value="EN_PROCESO">En proceso</option>
-                    <option value="COMPLETADA">Completada</option>
-                    <option value="CANCELADA">Cancelada</option>
-                </select>
-            </td>
-            <td><input type="text" name="accion_comentario[]" value=""></td>
-        `;
-
-        tbody.appendChild(tr);
-
-        const firstInput = tr.querySelector('input, textarea, select');
-        if (firstInput) firstInput.focus();
-    });
-});
-</script>
 </body>
-
 </html>
