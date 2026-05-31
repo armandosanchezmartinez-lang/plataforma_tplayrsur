@@ -277,19 +277,7 @@ function cargar_palancas_seleccionadas($conexion, $id_ejecucion) {
 
 function cargar_acciones($conexion, $id_ejecucion) {
     $rows = [];
-    $sql = "SELECT * FROM ejecucion_operativa_acciones
-            WHERE id_ejecucion = ?
-            ORDER BY
-                CASE WHEN fecha_compromiso IS NULL THEN 1 ELSE 0 END,
-                fecha_compromiso ASC,
-                CASE prioridad
-                    WHEN 'ALTA' THEN 1
-                    WHEN 'MEDIA' THEN 2
-                    WHEN 'BAJA' THEN 3
-                    ELSE 4
-                END,
-                id ASC";
-    $stmt = mysqli_prepare($conexion, $sql);
+    $stmt = mysqli_prepare($conexion, "SELECT * FROM ejecucion_operativa_acciones WHERE id_ejecucion = ? ORDER BY id ASC");
     if (!$stmt) return $rows;
     mysqli_stmt_bind_param($stmt, "i", $id_ejecucion);
     mysqli_stmt_execute($stmt);
@@ -298,70 +286,6 @@ function cargar_acciones($conexion, $id_ejecucion) {
     mysqli_stmt_close($stmt);
     return $rows;
 }
-
-function fecha_lunes_iso_semana($anio, $semana) {
-    $dt = new DateTime();
-    $dt->setISODate((int)$anio, (int)$semana, 1);
-    $dt->setTime(0, 0, 0);
-    return $dt;
-}
-
-function acciones_por_dia_semana($acciones, $anio, $semana) {
-    $dias = [];
-    $lunes = fecha_lunes_iso_semana($anio, $semana);
-    for ($i = 0; $i < 7; $i++) {
-        $d = clone $lunes;
-        $d->modify("+{$i} days");
-        $dias[$d->format('Y-m-d')] = [
-            'fecha' => $d,
-            'acciones' => []
-        ];
-    }
-
-    foreach ($acciones as $a) {
-        $fecha = $a['fecha_compromiso'] ?? '';
-        if ($fecha && isset($dias[$fecha])) {
-            $dias[$fecha]['acciones'][] = $a;
-        }
-    }
-
-    return $dias;
-}
-
-function etiqueta_dia_corta($n) {
-    $map = [
-        1 => 'LUNES',
-        2 => 'MARTES',
-        3 => 'MIÉRCOLES',
-        4 => 'JUEVES',
-        5 => 'VIERNES',
-        6 => 'SÁBADO',
-        7 => 'DOMINGO'
-    ];
-    return $map[(int)$n] ?? '';
-}
-
-function formato_fecha_mx($dt) {
-    return $dt->format('d/m/Y');
-}
-
-function accion_prioridad_cls($prioridad) {
-    $p = strtoupper((string)$prioridad);
-    if ($p === 'ALTA') return 'alta';
-    if ($p === 'BAJA') return 'baja';
-    return 'media';
-}
-
-function accion_estatus_label($estatus) {
-    $map = [
-        'PENDIENTE' => 'Pendiente',
-        'EN_PROCESO' => 'En proceso',
-        'COMPLETADA' => 'Completada',
-        'CANCELADA' => 'Cancelada'
-    ];
-    return $map[$estatus] ?? $estatus;
-}
-
 
 function cargar_subordinados_directos($conexion, $anio, $semana, $id_posicion, $nivel_sub) {
     $rows = [];
@@ -540,7 +464,6 @@ $observaciones = $plan_row['observaciones'] ?? '';
 $palancas = cargar_palancas($conexion);
 $palancas_seleccionadas = cargar_palancas_seleccionadas($conexion, $id_ejecucion);
 $acciones_guardadas = cargar_acciones($conexion, $id_ejecucion);
-$acciones_calendario = acciones_por_dia_semana($acciones_guardadas, $anio_actual, $semana_actual);
 $subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado) : [];
 $metas_asignadas = cargar_metas_asignadas_por_superior($conexion, $anio_actual, $semana_actual, $id_posicion);
 
@@ -570,7 +493,7 @@ $modo_semana = 'SOLO LECTURA';
 <head>
     <meta charset="UTF-8">
     <title>Consulta Ejecución Operativa - TOTALXPEDIENT</title>
-    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=173">
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=172">
     <style>
         :root{--tx-purple:#7A2BFF;--tx-pink:#FF0AC8;--tx-cyan:#00D8FF;--tx-card:rgba(255,255,255,.90);--tx-border:#e2e8f0;--tx-text:#1a2540;--tx-muted:#6b7a99;--tx-green:#10b981;--tx-red:#ef4444;--tx-orange:#f59e0b;}
         *{box-sizing:border-box}
@@ -603,29 +526,6 @@ $modo_semana = 'SOLO LECTURA';
         .palanca-ficha-comment .comment-label{display:block;text-transform:uppercase;font-size:.64rem;letter-spacing:.5px;color:#64748b;font-weight:950;margin-bottom:4px}
         .empty-state{border:1px dashed #cbd5e1;background:#f8fafc;border-radius:18px;padding:16px;color:#64748b;font-weight:850}
         .actions-grid td input,.actions-grid td textarea,.actions-grid td select{font-size:.78rem;padding:9px;border-radius:12px}.actions-grid textarea{min-height:50px}
-        .calendar-wrap{overflow-x:auto;border:1px solid #dbe4f0;border-radius:18px;background:rgba(255,255,255,.82)}
-        .calendar-table{width:100%;min-width:1050px;border-collapse:collapse;table-layout:fixed;background:white}
-        .calendar-table th{padding:10px 8px;text-align:center;border-right:1px solid #dbe4f0;border-bottom:1px solid #dbe4f0;background:#f8fafc;color:#111827;font-size:.92rem;font-weight:950;letter-spacing:.2px}
-        .calendar-table th.domingo{color:#dc2626}
-        .calendar-table .date-row th{font-size:.82rem;background:#fff;color:#111827}
-        .calendar-table .date-row th.domingo{color:#dc2626}
-        .calendar-table td{height:210px;vertical-align:top;border-right:1px solid #dbe4f0;padding:10px;background:#fff}
-        .calendar-table th:last-child,.calendar-table td:last-child{border-right:none}
-        .calendar-empty{height:100%;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:.78rem;font-weight:800;text-align:center}
-        .calendar-action{position:relative;margin-bottom:9px;border:1px solid #e2e8f0;border-radius:14px;padding:10px 10px 9px 12px;background:#f8fafc;box-shadow:0 6px 14px rgba(22,28,60,.05);overflow:hidden}
-        .calendar-action:before{content:'';position:absolute;left:0;top:0;bottom:0;width:5px;background:#f59e0b}
-        .calendar-action.prioridad-alta:before{background:#ef4444}
-        .calendar-action.prioridad-media:before{background:#f59e0b}
-        .calendar-action.prioridad-baja:before{background:#10b981}
-        .calendar-action-title{font-size:.82rem;font-weight:950;color:#1a2540;line-height:1.25;margin-bottom:5px}
-        .calendar-action-desc{font-size:.72rem;color:#475569;line-height:1.35;margin-bottom:7px}
-        .calendar-action-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-        .calendar-chip{border-radius:999px;padding:4px 7px;font-size:.62rem;font-weight:950;background:#e8eef7;color:#334155}
-        .calendar-chip.alta{background:#fee2e2;color:#991b1b}
-        .calendar-chip.media{background:#fef3c7;color:#92400e}
-        .calendar-chip.baja{background:#dcfce7;color:#166534}
-        .calendar-resp{font-size:.68rem;color:#64748b;font-weight:850;margin-top:6px}
-        .calendar-comment{font-size:.68rem;color:#64748b;margin-top:6px;line-height:1.3}
         .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn-add{background:#e8eef7;color:#1a2540;border:1px solid var(--tx-border);margin-top:14px}.week-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.week-nav a,.week-nav span{display:inline-flex;align-items:center;border-radius:999px;padding:9px 14px;font-size:.78rem;font-weight:900;text-decoration:none}.week-nav a{border:1px solid var(--tx-border);background:rgba(255,255,255,.88);color:var(--tx-text)}.week-nav .current{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%)}.week-nav .disabled{opacity:.45;background:#e8eef7;color:#64748b}.mode-note{font-size:.74rem;color:var(--tx-muted);font-weight:800;margin-top:8px}
         @media(max-width:1150px){.grid{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}.palanca-grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
     </style>
@@ -757,66 +657,30 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>4. Acciones clave</h2><span>Calendario semanal de compromisos</span></div>
-                <?php if (empty($acciones_guardadas)): ?>
-                    <div class="empty-state">No hay acciones clave capturadas para este plan.</div>
-                <?php else: ?>
-                    <div class="calendar-wrap">
-                        <table class="calendar-table">
-                            <thead>
-                                <tr>
-                                    <?php foreach ($acciones_calendario as $fecha_iso => $dia): 
-                                        $num_dia = (int)$dia['fecha']->format('N');
-                                        $es_domingo_cal = $num_dia === 7;
-                                    ?>
-                                        <th class="<?= $es_domingo_cal ? 'domingo' : '' ?>"><?= h(etiqueta_dia_corta($num_dia)) ?></th>
-                                    <?php endforeach; ?>
-                                </tr>
-                                <tr class="date-row">
-                                    <?php foreach ($acciones_calendario as $fecha_iso => $dia): 
-                                        $num_dia = (int)$dia['fecha']->format('N');
-                                        $es_domingo_cal = $num_dia === 7;
-                                    ?>
-                                        <th class="<?= $es_domingo_cal ? 'domingo' : '' ?>"><?= h(formato_fecha_mx($dia['fecha'])) ?></th>
-                                    <?php endforeach; ?>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <?php foreach ($acciones_calendario as $fecha_iso => $dia): ?>
-                                        <td>
-                                            <?php if (empty($dia['acciones'])): ?>
-                                                <div class="calendar-empty">Sin actividades</div>
-                                            <?php else: ?>
-                                                <?php foreach ($dia['acciones'] as $a): 
-                                                    $pr = strtoupper($a['prioridad'] ?? 'MEDIA');
-                                                    $pr_cls = accion_prioridad_cls($pr);
-                                                    $estatus = $a['estatus'] ?? 'PENDIENTE';
-                                                ?>
-                                                    <div class="calendar-action prioridad-<?= h($pr_cls) ?>">
-                                                        <div class="calendar-action-title"><?= h($a['accion'] ?? 'Acción') ?></div>
-                                                        <?php if (!empty($a['descripcion'])): ?>
-                                                            <div class="calendar-action-desc"><?= h($a['descripcion']) ?></div>
-                                                        <?php endif; ?>
-                                                        <div class="calendar-action-meta">
-                                                            <span class="calendar-chip <?= h($pr_cls) ?>"><?= h($pr) ?></span>
-                                                            <span class="calendar-chip"><?= h(accion_estatus_label($estatus)) ?></span>
-                                                        </div>
-                                                        <?php if (!empty($a['responsable'])): ?>
-                                                            <div class="calendar-resp">Responsable: <?= h($a['responsable']) ?></div>
-                                                        <?php endif; ?>
-                                                        <?php if (!empty($a['comentario'])): ?>
-                                                            <div class="calendar-comment">Comentario: <?= h($a['comentario']) ?></div>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                <?php endforeach; ?>
-                                            <?php endif; ?>
-                                        </td>
-                                    <?php endforeach; ?>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
+                <div class="card-title"><h2>4. Acciones clave</h2><span>Compromisos de ejecución</span></div>
+                <div class="table-wrap">
+                    <table class="actions-grid">
+                        <thead><tr><th>Acción</th><th>Descripción</th><th>Responsable</th><th>Fecha</th><th>Prioridad</th><th>Estatus</th><th>Comentario</th></tr></thead>
+                        <tbody id="accionesBody">
+                        <?php if (empty($acciones_guardadas)): ?>
+                            <tr><td colspan="7" style="text-align:left;color:#6b7a99;font-weight:800;">No hay acciones clave capturadas para este plan.</td></tr>
+                        <?php endif; ?>
+                        <?php foreach ($acciones_guardadas as $i => $a): ?>
+                            <tr>
+                                <td><input type="text" name="accion_item[]" value="<?= h($a['accion'] ?? '') ?>" <?= $disabled ?>></td>
+                                <td><textarea name="accion_desc[]" <?= $disabled ?>><?= h($a['descripcion'] ?? '') ?></textarea></td>
+                                <td><input type="text" name="accion_resp[]" value="<?= h($a['responsable'] ?? '') ?>" <?= $disabled ?>></td>
+                                <td><input type="date" name="accion_fecha[]" value="<?= h($a['fecha_compromiso'] ?? '') ?>" <?= $disabled ?>></td>
+                                <td><select name="accion_prioridad[]" <?= $disabled ?>><?php $pr=$a['prioridad']??'MEDIA'; ?><option value="ALTA" <?= $pr==='ALTA'?'selected':'' ?>>Alta</option><option value="MEDIA" <?= $pr==='MEDIA'?'selected':'' ?>>Media</option><option value="BAJA" <?= $pr==='BAJA'?'selected':'' ?>>Baja</option></select></td>
+                                <td><select name="accion_estatus[]" <?= $disabled ?>><?php $es=$a['estatus']??'PENDIENTE'; ?><option value="PENDIENTE" <?= $es==='PENDIENTE'?'selected':'' ?>>Pendiente</option><option value="EN_PROCESO" <?= $es==='EN_PROCESO'?'selected':'' ?>>En proceso</option><option value="COMPLETADA" <?= $es==='COMPLETADA'?'selected':'' ?>>Completada</option><option value="CANCELADA" <?= $es==='CANCELADA'?'selected':'' ?>>Cancelada</option></select></td>
+                                <td><input type="text" name="accion_comentario[]" value="<?= h($a['comentario'] ?? '') ?>" <?= $disabled ?>></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php if (!$bloqueado): ?>
+                    <button type="button" class="btn btn-add" id="btnAgregarAccion">+ Agregar acción clave</button>
                 <?php endif; ?>
             </div>
 
