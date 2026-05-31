@@ -432,11 +432,6 @@ $plan_row = cargar_plan($conexion, $id_ejecucion);
 
 /* Consulta solo lectura: no procesa POST. */
 
-$forecast_row = cargar_forecast_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
-    $compromiso_row = cargar_compromiso_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
-    $plan_row = cargar_plan($conexion, $id_ejecucion);
-}
-
 $meta_responsable = obtener_meta_responsable($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_ejecucion, $distrito);
 $forecast_valor = $forecast_row ? (int)$forecast_row['forecast'] : 0;
 $ins_semana = obtener_ins_semana($conexion, $anio_actual, $semana_actual, $nivel_ejecucion, $distrito, $numero_talento_gs);
