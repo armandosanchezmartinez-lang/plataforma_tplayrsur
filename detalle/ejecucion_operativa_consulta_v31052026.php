@@ -253,19 +253,7 @@ function cargar_palancas($conexion) {
 
 function cargar_palancas_seleccionadas($conexion, $id_ejecucion) {
     $map = [];
-    $sql = "SELECT pp.*, p.nombre, p.descripcion
-            FROM ejecucion_operativa_plan_palancas pp
-            INNER JOIN ejecucion_operativa_palancas p ON p.id = pp.id_palanca
-            WHERE pp.id_ejecucion = ?
-            ORDER BY
-                CASE pp.prioridad
-                    WHEN 'ALTA' THEN 1
-                    WHEN 'MEDIA' THEN 2
-                    WHEN 'BAJA' THEN 3
-                    ELSE 4
-                END,
-                p.nombre ASC";
-    $stmt = mysqli_prepare($conexion, $sql);
+    $stmt = mysqli_prepare($conexion, "SELECT * FROM ejecucion_operativa_plan_palancas WHERE id_ejecucion = ?");
     if (!$stmt) return $map;
     mysqli_stmt_bind_param($stmt, "i", $id_ejecucion);
     mysqli_stmt_execute($stmt);
@@ -493,7 +481,7 @@ $modo_semana = 'SOLO LECTURA';
 <head>
     <meta charset="UTF-8">
     <title>Consulta Ejecución Operativa - TOTALXPEDIENT</title>
-    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=172">
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=171">
     <style>
         :root{--tx-purple:#7A2BFF;--tx-pink:#FF0AC8;--tx-cyan:#00D8FF;--tx-card:rgba(255,255,255,.90);--tx-border:#e2e8f0;--tx-text:#1a2540;--tx-muted:#6b7a99;--tx-green:#10b981;--tx-red:#ef4444;--tx-orange:#f59e0b;}
         *{box-sizing:border-box}
@@ -508,24 +496,7 @@ $modo_semana = 'SOLO LECTURA';
         .field{margin-bottom:16px}.field label{display:block;font-size:.78rem;text-transform:uppercase;letter-spacing:.5px;font-weight:900;color:var(--tx-muted);margin-bottom:8px}.field input,.field textarea,.field select{width:100%;border:1.5px solid #dbe4f0;border-radius:16px;padding:12px 13px;font-family:inherit;font-size:.88rem;outline:none;background:rgba(255,255,255,.82);color:var(--tx-text)}.field textarea{min-height:108px;resize:vertical;line-height:1.45}.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--tx-purple);box-shadow:0 0 0 4px rgba(122,43,255,.10);background:white}.field input:disabled,.field textarea:disabled,.field select:disabled,.readonly input,.readonly textarea,.readonly select{background:#f8fafc;color:#64748b;cursor:not-allowed}
         .alert{border-radius:16px;padding:14px 16px;margin-bottom:18px;line-height:1.45;font-weight:700}.alert.exito{background:#dcfce7;color:#166534}.alert.error{background:#fee2e2;color:#991b1b}.helper{font-size:.78rem;color:var(--tx-muted);line-height:1.45;margin-top:8px}
         .table-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:16px;background:rgba(255,255,255,.70)}table{width:100%;border-collapse:collapse;font-size:.8rem}th,td{padding:12px 10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}th{background:#f8fafc;color:#475569;text-transform:uppercase;letter-spacing:.45px;font-size:.7rem;font-weight:900}tr:last-child td{border-bottom:none}.num{text-align:right}.sub-name{font-weight:900}.sub-meta-input{max-width:120px;text-align:right;font-weight:900}.mini{font-size:.72rem;color:var(--tx-muted);font-weight:700;margin-top:2px}
-        .palanca-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.palanca-item{border:1px solid #e2e8f0;background:rgba(255,255,255,.68);border-radius:18px;padding:14px}.palanca-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}.palanca-top input{width:auto}.palanca-name{font-weight:900}
-        .palancas-consulta-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-        .palanca-ficha{position:relative;border:1px solid #e2e8f0;background:rgba(255,255,255,.78);border-radius:20px;padding:16px 16px 15px 18px;box-shadow:0 10px 24px rgba(22,28,60,.06);overflow:hidden}
-        .palanca-ficha:before{content:'';position:absolute;left:0;top:0;bottom:0;width:6px;background:#94a3b8}
-        .palanca-ficha.prioridad-alta:before{background:#ef4444}
-        .palanca-ficha.prioridad-media:before{background:#f59e0b}
-        .palanca-ficha.prioridad-baja:before{background:#10b981}
-        .palanca-ficha-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px}
-        .palanca-ficha-title{font-size:1rem;font-weight:950;color:var(--tx-text);line-height:1.2}
-        .prioridad-chip{border-radius:999px;padding:5px 9px;font-size:.68rem;font-weight:950;white-space:nowrap}
-        .prioridad-chip.alta{background:#fee2e2;color:#991b1b}
-        .prioridad-chip.media{background:#fef3c7;color:#92400e}
-        .prioridad-chip.baja{background:#dcfce7;color:#166534}
-        .palanca-ficha-desc{font-size:.76rem;color:var(--tx-muted);font-weight:800;line-height:1.35;margin-bottom:10px}
-        .palanca-ficha-comment{background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:11px 12px;color:#334155;font-size:.82rem;line-height:1.4;min-height:44px}
-        .palanca-ficha-comment .comment-label{display:block;text-transform:uppercase;font-size:.64rem;letter-spacing:.5px;color:#64748b;font-weight:950;margin-bottom:4px}
-        .empty-state{border:1px dashed #cbd5e1;background:#f8fafc;border-radius:18px;padding:16px;color:#64748b;font-weight:850}
-        .actions-grid td input,.actions-grid td textarea,.actions-grid td select{font-size:.78rem;padding:9px;border-radius:12px}.actions-grid textarea{min-height:50px}
+        .palanca-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.palanca-item{border:1px solid #e2e8f0;background:rgba(255,255,255,.68);border-radius:18px;padding:14px}.palanca-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}.palanca-top input{width:auto}.palanca-name{font-weight:900}.actions-grid td input,.actions-grid td textarea,.actions-grid td select{font-size:.78rem;padding:9px;border-radius:12px}.actions-grid textarea{min-height:50px}
         .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn-add{background:#e8eef7;color:#1a2540;border:1px solid var(--tx-border);margin-top:14px}.week-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.week-nav a,.week-nav span{display:inline-flex;align-items:center;border-radius:999px;padding:9px 14px;font-size:.78rem;font-weight:900;text-decoration:none}.week-nav a{border:1px solid var(--tx-border);background:rgba(255,255,255,.88);color:var(--tx-text)}.week-nav .current{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%)}.week-nav .disabled{opacity:.45;background:#e8eef7;color:#64748b}.mode-note{font-size:.74rem;color:var(--tx-muted);font-weight:800;margin-top:8px}
         @media(max-width:1150px){.grid{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}.palanca-grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
     </style>
@@ -628,27 +599,28 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>3. Palancas de ejecución</h2><span>Solo palancas seleccionadas · Prioridad alta a baja</span></div>
-                <?php if (empty($palancas_seleccionadas)): ?>
-                    <div class="empty-state">No hay palancas seleccionadas para este plan operativo.</div>
+                <div class="card-title"><h2>3. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
+                <?php if (empty($palancas)): ?>
+                    <div class="alert error">No hay palancas activas cargadas en <strong>ejecucion_operativa_palancas</strong>.</div>
                 <?php else: ?>
-                    <div class="palancas-consulta-grid">
-                        <?php foreach ($palancas_seleccionadas as $pid => $p):
-                            $prioridad = strtoupper($p['prioridad'] ?? 'MEDIA');
-                            $comentario = trim((string)($p['comentario'] ?? ''));
-                            $prioridad_cls = strtolower($prioridad);
+                    <div class="palanca-grid">
+                        <?php foreach ($palancas as $p):
+                            $pid = (int)$p['id'];
+                            $sel = isset($palancas_seleccionadas[$pid]);
+                            $prioridad = $palancas_seleccionadas[$pid]['prioridad'] ?? 'MEDIA';
+                            $comentario = $palancas_seleccionadas[$pid]['comentario'] ?? '';
                         ?>
-                            <div class="palanca-ficha prioridad-<?= h($prioridad_cls) ?>">
-                                <div class="palanca-ficha-head">
-                                    <div class="palanca-ficha-title"><?= h($p['nombre'] ?? 'Palanca') ?></div>
-                                    <span class="prioridad-chip <?= h($prioridad_cls) ?>"><?= h($prioridad) ?></span>
+                            <div class="palanca-item">
+                                <div class="palanca-top">
+                                    <input type="checkbox" name="palanca[<?= $pid ?>]" value="1" <?= $sel ? 'checked' : '' ?> <?= $disabled ?>>
+                                    <div>
+                                        <div class="palanca-name"><?= h($p['nombre']) ?></div>
+                                        <div class="mini"><?= h($p['descripcion'] ?? '') ?></div>
+                                    </div>
                                 </div>
-                                <?php if (!empty($p['descripcion'])): ?>
-                                    <div class="palanca-ficha-desc"><?= h($p['descripcion']) ?></div>
-                                <?php endif; ?>
-                                <div class="palanca-ficha-comment">
-                                    <span class="comment-label">Comentario</span>
-                                    <?= $comentario !== '' ? h($comentario) : 'Sin comentario capturado.' ?>
+                                <div class="grid" style="grid-template-columns:160px 1fr;gap:10px;">
+                                    <div class="field" style="margin:0;"><label>Prioridad</label><select name="palanca_prioridad[<?= $pid ?>]" <?= $disabled ?>><option value="ALTA" <?= $prioridad==='ALTA'?'selected':'' ?>>Alta</option><option value="MEDIA" <?= $prioridad==='MEDIA'?'selected':'' ?>>Media</option><option value="BAJA" <?= $prioridad==='BAJA'?'selected':'' ?>>Baja</option></select></div>
+                                    <div class="field" style="margin:0;"><label>Comentario</label><input type="text" name="palanca_comentario[<?= $pid ?>]" value="<?= h($comentario) ?>" <?= $disabled ?>></div>
                                 </div>
                             </div>
                         <?php endforeach; ?>
