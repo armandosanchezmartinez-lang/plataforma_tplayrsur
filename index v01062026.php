@@ -254,14 +254,6 @@ $meses_labels = [];
 $datos_inst_stacked = []; 
 $datos_vent_stacked = [];
 
-// Fecha inicial alineada a los 6 meses mostrados en el dashboard.
-// Evita que el primer mes del periodo quede incompleto o en cero
-// cuando CURDATE() ya cambió de mes.
-$fecha_inicio_evolucion = date(
-    'Y-m-01',
-    mktime(0, 0, 0, $mes_actual - 5, 1, $anio_query)
-);
-
 // Generar etiquetas de meses (eje X)
 for ($i = 5; $i >= 0; $i--) {
     $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
@@ -271,7 +263,7 @@ for ($i = 5; $i >= 0; $i--) {
 // 1. Datos Instalaciones por Origen
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
     FROM instalaciones 
-    WHERE fecha >= '$fecha_inicio_evolucion' AND origen_prospecto <> '-' ";
+    WHERE fecha >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m-01') AND origen_prospecto <> '-' ";
 if ($rol !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
@@ -294,7 +286,7 @@ while($row = mysqli_fetch_assoc($res_i)) {
 // 2. Datos Ventas por Canal
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
     FROM ventas 
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' ";
+    WHERE fecha_cierre >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m-01') ";
 if ($rol !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
