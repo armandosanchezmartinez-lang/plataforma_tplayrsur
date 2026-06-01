@@ -263,7 +263,7 @@ for ($i = 5; $i >= 0; $i--) {
 // 1. Datos Instalaciones por Origen
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
     FROM instalaciones 
-    WHERE fecha >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) AND origen_prospecto <> '-' ";
+    WHERE fecha >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m-01') AND origen_prospecto <> '-' ";
 if ($rol !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
@@ -286,7 +286,7 @@ while($row = mysqli_fetch_assoc($res_i)) {
 // 2. Datos Ventas por Canal
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
     FROM ventas 
-    WHERE fecha_cierre >= DATE_SUB(LAST_DAY(NOW() - INTERVAL 1 MONTH), INTERVAL 5 MONTH) ";
+    WHERE fecha_cierre >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m-01') ";
 if ($rol !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
