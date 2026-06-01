@@ -93,11 +93,8 @@ if ($rol !== 'admin') {
     }
 }
 
-// Fecha de corte única para todo el dashboard.
-// Se usa el día vencido para evitar mezclar meses en cierres o inicios de mes.
-$fecha_corte_timestamp = strtotime('-1 day');
-$mes_actual   = (int)date('n', $fecha_corte_timestamp);
-$anio_query   = (int)date('Y', $fecha_corte_timestamp);
+$mes_actual   = (int)date('n', strtotime('-2 day'));
+$anio_query   = (int)date('Y', strtotime('-2 day'));
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 // Equivalencias de distrito
@@ -185,9 +182,10 @@ $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
 // ── META ─────────────────────────────────────────────────────────────────────
-// Se reutiliza la misma fecha de corte definida arriba.
-$ayer_timestamp = $fecha_corte_timestamp;
-$dia_ayer           = (int)date('j', $ayer_timestamp);
+$ayer_timestamp = strtotime('-1 day');
+$dia_ayer           = (int)date('j', $ayer_timestamp);    
+$mes_actual         = (int)date('n', $ayer_timestamp); 
+$anio_query         = (int)date('Y', $ayer_timestamp); 
 $dias_transcurridos = $dia_ayer; 
 
 $kpi_meta_acum      = 0;
