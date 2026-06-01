@@ -85,15 +85,6 @@ function scope_config($rol, $posicion){
 
 function cargar_grupos($conexion, $anio, $semana, $scope, $usuario_hc){
     $grupos=[]; $puestos=in_sql($scope['puestos']); $id_jefe=$usuario_hc['id_posicion'] ?? '';
-    $distrito_jefe = norm_dist($usuario_hc['distrito'] ?? '');
-    $dn_hc = dist_norm_sql('distrito');
-
-    /*
-     * Blindaje jerárquico por distrito:
-     * Para Director Distrital y Líder, se exige posicion_lr + distrito normalizado.
-     * Así evitamos que se cuele un responsable de otro distrito por registros históricos
-     * o semanas sin HC exacto.
-     */
     if($scope['nivel']==='REGIONAL'){
         if($id_jefe!=='' && norm_pos($usuario_hc['posicion'] ?? '')==='DIRECTOR REGIONAL'){
             $stmt=mysqli_prepare($conexion,"SELECT id_posicion,posicion_lr,numero_talento_gs,nombre_colaborador,posicion,distrito FROM hc WHERE semana=? AND anio=? AND posicion IN ($puestos) AND posicion_lr=? AND numero_talento_gs NOT LIKE '%VACANTE%' ORDER BY distrito,nombre_colaborador");
@@ -107,58 +98,24 @@ function cargar_grupos($conexion, $anio, $semana, $scope, $usuario_hc){
         if(!empty($usuario_hc)) $grupos[]=$usuario_hc;
     } else {
         if($id_jefe!==''){
-            if($distrito_jefe!==''){
-                $stmt=mysqli_prepare($conexion,"SELECT id_posicion,posicion_lr,numero_talento_gs,nombre_colaborador,posicion,distrito FROM hc WHERE semana=? AND anio=? AND posicion IN ($puestos) AND posicion_lr=? AND $dn_hc=? AND numero_talento_gs NOT LIKE '%VACANTE%' ORDER BY nombre_colaborador");
-                if($stmt){ mysqli_stmt_bind_param($stmt,"iiss",$semana,$anio,$id_jefe,$distrito_jefe); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); while($r=mysqli_fetch_assoc($res))$grupos[]=$r; mysqli_stmt_close($stmt); }
-            } else {
-                $stmt=mysqli_prepare($conexion,"SELECT id_posicion,posicion_lr,numero_talento_gs,nombre_colaborador,posicion,distrito FROM hc WHERE semana=? AND anio=? AND posicion IN ($puestos) AND posicion_lr=? AND numero_talento_gs NOT LIKE '%VACANTE%' ORDER BY nombre_colaborador");
-                if($stmt){ mysqli_stmt_bind_param($stmt,"iis",$semana,$anio,$id_jefe); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); while($r=mysqli_fetch_assoc($res))$grupos[]=$r; mysqli_stmt_close($stmt); }
-            }
+            $stmt=mysqli_prepare($conexion,"SELECT id_posicion,posicion_lr,numero_talento_gs,nombre_colaborador,posicion,distrito FROM hc WHERE semana=? AND anio=? AND posicion IN ($puestos) AND posicion_lr=? AND numero_talento_gs NOT LIKE '%VACANTE%' ORDER BY nombre_colaborador");
+            if($stmt){ mysqli_stmt_bind_param($stmt,"iis",$semana,$anio,$id_jefe); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); while($r=mysqli_fetch_assoc($res))$grupos[]=$r; mysqli_stmt_close($stmt); }
         }
     }
-
     // Fallback sin semana exacta, útil si el HC de la semana seleccionada todavía no existe.
     if(!$grupos){
         if($scope['nivel']==='REGIONAL'){
             $res=mysqli_query($conexion,"SELECT h.* FROM hc h INNER JOIN (SELECT id_posicion, MAX(CONCAT(anio,LPAD(semana,2,'0'))) periodo FROM hc WHERE posicion IN ($puestos) AND numero_talento_gs NOT LIKE '%VACANTE%' GROUP BY id_posicion) u ON h.id_posicion=u.id_posicion AND CONCAT(h.anio,LPAD(h.semana,2,'0'))=u.periodo WHERE h.posicion IN ($puestos) ORDER BY h.distrito,h.nombre_colaborador");
             if($res){ while($r=mysqli_fetch_assoc($res))$grupos[]=$r; }
         } elseif($scope['nivel']!=='COACH' && $id_jefe!==''){
-            if($distrito_jefe!==''){
-                $dn_sub = dist_norm_sql('distrito');
-                $dn_h = dist_norm_sql('h.distrito');
-                $sql = "SELECT h.* FROM hc h
-                        INNER JOIN (
-                            SELECT id_posicion, MAX(CONCAT(anio,LPAD(semana,2,'0'))) periodo
-                            FROM hc
-                            WHERE posicion IN ($puestos)
-                              AND posicion_lr=?
-                              AND $dn_sub=?
-                              AND numero_talento_gs NOT LIKE '%VACANTE%'
-                            GROUP BY id_posicion
-                        ) u ON h.id_posicion=u.id_posicion AND CONCAT(h.anio,LPAD(h.semana,2,'0'))=u.periodo
-                        WHERE h.posicion IN ($puestos)
-                          AND h.posicion_lr=?
-                          AND $dn_h=?
-                        ORDER BY h.nombre_colaborador";
-                $stmt=mysqli_prepare($conexion,$sql);
-                if($stmt){ mysqli_stmt_bind_param($stmt,"ssss",$id_jefe,$distrito_jefe,$id_jefe,$distrito_jefe); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); while($r=mysqli_fetch_assoc($res))$grupos[]=$r; mysqli_stmt_close($stmt); }
-            } else {
-                $stmt=mysqli_prepare($conexion,"SELECT h.* FROM hc h INNER JOIN (SELECT id_posicion, MAX(CONCAT(anio,LPAD(semana,2,'0'))) periodo FROM hc WHERE posicion IN ($puestos) AND posicion_lr=? AND numero_talento_gs NOT LIKE '%VACANTE%' GROUP BY id_posicion) u ON h.id_posicion=u.id_posicion AND CONCAT(h.anio,LPAD(h.semana,2,'0'))=u.periodo WHERE h.posicion IN ($puestos) AND h.posicion_lr=? ORDER BY h.nombre_colaborador");
-                if($stmt){ mysqli_stmt_bind_param($stmt,"ss",$id_jefe,$id_jefe); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); while($r=mysqli_fetch_assoc($res))$grupos[]=$r; mysqli_stmt_close($stmt); }
-            }
+            $stmt=mysqli_prepare($conexion,"SELECT h.* FROM hc h INNER JOIN (SELECT id_posicion, MAX(CONCAT(anio,LPAD(semana,2,'0'))) periodo FROM hc WHERE posicion IN ($puestos) AND posicion_lr=? AND numero_talento_gs NOT LIKE '%VACANTE%' GROUP BY id_posicion) u ON h.id_posicion=u.id_posicion AND CONCAT(h.anio,LPAD(h.semana,2,'0'))=u.periodo WHERE h.posicion IN ($puestos) AND h.posicion_lr=? ORDER BY h.nombre_colaborador");
+            if($stmt){ mysqli_stmt_bind_param($stmt,"ss",$id_jefe,$id_jefe); mysqli_stmt_execute($stmt); $res=mysqli_stmt_get_result($stmt); while($r=mysqli_fetch_assoc($res))$grupos[]=$r; mysqli_stmt_close($stmt); }
         }
     }
-
     $seen=[]; $out=[];
     foreach($grupos as $g){
-        $k=(string)($g['id_posicion'] ?? '');
-        if($k==='' || isset($seen[$k])) continue;
+        $k=(string)($g['id_posicion'] ?? ''); if($k==='' || isset($seen[$k])) continue; $seen[$k]=1;
         $g['distrito']=norm_dist($g['distrito'] ?? '');
-
-        // Último filtro de seguridad: en vistas no regionales, no mostrar subordinados de otro distrito.
-        if($scope['nivel']!=='REGIONAL' && $scope['nivel']!=='COACH' && $distrito_jefe!=='' && $g['distrito']!==$distrito_jefe) continue;
-
-        $seen[$k]=1;
         $out[]=$g;
     }
     return $out;
@@ -287,7 +244,7 @@ for($s=1;$s<=$semana;$s++){
     $labels[]='S'.$s; $serie_real[]=$tr; $serie_meta[]=$tm; $serie_fcst[]=$tf;
 }
 ?><!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>METAS-FCST Dashboard - TOTALXPEDIENT</title>
-<link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=167">
+<link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=166">
 <style>
 :root{--p:#00BFFF;--b:#8A2BE2;--card:rgba(255,255,255,.92);--bd:#e2e8f0;--txt:#1a2540;--mut:#6b7a99}*{box-sizing:border-box}body{margin:0;font-family:Poppins,'Segoe UI',sans-serif;background:linear-gradient(180deg,#f7f8ff,#eef5ff);color:var(--txt);display:flex}.header{display:flex;justify-content:space-between;gap:20px;margin-bottom:22px}.header h1{margin:0;font-size:1.7rem}.header p{margin:6px 0;color:var(--mut)}.box,.card,.kpi{background:var(--card);border:1px solid var(--bd);border-radius:22px;box-shadow:0 14px 32px rgba(22,28,60,.08)}.box{padding:18px 22px;min-width:260px}.label{font-size:.72rem;text-transform:uppercase;color:var(--mut);font-weight:900;letter-spacing:.7px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}.kpi{padding:20px}.value{font-size:2rem;font-weight:950;color:var(--p);margin-top:8px}.sub{font-size:.78rem;color:var(--mut);font-weight:800}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:20px}.card{padding:22px;margin-bottom:20px}.full{grid-column:1/-1}.title{display:flex;justify-content:space-between;margin-bottom:16px}.title h2{margin:0;font-size:1.08rem}.title span{font-size:.78rem;color:var(--mut);font-weight:900}.heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.sem-block{margin-top:4px}.sem-block-title{display:flex;justify-content:space-between;align-items:center;margin:2px 0 14px 0}.sem-block-title strong{font-size:.92rem;color:#334155}.sem-block-title span{font-size:.78rem;color:var(--mut);font-weight:950}.sem-divider{border:0;border-top:1px solid var(--bd);margin:22px 0 18px 0}.dcard{border:1px solid var(--bd);background:white;border-radius:18px;padding:16px;border-left:8px solid #cbd5e1;text-decoration:none;display:block;transition:transform .15s ease,box-shadow .15s ease}.dcard:hover{transform:translateY(-2px);box-shadow:0 16px 34px rgba(22,28,60,.12)}.dcard.rojo{border-left-color:#ef4444}.dcard.amarillo{border-left-color:#fbbf24}.dcard.verde{border-left-color:#65a30d}.dcard.azul{border-left-color:#8A2BE2}.name{font-weight:950;color:#334155}.pct{font-size:1.8rem;font-weight:950}.risk{font-size:.72rem;font-weight:950;color:#64748b}.wrap{overflow-x:auto;border:1px solid var(--bd);border-radius:16px;background:white}table{border-collapse:collapse;width:100%;min-width:1180px;font-size:.78rem}th,td{padding:11px 10px;border-bottom:1px solid var(--bd);text-align:center;white-space:nowrap}th{background:#f8fafc;color:#475569;font-size:.68rem;text-transform:uppercase}td:first-child,th:first-child{text-align:left;position:sticky;left:0;background:white;font-weight:900}.pill{border-radius:999px;padding:6px 10px;font-weight:950;font-size:.75rem}.rojo{background:#fee2e2;color:#991b1b}.amarillo{background:#fef3c7;color:#92400e}.verde{background:#dcfce7;color:#166534}.azul{background:#dbeafe;color:#1d4ed8}.gris{background:#e2e8f0;color:#475569}.alerts{display:flex;flex-direction:column;gap:10px}.alert{background:white;border:1px solid var(--bd);border-radius:16px;padding:13px 14px;font-weight:800;color:#334155;font-size:.86rem}.chart{width:100%;height:270px;background:white;border:1px solid var(--bd);border-radius:18px;padding:10px}.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;font-weight:900;color:#64748b;margin-top:10px}.dot{width:12px;height:12px;border-radius:999px;display:inline-block;margin-right:6px;vertical-align:middle}.dot.real{background:#FF1493}.dot.meta{background:#FF1493}.dot.fcst{background:#00BFFF}.week-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.week-btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:8px 12px;background:#fff;border:1px solid var(--bd);color:#1a2540;text-decoration:none;font-size:.78rem;font-weight:900;box-shadow:0 8px 18px rgba(22,28,60,.06)}.week-btn:hover{background:linear-gradient(135deg,rgba(122,43,255,.10),rgba(255,0,184,.08));border-color:#c4b5fd}.week-btn.active{color:#fff;background:linear-gradient(135deg,#00BFFF,#FF1493);border-color:transparent}.detalle-wrap{overflow-x:auto;border:1px solid var(--bd);border-radius:16px;background:white}.detalle-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:.72rem}.detalle-table th,.detalle-table td{padding:9px 8px;border-bottom:1px solid var(--bd);border-right:1px solid var(--bd);text-align:center;white-space:nowrap}.detalle-table th{background:#f8fafc;color:#475569;font-weight:950;text-transform:uppercase}.detalle-table .district-sticky{position:sticky;left:0;background:white;z-index:3;text-align:left;font-weight:950;min-width:160px}.detalle-table thead .district-sticky{background:#f8fafc;z-index:4}.detalle-table .week-group{background:linear-gradient(135deg,rgba(122,43,255,.10),rgba(255,0,184,.08));color:#1a2540;border-top:1px solid var(--bd)}.detalle-table .pct-cell{font-weight:900}.detalle-note{font-size:.78rem;color:var(--mut);font-weight:800;margin-top:10px}.total-row{font-weight:950;background:#f8fafc}@media(max-width:1100px){.kpis{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}.header{flex-direction:column}}
 .chart-box-tooltip{position:relative}
