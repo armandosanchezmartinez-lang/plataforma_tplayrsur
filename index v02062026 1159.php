@@ -146,9 +146,6 @@ if ($rol !== 'admin') {
 $scope_pos = $_GET['scope_pos'] ?? '';
 $scope_activo = false;
 $scope_registro = null;
-$scope_nivel = '';
-$scope_distritos_sql = '';
-$scope_filtrar_por_distrito = false;
 $scope_ids = [];
 $scope_autorizado_ids = [];
 $jerarquia_opciones = [
@@ -222,24 +219,6 @@ if ($scope_pos !== '') {
             $nombre_completo_scope = $row_scope['nombre_colaborador'] ?? '';
             $posicion_scope = $row_scope['posicion'] ?? '';
             $distrito_scope = $row_scope['distrito'] ?? $distrito_usuario;
-            $scope_nivel = nivel_dashboard_hc($posicion_scope, $row_scope['puesto_lr'] ?? '');
-
-            // Para Director Distrital el dashboard debe cuadrar contra el índice base por distrito,
-            // no por folios de HC. Esto evita perder instalaciones cargadas con distrito correcto
-            // pero sin folio/hc perfectamente amarrado.
-            if ($scope_nivel === 'director_distrital') {
-                $scope_filtrar_por_distrito = true;
-                $scope_distritos_equivalentes = [$distrito_scope];
-                if ($distrito_scope === 'COATZA MINA') {
-                    $scope_distritos_equivalentes[] = 'COATZA / MINA';
-                } elseif ($distrito_scope === 'COATZA / MINA') {
-                    $scope_distritos_equivalentes[] = 'COATZA MINA';
-                }
-                $scope_distritos_equivalentes = array_unique($scope_distritos_equivalentes);
-                $scope_distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
-                    return mysqli_real_escape_string($conexion, $d);
-                }, $scope_distritos_equivalentes)) . "'";
-            }
         }
     }
 }
@@ -319,13 +298,11 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
 }, $distritos_equivalentes)) . "'";
 
 $por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
-$mostrar_meta = $por_distrito || $scope_filtrar_por_distrito;
+$mostrar_meta = $por_distrito;
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
-} elseif ($scope_filtrar_por_distrito) {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
@@ -346,8 +323,6 @@ $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 // ── VENTAS ───────────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
-} elseif ($scope_filtrar_por_distrito) {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
 } else {
@@ -408,8 +383,6 @@ $kpi_meta_pct       = 0;
 if ($mostrar_meta) {
     if ($rol_consulta === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
-    } elseif ($scope_filtrar_por_distrito) {
-        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($scope_distritos_sql)");
     } else {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
     }
@@ -424,8 +397,6 @@ if ($mostrar_meta) {
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
-} elseif ($scope_filtrar_por_distrito) {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
@@ -448,8 +419,6 @@ $inst_2p = (int)($mix_inst['p2'] ?? 0);
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
-} elseif ($scope_filtrar_por_distrito) {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
 } else {
@@ -492,9 +461,7 @@ for ($i = 5; $i >= 0; $i--) {
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
     FROM instalaciones 
     WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_inst .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
+if ($rol_consulta !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
@@ -517,9 +484,7 @@ while($row = mysqli_fetch_assoc($res_i)) {
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
     FROM ventas 
     WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_vent .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
+if ($rol_consulta !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
@@ -859,7 +824,7 @@ include __DIR__ . '/includes/sidebar.php';
                         Vista inicial de tu posición
                     <?php endif; ?>
                 </div>
-                <div class="hierarchy-note">Puedes consultar cualquier nivel permitido por tu línea de reporte. Directores distritales se calculan por distrito para cuadrar contra el tablero inicial.</div>
+                <div class="hierarchy-note">Puedes consultar cualquier nivel permitido por tu línea de reporte.</div>
             </div>
         </div>
 
