@@ -552,43 +552,6 @@ foreach ($datos_vent_stacked as $canal => $vals) {
     foreach ($vals as $i => $v) $totales_vent_mes[$i] += $v;
 }
 
-// Ordenamiento de tablas de participación.
-// Vista inicial: mes en curso (última columna) de mayor a menor.
-// Cada encabezado de mes permite alternar mayor-menor / menor-mayor.
-$sort_vent_idx = isset($_GET['sort_vent_mes']) ? max(0, min(5, (int)$_GET['sort_vent_mes'])) : 5;
-$sort_vent_dir = (isset($_GET['sort_vent_dir']) && $_GET['sort_vent_dir'] === 'asc') ? 'asc' : 'desc';
-
-$sort_inst_idx = isset($_GET['sort_inst_mes']) ? max(0, min(5, (int)$_GET['sort_inst_mes'])) : 5;
-$sort_inst_dir = (isset($_GET['sort_inst_dir']) && $_GET['sort_inst_dir'] === 'asc') ? 'asc' : 'desc';
-
-$datos_vent_table = $datos_vent_stacked;
-uasort($datos_vent_table, function($a, $b) use ($sort_vent_idx, $sort_vent_dir) {
-    $av = (float)($a[$sort_vent_idx] ?? 0);
-    $bv = (float)($b[$sort_vent_idx] ?? 0);
-    if ($av == $bv) return 0;
-    return ($sort_vent_dir === 'asc') ? ($av <=> $bv) : ($bv <=> $av);
-});
-
-$datos_inst_table = $datos_inst_stacked;
-uasort($datos_inst_table, function($a, $b) use ($sort_inst_idx, $sort_inst_dir) {
-    $av = (float)($a[$sort_inst_idx] ?? 0);
-    $bv = (float)($b[$sort_inst_idx] ?? 0);
-    if ($av == $bv) return 0;
-    return ($sort_inst_dir === 'asc') ? ($av <=> $bv) : ($bv <=> $av);
-});
-
-function dashboard_sort_url($sort_key, $dir_key, $idx, $current_idx, $current_dir) {
-    $qs = $_GET;
-    $qs[$sort_key] = $idx;
-    $qs[$dir_key] = ((int)$current_idx === (int)$idx && $current_dir === 'desc') ? 'asc' : 'desc';
-    return '?' . htmlspecialchars(http_build_query($qs), ENT_QUOTES, 'UTF-8');
-}
-
-function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
-    if ((int)$idx !== (int)$current_idx) return '⇅';
-    return $current_dir === 'desc' ? '↓' : '↑';
-}
-
 $roles_labels = [
     'admin'              => 'Administrador',
     'director_regional'  => 'Director Regional',
@@ -1095,17 +1058,13 @@ include __DIR__ . '/includes/sidebar.php';
                     <thead>
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Canal</th>
-                            <?php foreach ($meses_labels as $idx_mes => $ml): ?>
-                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;">
-                                <a href="<?= dashboard_sort_url('sort_vent_mes','sort_vent_dir',$idx_mes,$sort_vent_idx,$sort_vent_dir) ?>" style="color:white;text-decoration:none;display:inline-flex;gap:4px;align-items:center;justify-content:center;">
-                                    <?= htmlspecialchars($ml) ?> <span><?= dashboard_sort_arrow($idx_mes,$sort_vent_idx,$sort_vent_dir) ?></span>
-                                </a>
-                            </th>
+                            <?php foreach ($meses_labels as $ml): ?>
+                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
                             <?php endforeach; ?>
                         </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($datos_vent_table as $canal => $vals):
+                    <?php foreach ($datos_vent_stacked as $canal => $vals):
                         if (array_sum($vals) == 0) continue;
                     ?>
                         <tr style="border-bottom:1px solid #e2e8f4;">
@@ -1137,17 +1096,13 @@ include __DIR__ . '/includes/sidebar.php';
                     <thead>
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Origen</th>
-                            <?php foreach ($meses_labels as $idx_mes => $ml): ?>
-                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;">
-                                <a href="<?= dashboard_sort_url('sort_inst_mes','sort_inst_dir',$idx_mes,$sort_inst_idx,$sort_inst_dir) ?>" style="color:white;text-decoration:none;display:inline-flex;gap:4px;align-items:center;justify-content:center;">
-                                    <?= htmlspecialchars($ml) ?> <span><?= dashboard_sort_arrow($idx_mes,$sort_inst_idx,$sort_inst_dir) ?></span>
-                                </a>
-                            </th>
+                            <?php foreach ($meses_labels as $ml): ?>
+                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
                             <?php endforeach; ?>
                         </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($datos_inst_table as $canal => $vals):
+                    <?php foreach ($datos_inst_stacked as $canal => $vals):
                         if (array_sum($vals) == 0) continue;
                     ?>
                         <tr style="border-bottom:1px solid #e2e8f4;">
