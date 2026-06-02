@@ -98,61 +98,6 @@ if ($rol !== 'admin') {
 $fecha_corte_timestamp = strtotime('-1 day');
 $mes_actual   = (int)date('n', $fecha_corte_timestamp);
 $anio_query   = (int)date('Y', $fecha_corte_timestamp);
-
-$meses_es = [
-    1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',
-    7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'
-];
-
-// Selector de rango operativo del dashboard.
-// Default: MTD vencido, comparando todos los meses contra el mismo corte de días.
-// Mes completo: muestra la evolución como corte mensual completo.
-$ultimo_dia_mes_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-$dia_max_corte = min((int)date('j', $fecha_corte_timestamp), $ultimo_dia_mes_actual);
-$primer_dia_semana_mes = (int)date('N', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-
-$rango_mode = $_GET['rango_mode'] ?? 'mtd';
-if (!in_array($rango_mode, ['mtd','completo','custom'], true)) {
-    $rango_mode = 'mtd';
-}
-
-if ($rango_mode === 'completo') {
-    $dia_inicio_dashboard = 1;
-    $dia_fin_dashboard = $ultimo_dia_mes_actual;
-} else {
-    if ($rango_mode !== 'custom') {
-        $_GET['dia_inicio'] = 1;
-        $_GET['dia_fin'] = $dia_max_corte;
-    }
-
-    $dia_inicio_dashboard = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
-    $dia_fin_dashboard = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_max_corte;
-
-    $dia_inicio_dashboard = max(1, min($dia_max_corte, $dia_inicio_dashboard));
-    $dia_fin_dashboard = max(1, min($dia_max_corte, $dia_fin_dashboard));
-
-    if ($dia_inicio_dashboard > $dia_fin_dashboard) {
-        $tmp_dia = $dia_inicio_dashboard;
-        $dia_inicio_dashboard = $dia_fin_dashboard;
-        $dia_fin_dashboard = $tmp_dia;
-    }
-}
-
-$dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
-
-$dashboard_fecha_label = ($rango_mode === 'completo')
-    ? 'Mes completo · ' . ($meses_es[$mes_actual] ?? '') . ' ' . $anio_query
-    : (
-        $dia_inicio_dashboard === $dia_fin_dashboard
-            ? sprintf('%02d de %s %04d', $dia_fin_dashboard, strtolower($meses_es[$mes_actual] ?? ''), $anio_query)
-            : sprintf('%02d-%02d de %s %04d', $dia_inicio_dashboard, $dia_fin_dashboard, strtolower($meses_es[$mes_actual] ?? ''), $anio_query)
-    );
-
-$cond_dia_fecha = " AND DAY(fecha) BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard";
-$cond_dia_fecha_cierre = " AND DAY(fecha_cierre) BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard";
-$cond_dia_evolucion_fecha = ($rango_mode === 'completo') ? '' : $cond_dia_fecha;
-$cond_dia_evolucion_fecha_cierre = ($rango_mode === 'completo') ? '' : $cond_dia_fecha_cierre;
-
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 // Equivalencias de distrito
@@ -170,15 +115,15 @@ $mostrar_meta = $por_distrito;
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_inst = mysqli_query($conexion, "SELECT 0 as total");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_inst, $tipos, ...$bind);
@@ -190,15 +135,15 @@ $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 
 // ── VENTAS ───────────────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
 } elseif ($por_distrito) {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_vent = mysqli_query($conexion, "SELECT 0 as total");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? $cond_dia_fecha_cierre AND folio_empleado IN ($ph)");
+        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_vent, $tipos, ...$bind);
@@ -242,8 +187,8 @@ $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) :
 // ── META ─────────────────────────────────────────────────────────────────────
 // Se reutiliza la misma fecha de corte definida arriba.
 $ayer_timestamp = $fecha_corte_timestamp;
-$dia_ayer           = $dia_fin_dashboard;
-$dias_transcurridos = $dias_rango_dashboard; 
+$dia_ayer           = (int)date('j', $ayer_timestamp);
+$dias_transcurridos = $dia_ayer; 
 
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
@@ -264,15 +209,15 @@ if ($mostrar_meta) {
 
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_mix_inst = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_mix, $tipos, ...$bind);
@@ -286,15 +231,15 @@ $inst_2p = (int)($mix_inst['p2'] ?? 0);
 
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
 if ($rol === 'admin') {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
 } elseif ($por_distrito) {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_mix_vent = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? $cond_dia_fecha_cierre AND folio_empleado IN ($ph)");
+        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_mix_v, $tipos, ...$bind);
@@ -328,7 +273,7 @@ for ($i = 5; $i >= 0; $i--) {
 // 1. Datos Instalaciones por Origen
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
     FROM instalaciones 
-    WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
+    WHERE fecha >= '$fecha_inicio_evolucion' AND origen_prospecto <> '-' ";
 if ($rol !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
@@ -351,7 +296,7 @@ while($row = mysqli_fetch_assoc($res_i)) {
 // 2. Datos Ventas por Canal
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
     FROM ventas 
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
+    WHERE fecha_cierre >= '$fecha_inicio_evolucion' ";
 if ($rol !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol !== 'admin' && !empty($folio_ids)) {
@@ -403,132 +348,6 @@ $roles_labels = [
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
     <link rel="stylesheet" href="assets/css/xpedient-v2.css?v=160">
-    <style>
-        .dashboard-range-card{
-            margin: -8px 0 22px;
-            background: rgba(255,255,255,.72);
-            border: 1px solid rgba(226,232,240,.95);
-            border-radius: 24px;
-            padding: 14px 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            box-shadow: 0 12px 28px rgba(22,28,60,.07);
-        }
-        .dashboard-range-info{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-        .dashboard-range-label{
-            font-size:.72rem;
-            text-transform:uppercase;
-            letter-spacing:.7px;
-            font-weight:900;
-            color:#6b7a99;
-        }
-        .dashboard-range-value{font-weight:900;color:#1a2540}
-        .dashboard-range-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-        .range-dropdown{position:relative}
-        .range-trigger,.range-action-btn{
-            border:0;
-            border-radius:999px;
-            padding:10px 14px;
-            font-weight:900;
-            font-family:inherit;
-            cursor:pointer;
-            text-decoration:none;
-            display:inline-flex;
-            align-items:center;
-            gap:7px;
-        }
-        .range-trigger{
-            color:#fff;
-            background:linear-gradient(135deg,#7A2BFF,#FF006C);
-            box-shadow:0 10px 22px rgba(122,43,255,.20);
-        }
-        .range-action-btn{
-            color:#1a2540;
-            background:#eef4ff;
-            border:1px solid #dbe4f0;
-        }
-        .range-action-btn.active{
-            color:#fff;
-            background:linear-gradient(135deg,#7A2BFF,#FF006C);
-            border-color:transparent;
-        }
-        .range-panel{
-            display:none;
-            position:absolute;
-            left:0;
-            top:46px;
-            z-index:50;
-            width:335px;
-            background:#fff;
-            border:1px solid #e2e8f0;
-            border-radius:22px;
-            padding:16px;
-            box-shadow:0 24px 50px rgba(15,23,42,.18);
-        }
-        .range-dropdown.open .range-panel{display:block}
-        .range-panel-title{
-            font-size:.82rem;
-            font-weight:900;
-            color:#1a2540;
-            margin-bottom:12px;
-        }
-        .calendar-grid-real{
-            display:grid;
-            grid-template-columns:repeat(7,1fr);
-            gap:6px;
-        }
-        .calendar-weekday{
-            font-size:.66rem;
-            font-weight:900;
-            text-align:center;
-            color:#6b7a99;
-            text-transform:uppercase;
-        }
-        .calendar-empty{min-height:34px}
-        .calendar-day{
-            border:1px solid #e2e8f0;
-            background:#f8fafc;
-            border-radius:12px;
-            min-height:34px;
-            font-weight:900;
-            color:#1a2540;
-            cursor:pointer;
-        }
-        .calendar-day:hover{border-color:#7A2BFF;background:#f3e8ff}
-        .calendar-day.in-range{background:#ede9fe;border-color:#c4b5fd}
-        .calendar-day.selected-start,.calendar-day.selected-end{
-            background:linear-gradient(135deg,#7A2BFF,#FF006C);
-            border-color:transparent;
-            color:#fff;
-        }
-        .range-summary{
-            margin:12px 0 10px;
-            color:#6b7a99;
-            font-size:.78rem;
-            font-weight:800;
-        }
-        .range-actions{
-            display:flex;
-            justify-content:flex-end;
-            gap:10px;
-            align-items:center;
-        }
-        .range-actions button{
-            border:0;
-            border-radius:999px;
-            padding:10px 14px;
-            font-weight:900;
-            color:#fff;
-            background:linear-gradient(135deg,#7A2BFF,#FF006C);
-            cursor:pointer;
-        }
-        @media(max-width:900px){
-            .dashboard-range-card{align-items:flex-start;flex-direction:column}
-            .range-panel{left:auto;right:0;width:320px}
-        }
-    </style>
 </head>
 <body class="page-dashboard">
 <?php
@@ -540,7 +359,7 @@ include __DIR__ . '/includes/sidebar.php';
     <div class="page-header">
         <div>
             <h2><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?></h2>
-            <p><?= htmlspecialchars($dashboard_fecha_label) ?></p>
+            <p><?= date('d \d\e F Y', strtotime('-1 day')) ?></p>
         </div>
         <div class="user-badge" id="userBadge" onclick="toggleUserMenu(event)">
             <div class="user-avatar"><?= strtoupper(substr($nombre_completo, 0, 1)) ?></div>
@@ -560,81 +379,6 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
         </div>
     </div>
-
-    <section class="dashboard-range-card">
-        <div class="dashboard-range-info">
-            <div>
-                <div class="dashboard-range-label">Corte operativo</div>
-                <div class="dashboard-range-value"><?= htmlspecialchars($dashboard_fecha_label) ?></div>
-            </div>
-            <div class="dashboard-range-label">Evolución compara el mismo rango de días en cada mes</div>
-        </div>
-
-        <div class="dashboard-range-actions">
-            <div class="range-dropdown" id="dashboardRangeDropdown">
-                <button type="button" class="range-trigger" id="dashboardRangeTrigger">📅 Seleccionar rango</button>
-                <div class="range-panel" id="dashboardRangePanel">
-                    <form method="get" id="dashboardRangeForm">
-                        <?php foreach ($_GET as $k => $v): ?>
-                            <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode'], true)): ?>
-                                <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                        <input type="hidden" name="rango_mode" value="custom">
-                        <input type="hidden" name="dia_inicio" id="dashDiaInicioInput" value="<?= htmlspecialchars($dia_inicio_dashboard) ?>">
-                        <input type="hidden" name="dia_fin" id="dashDiaFinInput" value="<?= htmlspecialchars($dia_fin_dashboard) ?>">
-
-                        <div class="range-panel-title">Selecciona rango de <?= htmlspecialchars($meses_es[$mes_actual]) ?> <?= htmlspecialchars($anio_query) ?></div>
-                        <div class="calendar-grid-real" id="dashCalendarGrid"
-                             data-days="<?= htmlspecialchars($dia_max_corte) ?>"
-                             data-start="<?= htmlspecialchars($dia_inicio_dashboard) ?>"
-                             data-end="<?= htmlspecialchars($dia_fin_dashboard) ?>">
-                            <div class="calendar-weekday">Lun</div>
-                            <div class="calendar-weekday">Mar</div>
-                            <div class="calendar-weekday">Mié</div>
-                            <div class="calendar-weekday">Jue</div>
-                            <div class="calendar-weekday">Vie</div>
-                            <div class="calendar-weekday">Sáb</div>
-                            <div class="calendar-weekday">Dom</div>
-
-                            <?php for ($i = 1; $i < $primer_dia_semana_mes; $i++): ?>
-                                <div class="calendar-empty"></div>
-                            <?php endfor; ?>
-
-                            <?php for ($d = 1; $d <= $dia_max_corte; $d++): ?>
-                                <?php
-                                    $classes = [];
-                                    if ($d == $dia_inicio_dashboard) $classes[] = 'selected-start';
-                                    if ($d == $dia_fin_dashboard) $classes[] = 'selected-end';
-                                    if ($d > $dia_inicio_dashboard && $d < $dia_fin_dashboard) $classes[] = 'in-range';
-                                ?>
-                                <button type="button" class="calendar-day <?= htmlspecialchars(implode(' ', $classes)) ?>" data-day="<?= htmlspecialchars($d) ?>">
-                                    <?= htmlspecialchars($d) ?>
-                                </button>
-                            <?php endfor; ?>
-                        </div>
-
-                        <div class="range-summary" id="dashRangeSummary">
-                            Rango seleccionado: día <?= htmlspecialchars($dia_inicio_dashboard) ?> al <?= htmlspecialchars($dia_fin_dashboard) ?>
-                        </div>
-
-                        <div class="range-actions">
-                            <button type="submit">Aplicar</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
-            <a class="range-action-btn <?= ($rango_mode === 'mtd') ? 'active' : '' ?>"
-               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'mtd','dia_inicio'=>1,'dia_fin'=>$dia_max_corte])) ?>">
-                MTD vencido
-            </a>
-            <a class="range-action-btn <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
-               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'completo','dia_inicio'=>null,'dia_fin'=>null])) ?>">
-                Mes completo
-            </a>
-        </div>
-    </section>
 
     <div class="kpi-grid">
 
@@ -1044,75 +788,6 @@ new Chart(document.getElementById('cVentEvo'), {
     options: stackOpts,
     plugins: [pluginTotalesArriba]
 });
-</script>
-
-
-<script>
-(function(){
-    const dropdown = document.getElementById('dashboardRangeDropdown');
-    const trigger = document.getElementById('dashboardRangeTrigger');
-    const panel = document.getElementById('dashboardRangePanel');
-    const grid = document.getElementById('dashCalendarGrid');
-    const startInput = document.getElementById('dashDiaInicioInput');
-    const endInput = document.getElementById('dashDiaFinInput');
-    const summary = document.getElementById('dashRangeSummary');
-
-    if(!dropdown || !trigger || !panel || !grid || !startInput || !endInput) return;
-
-    let start = parseInt(grid.dataset.start || startInput.value || '1', 10);
-    let end = parseInt(grid.dataset.end || endInput.value || start, 10);
-    let clickMode = 'start';
-
-    function paint(){
-        if(start > end){ const t = start; start = end; end = t; }
-
-        startInput.value = start;
-        endInput.value = end;
-
-        grid.querySelectorAll('.calendar-day').forEach(btn=>{
-            const d = parseInt(btn.dataset.day, 10);
-            btn.classList.toggle('selected-start', d === start);
-            btn.classList.toggle('selected-end', d === end);
-            btn.classList.toggle('in-range', d > start && d < end);
-        });
-
-        if(summary){
-            summary.textContent = start === end
-                ? 'Rango seleccionado: día ' + end
-                : 'Rango seleccionado: día ' + start + ' al ' + end;
-        }
-    }
-
-    trigger.addEventListener('click', (e)=>{
-        e.stopPropagation();
-        dropdown.classList.toggle('open');
-    });
-
-    panel.addEventListener('click', (e)=>e.stopPropagation());
-
-    document.addEventListener('click', ()=>{
-        dropdown.classList.remove('open');
-    });
-
-    grid.querySelectorAll('.calendar-day').forEach(btn=>{
-        btn.addEventListener('click', ()=>{
-            const d = parseInt(btn.dataset.day, 10);
-
-            if(clickMode === 'start'){
-                start = d;
-                end = d;
-                clickMode = 'end';
-            } else {
-                end = d;
-                clickMode = 'start';
-            }
-
-            paint();
-        });
-    });
-
-    paint();
-})();
 </script>
 
 <!-- ── MODAL CAMBIAR CONTRASEÑA ── -->
