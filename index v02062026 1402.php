@@ -1001,7 +1001,7 @@ $roles_labels = [
             text-overflow:ellipsis;
         }
         .cumplimiento-track{
-            height:20px;
+            height:16px;
             background:#EEF2FF;
             border-radius:999px;
             overflow:hidden;
@@ -1032,7 +1032,7 @@ $roles_labels = [
 
         .dashboard-analytics-grid{
             display:grid;
-            grid-template-columns:30% 30% 20% 20%;
+            grid-template-columns:20% 30% 25% 25%;
             gap:18px;
             align-items:stretch;
             margin:0 0 22px;
@@ -1045,62 +1045,48 @@ $roles_labels = [
             height:100%;
         }
         .dashboard-analytics-grid .chart-wrap{
-            min-height:230px;
+            min-height:240px;
         }
         .dashboard-analytics-grid .kpi-speed-layout{
             min-height:230px;
         }
-        .dashboard-analytics-grid .chart-card{
-            padding:18px;
-        }
         .cumplimiento-panel{
-            padding:20px;
+            padding:18px;
         }
         .cumplimiento-panel .hierarchy-performance-head{
             margin-bottom:8px;
         }
         .cumplimiento-panel .chart-title{
-            font-size:.92rem;
+            font-size:.86rem;
             line-height:1.15;
-            font-weight:900;
         }
         .cumplimiento-panel .hierarchy-performance-sub,
         .cumplimiento-panel .hierarchy-performance-note{
-            font-size:.64rem;
+            font-size:.62rem;
             line-height:1.15;
         }
         .cumplimiento-panel .cumplimiento-list{
-            gap:13px;
-            margin-top:12px;
+            gap:10px;
+            margin-top:10px;
         }
         .cumplimiento-panel .cumplimiento-row{
-            display:grid;
-            grid-template-columns:1fr auto;
-            gap:5px 10px;
-            align-items:end;
+            grid-template-columns:1fr;
+            gap:4px;
         }
         .cumplimiento-panel .cumplimiento-name{
-            font-size:.72rem;
-            grid-column:1;
-            grid-row:1;
+            font-size:.68rem;
         }
         .cumplimiento-panel .cumplimiento-track{
-            height:22px;
-            grid-column:1 / -1;
-            grid-row:2;
-            box-shadow: inset 0 1px 3px rgba(15,23,42,.08);
+            height:12px;
         }
         .cumplimiento-panel .cumplimiento-metric{
-            grid-column:2;
-            grid-row:1;
-            text-align:right;
-            font-size:.82rem;
+            text-align:left;
+            font-size:.72rem;
             line-height:1;
-            font-weight:950;
         }
         .cumplimiento-panel .cumplimiento-sub{
-            font-size:.66rem;
-            margin-left:6px;
+            font-size:.62rem;
+            margin-left:4px;
         }
         @media(max-width:1200px){
             .dashboard-analytics-grid{
