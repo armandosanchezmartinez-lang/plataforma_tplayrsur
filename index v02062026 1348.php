@@ -421,169 +421,6 @@ if ($mostrar_meta) {
     }
 }
 
-
-// ── CUMPLIMIENTO NIVEL INFERIOR VS META ──────────────────────────────────────
-// Muestra el desempeño del nivel jerárquico inmediato inferior.
-// Admin/Regional: Distritos. Director: Líderes. Líder: Coaches. Coach: Vendedores.
-function tx_distrito_equivalentes_array($distrito) {
-    $d = trim((string)$distrito);
-    $arr = [$d];
-    if ($d === 'COATZA MINA') $arr[] = 'COATZA / MINA';
-    if ($d === 'COATZA / MINA') $arr[] = 'COATZA MINA';
-    return array_values(array_unique($arr));
-}
-
-function tx_sql_in_escaped($conexion, $vals) {
-    $vals = array_values(array_filter(array_unique($vals), function($v) { return trim((string)$v) !== ''; }));
-    if (empty($vals)) return "''";
-    return "'" . implode("','", array_map(function($v) use ($conexion) {
-        return mysqli_real_escape_string($conexion, (string)$v);
-    }, $vals)) . "'";
-}
-
-function tx_meta_acum_distrito($conexion, $distrito, $mes, $anio, $dias) {
-    $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
-    $r = mysqli_query($conexion, "SELECT SUM(meta_diaria) AS meta FROM metas_instalacion WHERE mes_num=".(int)$mes." AND anio=".(int)$anio." AND dia=1 AND distrito IN ($dsql)");
-    $row = $r ? mysqli_fetch_assoc($r) : null;
-    return round(((float)($row['meta'] ?? 0)) * (int)$dias);
-}
-
-function tx_real_inst_distrito($conexion, $distrito, $mes, $anio, $cond_dia_fecha) {
-    $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
-    $r = mysqli_query($conexion, "SELECT COUNT(cuenta) AS total FROM instalaciones WHERE MONTH(fecha)=".(int)$mes." AND YEAR(fecha)=".(int)$anio." $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($dsql)");
-    $row = $r ? mysqli_fetch_assoc($r) : null;
-    return (int)($row['total'] ?? 0);
-}
-
-function tx_direct_children($conexion, $root_id, $semana, $anio, $target_nivel = '') {
-    $root = mysqli_real_escape_string($conexion, (string)$root_id);
-    $sql = "
-        SELECT DISTINCT id_posicion, nombre_colaborador, posicion, puesto_lr, distrito
-        FROM hc
-        WHERE posicion_lr = '$root'
-          AND semana = ".(int)$semana."
-          AND anio = ".(int)$anio."
-          AND nombre_colaborador <> 'VACANTE'
-          AND numero_talento_gs NOT LIKE '%VACANTE%'
-        ORDER BY nombre_colaborador
-    ";
-    $res = mysqli_query($conexion, $sql);
-    $out = [];
-    while ($res && $row = mysqli_fetch_assoc($res)) {
-        $nivel_row = nivel_dashboard_hc($row['posicion'] ?? '', $row['puesto_lr'] ?? '');
-        if ($target_nivel === '' || $nivel_row === $target_nivel) {
-            $out[] = $row;
-        }
-    }
-    return $out;
-}
-
-function tx_hc_activo_posiciones($conexion, $ids, $semana, $anio, $puestos_comerciales) {
-    if (empty($ids)) return 0;
-    $ids_sql = tx_sql_in_escaped($conexion, $ids);
-    $r = mysqli_query($conexion, "SELECT COUNT(*) AS total FROM hc WHERE semana=".(int)$semana." AND anio=".(int)$anio." AND numero_talento_gs NOT LIKE '%VACANTE%' AND posicion IN ($puestos_comerciales) AND id_posicion IN ($ids_sql)");
-    $row = $r ? mysqli_fetch_assoc($r) : null;
-    return (int)($row['total'] ?? 0);
-}
-
-function tx_real_inst_folios($conexion, $folios, $mes, $anio, $cond_dia_fecha) {
-    if (empty($folios)) return 0;
-    $folios_sql = tx_sql_in_escaped($conexion, $folios);
-    $r = mysqli_query($conexion, "SELECT COUNT(cuenta) AS total FROM instalaciones WHERE MONTH(fecha)=".(int)$mes." AND YEAR(fecha)=".(int)$anio." $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($folios_sql)");
-    $row = $r ? mysqli_fetch_assoc($r) : null;
-    return (int)($row['total'] ?? 0);
-}
-
-$cumplimiento_inferior_titulo = 'Cumplimiento del nivel inferior vs meta';
-$cumplimiento_inferior_subtitulo = '';
-$cumplimiento_inferior_labels = [];
-$cumplimiento_inferior_real = [];
-$cumplimiento_inferior_meta = [];
-$cumplimiento_inferior_pct = [];
-$cumplimiento_inferior_items = [];
-
-$nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
-$root_dashboard_id = $scope_activo ? ($scope_registro['id_posicion'] ?? '') : $id_posicion;
-$root_dashboard_distrito = $scope_activo ? ($distrito_scope ?? $distrito_usuario) : $distrito_usuario;
-
-if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
-    $cumplimiento_inferior_subtitulo = 'Distritos · Real vs Meta';
-    $distritos_raw = [];
-    $res_dist = mysqli_query($conexion, "
-        SELECT DISTINCT distrito FROM metas_instalacion
-        WHERE mes_num=".(int)$mes_actual." AND anio=".(int)$anio_query."
-        UNION
-        SELECT DISTINCT distrito FROM instalaciones
-        WHERE MONTH(fecha)=".(int)$mes_actual." AND YEAR(fecha)=".(int)$anio_query." $cond_dia_fecha AND origen_prospecto <> '-'
-    ");
-    while ($res_dist && $drow = mysqli_fetch_assoc($res_dist)) {
-        $d = trim((string)($drow['distrito'] ?? ''));
-        if ($d === '') continue;
-        $norm = ($d === 'COATZA MINA' || $d === 'COATZA / MINA') ? 'COATZA / MINA' : $d;
-        $distritos_raw[$norm] = $norm;
-    }
-
-    $tmp = [];
-    foreach ($distritos_raw as $dist) {
-        $real = tx_real_inst_distrito($conexion, $dist, $mes_actual, $anio_query, $cond_dia_fecha);
-        $meta = tx_meta_acum_distrito($conexion, $dist, $mes_actual, $anio_query, $dias_transcurridos);
-        if ($real <= 0 && $meta <= 0) continue;
-        $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
-        $tmp[] = ['label'=>$dist, 'real'=>$real, 'meta'=>$meta, 'pct'=>$pct];
-    }
-} else {
-    $target_nivel_inferior = '';
-    if ($nivel_actual_dashboard === 'director_distrital') $target_nivel_inferior = 'lider';
-    elseif ($nivel_actual_dashboard === 'lider') $target_nivel_inferior = 'coach';
-    elseif ($nivel_actual_dashboard === 'coach') $target_nivel_inferior = 'vendedor';
-
-    $tmp = [];
-    if ($target_nivel_inferior !== '' && $root_dashboard_id !== '') {
-        $cumplimiento_inferior_subtitulo = label_nivel_dashboard($target_nivel_inferior) . ' · Real vs Meta';
-        $children = tx_direct_children($conexion, $root_dashboard_id, $semana_actual, $anio_actual, $target_nivel_inferior);
-        $meta_base = tx_meta_acum_distrito($conexion, $root_dashboard_distrito, $mes_actual, $anio_query, $dias_transcurridos);
-
-        $children_calc = [];
-        $hc_total_children = 0;
-        foreach ($children as $child) {
-            $child_ids = getTodosSubordinados($conexion, $child['id_posicion'], 6, $semana_actual, $anio_actual);
-            $child_ids[] = $child['id_posicion'];
-            $child_ids = array_unique(array_values($child_ids));
-            $child_folios = getFoliosPorPosiciones($conexion, $child_ids);
-            $child_hc = tx_hc_activo_posiciones($conexion, $child_ids, $semana_actual, $anio_actual, $puestos_comerciales);
-            if ($target_nivel_inferior === 'vendedor' && $child_hc === 0) $child_hc = 1;
-            $hc_total_children += $child_hc;
-            $children_calc[] = [
-                'label' => $child['nombre_colaborador'] ?? '',
-                'folios' => $child_folios,
-                'hc' => $child_hc
-            ];
-        }
-
-        foreach ($children_calc as $child) {
-            $real = tx_real_inst_folios($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
-            $meta = ($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0;
-            if ($real <= 0 && $meta <= 0) continue;
-            $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
-            $tmp[] = ['label'=>$child['label'], 'real'=>$real, 'meta'=>$meta, 'pct'=>$pct];
-        }
-    }
-}
-
-usort($tmp, function($a, $b) {
-    if ($a['pct'] == $b['pct']) return $b['real'] <=> $a['real'];
-    return $b['pct'] <=> $a['pct'];
-});
-$tmp = array_slice($tmp, 0, 10);
-
-foreach ($tmp as $r) {
-    $cumplimiento_inferior_labels[] = $r['label'];
-    $cumplimiento_inferior_real[] = (int)$r['real'];
-    $cumplimiento_inferior_meta[] = (int)$r['meta'];
-    $cumplimiento_inferior_pct[] = (float)$r['pct'];
-}
-
-
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
@@ -751,25 +588,6 @@ function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
     if ((int)$idx !== (int)$current_idx) return '⇅';
     return $current_dir === 'desc' ? '↓' : '↑';
 }
-
-
-// Preparar lista ejecutiva para Cumplimiento del nivel inferior.
-// Barra única por nivel: % cumplimiento + Real / Meta.
-$cumplimiento_inferior_items = [];
-foreach ($cumplimiento_inferior_labels as $idx_ci => $nombre_ci) {
-    $cumplimiento_inferior_items[] = [
-        'nombre' => $nombre_ci,
-        'real'   => (int)($cumplimiento_inferior_real[$idx_ci] ?? 0),
-        'meta'   => (int)($cumplimiento_inferior_meta[$idx_ci] ?? 0),
-        'pct'    => (float)($cumplimiento_inferior_pct[$idx_ci] ?? 0),
-    ];
-}
-usort($cumplimiento_inferior_items, function($a, $b) {
-    if ((float)$a['pct'] == (float)$b['pct']) {
-        return ((int)$b['real']) <=> ((int)$a['real']);
-    }
-    return ((float)$b['pct']) <=> ((float)$a['pct']);
-});
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -948,87 +766,6 @@ $roles_labels = [
         .hierarchy-btn{color:#fff;background:linear-gradient(135deg,#7A2BFF,#FF006C)}
         .hierarchy-clear{color:#1a2540;background:#eef4ff;border:1px solid #dbe4f0}
         .hierarchy-note{font-size:.78rem;color:#6b7a99;font-weight:800}
-
-        .hierarchy-performance-card{
-            margin: 0 0 22px;
-        }
-        .hierarchy-performance-head{
-            display:flex;
-            justify-content:space-between;
-            align-items:flex-start;
-            gap:12px;
-            flex-wrap:wrap;
-            margin-bottom:12px;
-        }
-        .hierarchy-performance-sub{
-            font-size:.74rem;
-            color:#6b7a99;
-            font-weight:900;
-            text-transform:uppercase;
-            letter-spacing:.7px;
-        }
-        .hierarchy-performance-wrap{
-            height:280px;
-            position:relative;
-        }
-        .hierarchy-performance-note{
-            color:#6b7a99;
-            font-size:.76rem;
-            font-weight:800;
-            margin-top:8px;
-        }
-
-
-        .cumplimiento-list{
-            display:flex;
-            flex-direction:column;
-            gap:12px;
-            margin-top:14px;
-        }
-        .cumplimiento-row{
-            display:grid;
-            grid-template-columns:150px 1fr 130px;
-            align-items:center;
-            gap:12px;
-        }
-        .cumplimiento-name{
-            font-size:.78rem;
-            font-weight:900;
-            color:#1a2540;
-            text-transform:uppercase;
-            white-space:nowrap;
-            overflow:hidden;
-            text-overflow:ellipsis;
-        }
-        .cumplimiento-track{
-            height:16px;
-            background:#EEF2FF;
-            border-radius:999px;
-            overflow:hidden;
-            border:1px solid #E0E3EA;
-        }
-        .cumplimiento-fill{
-            height:100%;
-            border-radius:999px;
-            min-width:4px;
-        }
-        .cumplimiento-fill.ok{background:linear-gradient(90deg,#00A6FF,#00E5FF);}
-        .cumplimiento-fill.warn{background:linear-gradient(90deg,#7A2BFF,#B026FF);}
-        .cumplimiento-fill.risk{background:linear-gradient(90deg,#FF006C,#FF4FA3);}
-        .cumplimiento-metric{
-            font-size:.86rem;
-            font-weight:950;
-            color:#1a2540;
-            text-align:right;
-            white-space:nowrap;
-        }
-        .cumplimiento-sub{
-            font-size:.68rem;
-            color:#6b7a99;
-            font-weight:800;
-            margin-left:6px;
-        }
-
         @media(max-width:900px){
             .dashboard-range-card{align-items:flex-start;flex-direction:column}
             .range-panel{left:auto;right:0;width:320px}
@@ -1274,43 +1011,6 @@ include __DIR__ . '/includes/sidebar.php';
 
     </div>
 
-
-    <?php if (!empty($cumplimiento_inferior_items)): ?>
-    <div class="evo-card hierarchy-performance-card">
-        <div class="hierarchy-performance-head">
-            <div>
-                <div class="chart-title"><?= htmlspecialchars($cumplimiento_inferior_titulo) ?></div>
-                <div class="hierarchy-performance-sub"><?= htmlspecialchars($cumplimiento_inferior_subtitulo) ?></div>
-            </div>
-            <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
-        </div>
-
-        <div class="cumplimiento-list">
-            <?php foreach ($cumplimiento_inferior_items as $item): ?>
-                <?php
-                    $pct_item = (float)($item['pct'] ?? 0);
-                    $real_item = (int)($item['real'] ?? 0);
-                    $meta_item = (int)($item['meta'] ?? 0);
-                    $bar_width = min($pct_item, 180);
-                    $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
-                ?>
-                <div class="cumplimiento-row">
-                    <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
-                        <?= htmlspecialchars($item['nombre'] ?? '') ?>
-                    </div>
-                    <div class="cumplimiento-track">
-                        <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
-                    </div>
-                    <div class="cumplimiento-metric">
-                        <?= number_format($pct_item, 0) ?>%
-                        <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?></span>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
     <div class="kpi-grid-3cols">
         
         <?php 
@@ -1492,8 +1192,6 @@ const txBrandColors = {
     grisOscuro: '#2C2F3A',
     grisClaro: '#E0E3EA'
 };
-
-
 
 // --- DONUTS (MIX) ---
 const inst2p = <?= $inst_2p ?>; const inst3p = <?= $inst_3p ?>;
