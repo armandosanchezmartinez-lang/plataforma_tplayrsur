@@ -49,6 +49,53 @@ function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = 
     return array_unique($todos);
 }
 
+function getFoliosPorPosiciones($conexion, $posiciones_ids) {
+    $folios = [];
+    if (empty($posiciones_ids)) return $folios;
+
+    $ph = implode(',', array_fill(0, count($posiciones_ids), '?'));
+    $stmt = mysqli_prepare($conexion, "SELECT DISTINCT numero_talento_gs FROM hc WHERE id_posicion IN ($ph) AND numero_talento_gs NOT LIKE '%VACANTE%' AND numero_talento_gs <> ''");
+    if (!$stmt) return $folios;
+
+    $tipos = str_repeat('s', count($posiciones_ids));
+    mysqli_stmt_bind_param($stmt, $tipos, ...array_values($posiciones_ids));
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    while ($row = mysqli_fetch_assoc($res)) {
+        if (!empty($row['numero_talento_gs'])) $folios[] = $row['numero_talento_gs'];
+    }
+    mysqli_stmt_close($stmt);
+
+    return array_unique(array_values($folios));
+}
+
+function nivel_dashboard_hc($posicion, $puesto_lr) {
+    $p = strtoupper((string)$posicion);
+
+    if (strpos($p, 'DIRECTOR DISTRITAL') !== false) return 'director_distrital';
+    if (strpos($p, 'LIDER VENTAS') !== false) return 'lider';
+    if (strpos($p, 'COACH') !== false) return 'coach';
+    if (
+        $p === 'VENDEDOR'
+        || $p === 'VENDEDOR NEGOCIOS'
+        || $p === 'VENDEDOR NEGOCIO'
+        || strpos($p, 'PROMOVENDEDOR PUNTO DE VENTA') !== false
+    ) return 'vendedor';
+
+    return 'otro';
+}
+
+function label_nivel_dashboard($nivel) {
+    $labels = [
+        'director_distrital' => 'Directores Distritales',
+        'lider' => 'Líderes',
+        'coach' => 'Coaches',
+        'vendedor' => 'Vendedores',
+        'otro' => 'Otros'
+    ];
+    return $labels[$nivel] ?? 'Otros';
+}
+
 // --- TIEMPO Y FECHAS ---
 $semana_actual = null; $anio_actual = null; $semana_base = null;
 $res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
@@ -93,8 +140,172 @@ if ($rol !== 'admin') {
     }
 }
 
-$mes_actual   = (int)date('n', strtotime('-2 day'));
-$anio_query   = (int)date('Y', strtotime('-2 day'));
+// ── VISTA JERÁRQUICA DEL DASHBOARD ───────────────────────────────────────────
+// Por default el dashboard carga la posición del usuario.
+// Si se elige una posición subordinada, se recalculan KPIs, mix y evolución para su línea completa.
+$scope_pos = $_GET['scope_pos'] ?? '';
+$scope_activo = false;
+$scope_registro = null;
+$scope_nivel = '';
+$scope_distritos_sql = '';
+$scope_filtrar_por_distrito = false;
+$scope_ids = [];
+$scope_autorizado_ids = [];
+$jerarquia_opciones = [
+    'director_distrital' => [],
+    'lider' => [],
+    'coach' => [],
+    'vendedor' => []
+];
+
+if ($rol === 'admin') {
+    $scope_autorizado_ids = null; // admin puede consultar cualquier posición comercial/jerárquica.
+} else {
+    $scope_autorizado_ids = getTodosSubordinados($conexion, $id_posicion, $nivel, $semana_actual, $anio_actual);
+    $scope_autorizado_ids[] = $id_posicion;
+    $scope_autorizado_ids = array_unique(array_values($scope_autorizado_ids));
+}
+
+$where_autorizado_opciones = "";
+if (is_array($scope_autorizado_ids)) {
+    if (!empty($scope_autorizado_ids)) {
+        $ids_esc = array_map(function($id) use ($conexion) {
+            return "'" . mysqli_real_escape_string($conexion, (string)$id) . "'";
+        }, $scope_autorizado_ids);
+        $where_autorizado_opciones = " AND id_posicion IN (" . implode(',', $ids_esc) . ")";
+    } else {
+        $where_autorizado_opciones = " AND 1=0";
+    }
+}
+
+$sql_opciones = "
+    SELECT DISTINCT id_posicion, nombre_colaborador, posicion, puesto_lr, distrito
+    FROM hc
+    WHERE semana = " . (int)$semana_actual . "
+      AND anio = " . (int)$anio_actual . "
+      AND nombre_colaborador <> 'VACANTE'
+      AND numero_talento_gs NOT LIKE '%VACANTE%'
+      $where_autorizado_opciones
+    ORDER BY distrito, posicion, nombre_colaborador
+";
+$res_opciones = mysqli_query($conexion, $sql_opciones);
+while ($res_opciones && $row_op = mysqli_fetch_assoc($res_opciones)) {
+    $nivel_op = nivel_dashboard_hc($row_op['posicion'] ?? '', $row_op['puesto_lr'] ?? '');
+    if (isset($jerarquia_opciones[$nivel_op])) {
+        $jerarquia_opciones[$nivel_op][] = $row_op;
+    }
+}
+
+if ($scope_pos !== '') {
+    $scope_pos_esc = mysqli_real_escape_string($conexion, $scope_pos);
+    $sql_scope = "
+        SELECT id_posicion, nombre_colaborador, posicion, puesto_lr, distrito
+        FROM hc
+        WHERE id_posicion = '$scope_pos_esc'
+          AND semana = " . (int)$semana_actual . "
+          AND anio = " . (int)$anio_actual . "
+        LIMIT 1
+    ";
+    $res_scope = mysqli_query($conexion, $sql_scope);
+    if ($res_scope && $row_scope = mysqli_fetch_assoc($res_scope)) {
+        $permitido = ($rol === 'admin') || (is_array($scope_autorizado_ids) && in_array($row_scope['id_posicion'], $scope_autorizado_ids, true));
+        if ($permitido) {
+            $scope_activo = true;
+            $scope_registro = $row_scope;
+            $scope_ids = getTodosSubordinados($conexion, $row_scope['id_posicion'], 6, $semana_actual, $anio_actual);
+            $scope_ids[] = $row_scope['id_posicion'];
+            $scope_ids = array_unique(array_values($scope_ids));
+
+            $folio_ids = getFoliosPorPosiciones($conexion, $scope_ids);
+            $subordinados_ids = $scope_ids;
+
+            $nombre_completo_scope = $row_scope['nombre_colaborador'] ?? '';
+            $posicion_scope = $row_scope['posicion'] ?? '';
+            $distrito_scope = $row_scope['distrito'] ?? $distrito_usuario;
+            $scope_nivel = nivel_dashboard_hc($posicion_scope, $row_scope['puesto_lr'] ?? '');
+
+            // Para Director Distrital el dashboard debe cuadrar contra el índice base por distrito,
+            // no por folios de HC. Esto evita perder instalaciones cargadas con distrito correcto
+            // pero sin folio/hc perfectamente amarrado.
+            if ($scope_nivel === 'director_distrital') {
+                $scope_filtrar_por_distrito = true;
+                $scope_distritos_equivalentes = [$distrito_scope];
+                if ($distrito_scope === 'COATZA MINA') {
+                    $scope_distritos_equivalentes[] = 'COATZA / MINA';
+                } elseif ($distrito_scope === 'COATZA / MINA') {
+                    $scope_distritos_equivalentes[] = 'COATZA MINA';
+                }
+                $scope_distritos_equivalentes = array_unique($scope_distritos_equivalentes);
+                $scope_distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
+                    return mysqli_real_escape_string($conexion, $d);
+                }, $scope_distritos_equivalentes)) . "'";
+            }
+        }
+    }
+}
+
+$rol_consulta = $scope_activo ? 'scoped' : $rol;
+
+// Fecha de corte única para todo el dashboard.
+// Se usa el día vencido para evitar mezclar meses en cierres o inicios de mes.
+$fecha_corte_timestamp = strtotime('-1 day');
+$mes_actual   = (int)date('n', $fecha_corte_timestamp);
+$anio_query   = (int)date('Y', $fecha_corte_timestamp);
+
+$meses_es = [
+    1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',
+    7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'
+];
+
+// Selector de rango operativo del dashboard.
+// Default: MTD vencido, comparando todos los meses contra el mismo corte de días.
+// Mes completo: muestra la evolución como corte mensual completo.
+$ultimo_dia_mes_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
+$dia_max_corte = min((int)date('j', $fecha_corte_timestamp), $ultimo_dia_mes_actual);
+$primer_dia_semana_mes = (int)date('N', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
+
+$rango_mode = $_GET['rango_mode'] ?? 'mtd';
+if (!in_array($rango_mode, ['mtd','completo','custom'], true)) {
+    $rango_mode = 'mtd';
+}
+
+if ($rango_mode === 'completo') {
+    $dia_inicio_dashboard = 1;
+    $dia_fin_dashboard = $ultimo_dia_mes_actual;
+} else {
+    if ($rango_mode !== 'custom') {
+        $_GET['dia_inicio'] = 1;
+        $_GET['dia_fin'] = $dia_max_corte;
+    }
+
+    $dia_inicio_dashboard = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
+    $dia_fin_dashboard = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_max_corte;
+
+    $dia_inicio_dashboard = max(1, min($dia_max_corte, $dia_inicio_dashboard));
+    $dia_fin_dashboard = max(1, min($dia_max_corte, $dia_fin_dashboard));
+
+    if ($dia_inicio_dashboard > $dia_fin_dashboard) {
+        $tmp_dia = $dia_inicio_dashboard;
+        $dia_inicio_dashboard = $dia_fin_dashboard;
+        $dia_fin_dashboard = $tmp_dia;
+    }
+}
+
+$dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
+
+$dashboard_fecha_label = ($rango_mode === 'completo')
+    ? 'Mes completo · ' . ($meses_es[$mes_actual] ?? '') . ' ' . $anio_query
+    : (
+        $dia_inicio_dashboard === $dia_fin_dashboard
+            ? sprintf('%02d de %s %04d', $dia_fin_dashboard, strtolower($meses_es[$mes_actual] ?? ''), $anio_query)
+            : sprintf('%02d-%02d de %s %04d', $dia_inicio_dashboard, $dia_fin_dashboard, strtolower($meses_es[$mes_actual] ?? ''), $anio_query)
+    );
+
+$cond_dia_fecha = " AND DAY(fecha) BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard";
+$cond_dia_fecha_cierre = " AND DAY(fecha_cierre) BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard";
+$cond_dia_evolucion_fecha = ($rango_mode === 'completo') ? '' : $cond_dia_fecha;
+$cond_dia_evolucion_fecha_cierre = ($rango_mode === 'completo') ? '' : $cond_dia_fecha_cierre;
+
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 // Equivalencias de distrito
@@ -107,20 +318,22 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
     return mysqli_real_escape_string($conexion, $d);
 }, $distritos_equivalentes)) . "'";
 
-$por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
-$mostrar_meta = $por_distrito;
+$por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
+$mostrar_meta = $por_distrito || $scope_filtrar_por_distrito;
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
-if ($rol === 'admin') {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
+if ($rol_consulta === 'admin') {
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
+} elseif ($scope_filtrar_por_distrito) {
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_inst = mysqli_query($conexion, "SELECT 0 as total");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_inst, $tipos, ...$bind);
@@ -131,16 +344,18 @@ if ($rol === 'admin') {
 $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 
 // ── VENTAS ───────────────────────────────────────────────────────────────────
-if ($rol === 'admin') {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
+if ($rol_consulta === 'admin') {
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
+} elseif ($scope_filtrar_por_distrito) {
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito IN ($distritos_sql)");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_vent = mysqli_query($conexion, "SELECT 0 as total");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
+        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? $cond_dia_fecha_cierre AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_vent, $tipos, ...$bind);
@@ -154,7 +369,7 @@ $kpi_conv = ($kpi_vent > 0) ? round(($kpi_inst / $kpi_vent) * 100, 1) : 0;
 // ── HC ───────────────────────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
 if ($semana_actual && $anio_actual) {
-    if ($rol === 'admin') {
+    if ($rol_consulta === 'admin') {
         $r_hc_act = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs NOT LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
         $r_hc_vac = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
     } else {
@@ -182,18 +397,19 @@ $kpi_hc_total = $kpi_hc_act + $kpi_hc_vac;
 $kpi_hc_pct   = $kpi_hc_total > 0 ? round(($kpi_hc_act / $kpi_hc_total) * 100) : 0;
 
 // ── META ─────────────────────────────────────────────────────────────────────
-$ayer_timestamp = strtotime('-1 day');
-$dia_ayer           = (int)date('j', $ayer_timestamp);    
-$mes_actual         = (int)date('n', $ayer_timestamp); 
-$anio_query         = (int)date('Y', $ayer_timestamp); 
-$dias_transcurridos = $dia_ayer; 
+// Se reutiliza la misma fecha de corte definida arriba.
+$ayer_timestamp = $fecha_corte_timestamp;
+$dia_ayer           = $dia_fin_dashboard;
+$dias_transcurridos = $dias_rango_dashboard; 
 
 $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
 if ($mostrar_meta) {
-    if ($rol === 'admin') {
+    if ($rol_consulta === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
+    } elseif ($scope_filtrar_por_distrito) {
+        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($scope_distritos_sql)");
     } else {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
     }
@@ -206,16 +422,18 @@ if ($mostrar_meta) {
 }
 
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
-if ($rol === 'admin') {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-'");
+if ($rol_consulta === 'admin') {
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
+} elseif ($scope_filtrar_por_distrito) {
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_mix_inst = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_mix, $tipos, ...$bind);
@@ -228,16 +446,18 @@ $inst_3p = (int)($mix_inst['p3'] ?? 0);
 $inst_2p = (int)($mix_inst['p2'] ?? 0);
 
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
-if ($rol === 'admin') {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query");
+if ($rol_consulta === 'admin') {
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
+} elseif ($scope_filtrar_por_distrito) {
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query AND distrito IN ($distritos_sql)");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_mix_vent = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? AND folio_empleado IN ($ph)");
+        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? $cond_dia_fecha_cierre AND folio_empleado IN ($ph)");
         $tipos = 'ii' . str_repeat('s', count($folio_ids));
         $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
         mysqli_stmt_bind_param($stmt_mix_v, $tipos, ...$bind);
@@ -271,10 +491,12 @@ for ($i = 5; $i >= 0; $i--) {
 // 1. Datos Instalaciones por Origen
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
     FROM instalaciones 
-    WHERE fecha >= '$fecha_inicio_evolucion' AND origen_prospecto <> '-' ";
-if ($rol !== 'admin' && $por_distrito) {
+    WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
+if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
+    $query_inst .= " AND distrito IN ($scope_distritos_sql)";
+} elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol !== 'admin' && !empty($folio_ids)) {
+} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
     $query_inst .= " AND folio_empleado IN ('$ph')";
 }
@@ -294,10 +516,12 @@ while($row = mysqli_fetch_assoc($res_i)) {
 // 2. Datos Ventas por Canal
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
     FROM ventas 
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' ";
-if ($rol !== 'admin' && $por_distrito) {
+    WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
+if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
+    $query_vent .= " AND distrito IN ($scope_distritos_sql)";
+} elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol !== 'admin' && !empty($folio_ids)) {
+} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
     $query_vent .= " AND folio_empleado IN ('$ph')";
 }
@@ -328,6 +552,43 @@ foreach ($datos_vent_stacked as $canal => $vals) {
     foreach ($vals as $i => $v) $totales_vent_mes[$i] += $v;
 }
 
+// Ordenamiento de tablas de participación.
+// Vista inicial: mes en curso (última columna) de mayor a menor.
+// Cada encabezado de mes permite alternar mayor-menor / menor-mayor.
+$sort_vent_idx = isset($_GET['sort_vent_mes']) ? max(0, min(5, (int)$_GET['sort_vent_mes'])) : 5;
+$sort_vent_dir = (isset($_GET['sort_vent_dir']) && $_GET['sort_vent_dir'] === 'asc') ? 'asc' : 'desc';
+
+$sort_inst_idx = isset($_GET['sort_inst_mes']) ? max(0, min(5, (int)$_GET['sort_inst_mes'])) : 5;
+$sort_inst_dir = (isset($_GET['sort_inst_dir']) && $_GET['sort_inst_dir'] === 'asc') ? 'asc' : 'desc';
+
+$datos_vent_table = $datos_vent_stacked;
+uasort($datos_vent_table, function($a, $b) use ($sort_vent_idx, $sort_vent_dir) {
+    $av = (float)($a[$sort_vent_idx] ?? 0);
+    $bv = (float)($b[$sort_vent_idx] ?? 0);
+    if ($av == $bv) return 0;
+    return ($sort_vent_dir === 'asc') ? ($av <=> $bv) : ($bv <=> $av);
+});
+
+$datos_inst_table = $datos_inst_stacked;
+uasort($datos_inst_table, function($a, $b) use ($sort_inst_idx, $sort_inst_dir) {
+    $av = (float)($a[$sort_inst_idx] ?? 0);
+    $bv = (float)($b[$sort_inst_idx] ?? 0);
+    if ($av == $bv) return 0;
+    return ($sort_inst_dir === 'asc') ? ($av <=> $bv) : ($bv <=> $av);
+});
+
+function dashboard_sort_url($sort_key, $dir_key, $idx, $current_idx, $current_dir) {
+    $qs = $_GET;
+    $qs[$sort_key] = $idx;
+    $qs[$dir_key] = ((int)$current_idx === (int)$idx && $current_dir === 'desc') ? 'asc' : 'desc';
+    return '?' . htmlspecialchars(http_build_query($qs), ENT_QUOTES, 'UTF-8');
+}
+
+function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
+    if ((int)$idx !== (int)$current_idx) return '⇅';
+    return $current_dir === 'desc' ? '↓' : '↑';
+}
+
 $roles_labels = [
     'admin'              => 'Administrador',
     'director_regional'  => 'Director Regional',
@@ -346,6 +607,171 @@ $roles_labels = [
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
     <link rel="stylesheet" href="assets/css/xpedient-v2.css?v=160">
+    <style>
+        .dashboard-range-card{
+            margin: -8px 0 22px;
+            background: rgba(255,255,255,.72);
+            border: 1px solid rgba(226,232,240,.95);
+            border-radius: 24px;
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            box-shadow: 0 12px 28px rgba(22,28,60,.07);
+        }
+        .dashboard-range-info{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+        .dashboard-range-label{
+            font-size:.72rem;
+            text-transform:uppercase;
+            letter-spacing:.7px;
+            font-weight:900;
+            color:#6b7a99;
+        }
+        .dashboard-range-value{font-weight:900;color:#1a2540}
+        .dashboard-range-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+        .range-dropdown{position:relative}
+        .range-trigger,.range-action-btn{
+            border:0;
+            border-radius:999px;
+            padding:10px 14px;
+            font-weight:900;
+            font-family:inherit;
+            cursor:pointer;
+            text-decoration:none;
+            display:inline-flex;
+            align-items:center;
+            gap:7px;
+        }
+        .range-trigger{
+            color:#fff;
+            background:linear-gradient(135deg,#7A2BFF,#FF006C);
+            box-shadow:0 10px 22px rgba(122,43,255,.20);
+        }
+        .range-action-btn{
+            color:#1a2540;
+            background:#eef4ff;
+            border:1px solid #dbe4f0;
+        }
+        .range-action-btn.active{
+            color:#fff;
+            background:linear-gradient(135deg,#7A2BFF,#FF006C);
+            border-color:transparent;
+        }
+        .range-panel{
+            display:none;
+            position:absolute;
+            left:0;
+            top:46px;
+            z-index:50;
+            width:335px;
+            background:#fff;
+            border:1px solid #e2e8f0;
+            border-radius:22px;
+            padding:16px;
+            box-shadow:0 24px 50px rgba(15,23,42,.18);
+        }
+        .range-dropdown.open .range-panel{display:block}
+        .range-panel-title{
+            font-size:.82rem;
+            font-weight:900;
+            color:#1a2540;
+            margin-bottom:12px;
+        }
+        .calendar-grid-real{
+            display:grid;
+            grid-template-columns:repeat(7,1fr);
+            gap:6px;
+        }
+        .calendar-weekday{
+            font-size:.66rem;
+            font-weight:900;
+            text-align:center;
+            color:#6b7a99;
+            text-transform:uppercase;
+        }
+        .calendar-empty{min-height:34px}
+        .calendar-day{
+            border:1px solid #e2e8f0;
+            background:#f8fafc;
+            border-radius:12px;
+            min-height:34px;
+            font-weight:900;
+            color:#1a2540;
+            cursor:pointer;
+        }
+        .calendar-day:hover{border-color:#7A2BFF;background:#f3e8ff}
+        .calendar-day.in-range{background:#ede9fe;border-color:#c4b5fd}
+        .calendar-day.selected-start,.calendar-day.selected-end{
+            background:linear-gradient(135deg,#7A2BFF,#FF006C);
+            border-color:transparent;
+            color:#fff;
+        }
+        .range-summary{
+            margin:12px 0 10px;
+            color:#6b7a99;
+            font-size:.78rem;
+            font-weight:800;
+        }
+        .range-actions{
+            display:flex;
+            justify-content:flex-end;
+            gap:10px;
+            align-items:center;
+        }
+        .range-actions button{
+            border:0;
+            border-radius:999px;
+            padding:10px 14px;
+            font-weight:900;
+            color:#fff;
+            background:linear-gradient(135deg,#7A2BFF,#FF006C);
+            cursor:pointer;
+        }
+        .hierarchy-card{
+            margin: 0 0 22px;
+            background: rgba(255,255,255,.78);
+            border: 1px solid rgba(226,232,240,.95);
+            border-radius: 24px;
+            padding: 16px;
+            box-shadow: 0 12px 28px rgba(22,28,60,.07);
+        }
+        .hierarchy-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+        .hierarchy-title{font-size:.82rem;text-transform:uppercase;letter-spacing:.7px;font-weight:900;color:#6b7a99}
+        .hierarchy-current{font-weight:900;color:#1a2540;font-size:1rem}
+        .hierarchy-form{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+        .hierarchy-select{
+            min-width:360px;
+            max-width:100%;
+            border:1px solid #dbe4f0;
+            border-radius:999px;
+            padding:12px 14px;
+            background:#fff;
+            color:#1a2540;
+            font-family:inherit;
+            font-weight:800;
+        }
+        .hierarchy-btn,.hierarchy-clear{
+            border:0;
+            border-radius:999px;
+            padding:12px 16px;
+            font-weight:900;
+            font-family:inherit;
+            cursor:pointer;
+            text-decoration:none;
+            display:inline-flex;
+            align-items:center;
+            gap:7px;
+        }
+        .hierarchy-btn{color:#fff;background:linear-gradient(135deg,#7A2BFF,#FF006C)}
+        .hierarchy-clear{color:#1a2540;background:#eef4ff;border:1px solid #dbe4f0}
+        .hierarchy-note{font-size:.78rem;color:#6b7a99;font-weight:800}
+        @media(max-width:900px){
+            .dashboard-range-card{align-items:flex-start;flex-direction:column}
+            .range-panel{left:auto;right:0;width:320px}
+            .hierarchy-select{min-width:100%}
+        }
+    </style>
 </head>
 <body class="page-dashboard">
 <?php
@@ -356,8 +782,14 @@ include __DIR__ . '/includes/sidebar.php';
 <main class="main">
     <div class="page-header">
         <div>
-            <h2><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?></h2>
-            <p><?= date('d \d\e F Y', strtotime('-1 day')) ?></p>
+            <h2>
+                <?php if ($scope_activo): ?>
+                    <?= htmlspecialchars($posicion_scope) ?> · <?= htmlspecialchars($nombre_completo_scope) ?>
+                <?php else: ?>
+                    <?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?>
+                <?php endif; ?>
+            </h2>
+            <p><?= htmlspecialchars($dashboard_fecha_label) ?></p>
         </div>
         <div class="user-badge" id="userBadge" onclick="toggleUserMenu(event)">
             <div class="user-avatar"><?= strtoupper(substr($nombre_completo, 0, 1)) ?></div>
@@ -377,6 +809,129 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
         </div>
     </div>
+
+    <section class="dashboard-range-card">
+        <div class="dashboard-range-info">
+            <div>
+                <div class="dashboard-range-label">Corte operativo</div>
+                <div class="dashboard-range-value"><?= htmlspecialchars($dashboard_fecha_label) ?></div>
+            </div>
+            <div class="dashboard-range-label">Evolución compara el mismo rango de días en cada mes</div>
+        </div>
+
+        <div class="dashboard-range-actions">
+            <div class="range-dropdown" id="dashboardRangeDropdown">
+                <button type="button" class="range-trigger" id="dashboardRangeTrigger">📅 Seleccionar rango</button>
+                <div class="range-panel" id="dashboardRangePanel">
+                    <form method="get" id="dashboardRangeForm">
+                        <?php foreach ($_GET as $k => $v): ?>
+                            <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode'], true)): ?>
+                                <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                            <?php endif; ?>
+                        <?php endforeach; ?>
+                        <input type="hidden" name="rango_mode" value="custom">
+                        <input type="hidden" name="dia_inicio" id="dashDiaInicioInput" value="<?= htmlspecialchars($dia_inicio_dashboard) ?>">
+                        <input type="hidden" name="dia_fin" id="dashDiaFinInput" value="<?= htmlspecialchars($dia_fin_dashboard) ?>">
+
+                        <div class="range-panel-title">Selecciona rango de <?= htmlspecialchars($meses_es[$mes_actual]) ?> <?= htmlspecialchars($anio_query) ?></div>
+                        <div class="calendar-grid-real" id="dashCalendarGrid"
+                             data-days="<?= htmlspecialchars($dia_max_corte) ?>"
+                             data-start="<?= htmlspecialchars($dia_inicio_dashboard) ?>"
+                             data-end="<?= htmlspecialchars($dia_fin_dashboard) ?>">
+                            <div class="calendar-weekday">Lun</div>
+                            <div class="calendar-weekday">Mar</div>
+                            <div class="calendar-weekday">Mié</div>
+                            <div class="calendar-weekday">Jue</div>
+                            <div class="calendar-weekday">Vie</div>
+                            <div class="calendar-weekday">Sáb</div>
+                            <div class="calendar-weekday">Dom</div>
+
+                            <?php for ($i = 1; $i < $primer_dia_semana_mes; $i++): ?>
+                                <div class="calendar-empty"></div>
+                            <?php endfor; ?>
+
+                            <?php for ($d = 1; $d <= $dia_max_corte; $d++): ?>
+                                <?php
+                                    $classes = [];
+                                    if ($d == $dia_inicio_dashboard) $classes[] = 'selected-start';
+                                    if ($d == $dia_fin_dashboard) $classes[] = 'selected-end';
+                                    if ($d > $dia_inicio_dashboard && $d < $dia_fin_dashboard) $classes[] = 'in-range';
+                                ?>
+                                <button type="button" class="calendar-day <?= htmlspecialchars(implode(' ', $classes)) ?>" data-day="<?= htmlspecialchars($d) ?>">
+                                    <?= htmlspecialchars($d) ?>
+                                </button>
+                            <?php endfor; ?>
+                        </div>
+
+                        <div class="range-summary" id="dashRangeSummary">
+                            Rango seleccionado: día <?= htmlspecialchars($dia_inicio_dashboard) ?> al <?= htmlspecialchars($dia_fin_dashboard) ?>
+                        </div>
+
+                        <div class="range-actions">
+                            <button type="submit">Aplicar</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <a class="range-action-btn <?= ($rango_mode === 'mtd') ? 'active' : '' ?>"
+               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'mtd','dia_inicio'=>1,'dia_fin'=>$dia_max_corte])) ?>">
+                MTD vencido
+            </a>
+            <a class="range-action-btn <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
+               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'completo','dia_inicio'=>null,'dia_fin'=>null])) ?>">
+                Mes completo
+            </a>
+        </div>
+    </section>
+
+    <section class="hierarchy-card">
+        <div class="hierarchy-head">
+            <div>
+                <div class="hierarchy-title">Vista jerárquica</div>
+                <div class="hierarchy-current">
+                    <?php if ($scope_activo): ?>
+                        Viendo tablero de <?= htmlspecialchars($nombre_completo_scope) ?> · <?= htmlspecialchars($posicion_scope) ?> · <?= htmlspecialchars($distrito_scope) ?>
+                    <?php else: ?>
+                        Vista inicial de tu posición
+                    <?php endif; ?>
+                </div>
+                <div class="hierarchy-note">Puedes consultar cualquier nivel permitido por tu línea de reporte. Directores distritales se calculan por distrito para cuadrar contra el tablero inicial.</div>
+            </div>
+        </div>
+
+        <form method="get" class="hierarchy-form">
+            <?php foreach ($_GET as $k => $v): ?>
+                <?php if (!in_array($k, ['scope_pos'], true)): ?>
+                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                <?php endif; ?>
+            <?php endforeach; ?>
+
+            <select name="scope_pos" class="hierarchy-select">
+                <option value="">Mi tablero / vista inicial</option>
+                <?php foreach ($jerarquia_opciones as $nivel_op => $opciones): ?>
+                    <?php if (!empty($opciones)): ?>
+                        <optgroup label="<?= htmlspecialchars(label_nivel_dashboard($nivel_op)) ?>">
+                            <?php foreach ($opciones as $op): ?>
+                                <option value="<?= htmlspecialchars($op['id_posicion']) ?>" <?= ($scope_pos === $op['id_posicion']) ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($op['distrito']) ?> · <?= htmlspecialchars($op['nombre_colaborador']) ?> · <?= htmlspecialchars($op['posicion']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </optgroup>
+                    <?php endif; ?>
+                <?php endforeach; ?>
+            </select>
+
+            <button type="submit" class="hierarchy-btn">Ver tablero</button>
+            <?php if ($scope_activo): ?>
+                <?php
+                    $qs_clear_scope = $_GET;
+                    unset($qs_clear_scope['scope_pos']);
+                ?>
+                <a class="hierarchy-clear" href="?<?= htmlspecialchars(http_build_query($qs_clear_scope)) ?>">Regresar a mi vista</a>
+            <?php endif; ?>
+        </form>
+    </section>
 
     <div class="kpi-grid">
 
@@ -540,13 +1095,17 @@ include __DIR__ . '/includes/sidebar.php';
                     <thead>
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Canal</th>
-                            <?php foreach ($meses_labels as $ml): ?>
-                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
+                            <?php foreach ($meses_labels as $idx_mes => $ml): ?>
+                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;">
+                                <a href="<?= dashboard_sort_url('sort_vent_mes','sort_vent_dir',$idx_mes,$sort_vent_idx,$sort_vent_dir) ?>" style="color:white;text-decoration:none;display:inline-flex;gap:4px;align-items:center;justify-content:center;">
+                                    <?= htmlspecialchars($ml) ?> <span><?= dashboard_sort_arrow($idx_mes,$sort_vent_idx,$sort_vent_dir) ?></span>
+                                </a>
+                            </th>
                             <?php endforeach; ?>
                         </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($datos_vent_stacked as $canal => $vals):
+                    <?php foreach ($datos_vent_table as $canal => $vals):
                         if (array_sum($vals) == 0) continue;
                     ?>
                         <tr style="border-bottom:1px solid #e2e8f4;">
@@ -578,13 +1137,17 @@ include __DIR__ . '/includes/sidebar.php';
                     <thead>
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#2b57a7;color:white;border-radius:6px 0 0 0;font-size:0.7rem;">Origen</th>
-                            <?php foreach ($meses_labels as $ml): ?>
-                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;"><?= $ml ?></th>
+                            <?php foreach ($meses_labels as $idx_mes => $ml): ?>
+                            <th style="text-align:center;padding:7px 8px;background:#2b57a7;color:white;font-size:0.7rem;">
+                                <a href="<?= dashboard_sort_url('sort_inst_mes','sort_inst_dir',$idx_mes,$sort_inst_idx,$sort_inst_dir) ?>" style="color:white;text-decoration:none;display:inline-flex;gap:4px;align-items:center;justify-content:center;">
+                                    <?= htmlspecialchars($ml) ?> <span><?= dashboard_sort_arrow($idx_mes,$sort_inst_idx,$sort_inst_dir) ?></span>
+                                </a>
+                            </th>
                             <?php endforeach; ?>
                         </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($datos_inst_stacked as $canal => $vals):
+                    <?php foreach ($datos_inst_table as $canal => $vals):
                         if (array_sum($vals) == 0) continue;
                     ?>
                         <tr style="border-bottom:1px solid #e2e8f4;">
@@ -786,6 +1349,75 @@ new Chart(document.getElementById('cVentEvo'), {
     options: stackOpts,
     plugins: [pluginTotalesArriba]
 });
+</script>
+
+
+<script>
+(function(){
+    const dropdown = document.getElementById('dashboardRangeDropdown');
+    const trigger = document.getElementById('dashboardRangeTrigger');
+    const panel = document.getElementById('dashboardRangePanel');
+    const grid = document.getElementById('dashCalendarGrid');
+    const startInput = document.getElementById('dashDiaInicioInput');
+    const endInput = document.getElementById('dashDiaFinInput');
+    const summary = document.getElementById('dashRangeSummary');
+
+    if(!dropdown || !trigger || !panel || !grid || !startInput || !endInput) return;
+
+    let start = parseInt(grid.dataset.start || startInput.value || '1', 10);
+    let end = parseInt(grid.dataset.end || endInput.value || start, 10);
+    let clickMode = 'start';
+
+    function paint(){
+        if(start > end){ const t = start; start = end; end = t; }
+
+        startInput.value = start;
+        endInput.value = end;
+
+        grid.querySelectorAll('.calendar-day').forEach(btn=>{
+            const d = parseInt(btn.dataset.day, 10);
+            btn.classList.toggle('selected-start', d === start);
+            btn.classList.toggle('selected-end', d === end);
+            btn.classList.toggle('in-range', d > start && d < end);
+        });
+
+        if(summary){
+            summary.textContent = start === end
+                ? 'Rango seleccionado: día ' + end
+                : 'Rango seleccionado: día ' + start + ' al ' + end;
+        }
+    }
+
+    trigger.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        dropdown.classList.toggle('open');
+    });
+
+    panel.addEventListener('click', (e)=>e.stopPropagation());
+
+    document.addEventListener('click', ()=>{
+        dropdown.classList.remove('open');
+    });
+
+    grid.querySelectorAll('.calendar-day').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+            const d = parseInt(btn.dataset.day, 10);
+
+            if(clickMode === 'start'){
+                start = d;
+                end = d;
+                clickMode = 'end';
+            } else {
+                end = d;
+                clickMode = 'start';
+            }
+
+            paint();
+        });
+    });
+
+    paint();
+})();
 </script>
 
 <!-- ── MODAL CAMBIAR CONTRASEÑA ── -->
