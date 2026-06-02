@@ -49,53 +49,6 @@ function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = 
     return array_unique($todos);
 }
 
-function getFoliosPorPosiciones($conexion, $posiciones_ids) {
-    $folios = [];
-    if (empty($posiciones_ids)) return $folios;
-
-    $ph = implode(',', array_fill(0, count($posiciones_ids), '?'));
-    $stmt = mysqli_prepare($conexion, "SELECT DISTINCT numero_talento_gs FROM hc WHERE id_posicion IN ($ph) AND numero_talento_gs NOT LIKE '%VACANTE%' AND numero_talento_gs <> ''");
-    if (!$stmt) return $folios;
-
-    $tipos = str_repeat('s', count($posiciones_ids));
-    mysqli_stmt_bind_param($stmt, $tipos, ...array_values($posiciones_ids));
-    mysqli_stmt_execute($stmt);
-    $res = mysqli_stmt_get_result($stmt);
-    while ($row = mysqli_fetch_assoc($res)) {
-        if (!empty($row['numero_talento_gs'])) $folios[] = $row['numero_talento_gs'];
-    }
-    mysqli_stmt_close($stmt);
-
-    return array_unique(array_values($folios));
-}
-
-function nivel_dashboard_hc($posicion, $puesto_lr) {
-    $p = strtoupper((string)$posicion);
-
-    if (strpos($p, 'DIRECTOR DISTRITAL') !== false) return 'director_distrital';
-    if (strpos($p, 'LIDER VENTAS') !== false) return 'lider';
-    if (strpos($p, 'COACH') !== false) return 'coach';
-    if (
-        $p === 'VENDEDOR'
-        || $p === 'VENDEDOR NEGOCIOS'
-        || $p === 'VENDEDOR NEGOCIO'
-        || strpos($p, 'PROMOVENDEDOR PUNTO DE VENTA') !== false
-    ) return 'vendedor';
-
-    return 'otro';
-}
-
-function label_nivel_dashboard($nivel) {
-    $labels = [
-        'director_distrital' => 'Directores Distritales',
-        'lider' => 'Líderes',
-        'coach' => 'Coaches',
-        'vendedor' => 'Vendedores',
-        'otro' => 'Otros'
-    ];
-    return $labels[$nivel] ?? 'Otros';
-}
-
 // --- TIEMPO Y FECHAS ---
 $semana_actual = null; $anio_actual = null; $semana_base = null;
 $res_sem = mysqli_query($conexion, "SELECT semana, anio FROM hc ORDER BY anio DESC, semana DESC LIMIT 1");
@@ -139,91 +92,6 @@ if ($rol !== 'admin') {
         mysqli_stmt_close($stmt_folios);
     }
 }
-
-// ── VISTA JERÁRQUICA DEL DASHBOARD ───────────────────────────────────────────
-// Por default el dashboard carga la posición del usuario.
-// Si se elige una posición subordinada, se recalculan KPIs, mix y evolución para su línea completa.
-$scope_pos = $_GET['scope_pos'] ?? '';
-$scope_activo = false;
-$scope_registro = null;
-$scope_ids = [];
-$scope_autorizado_ids = [];
-$jerarquia_opciones = [
-    'director_distrital' => [],
-    'lider' => [],
-    'coach' => [],
-    'vendedor' => []
-];
-
-if ($rol === 'admin') {
-    $scope_autorizado_ids = null; // admin puede consultar cualquier posición comercial/jerárquica.
-} else {
-    $scope_autorizado_ids = getTodosSubordinados($conexion, $id_posicion, $nivel, $semana_actual, $anio_actual);
-    $scope_autorizado_ids[] = $id_posicion;
-    $scope_autorizado_ids = array_unique(array_values($scope_autorizado_ids));
-}
-
-$where_autorizado_opciones = "";
-if (is_array($scope_autorizado_ids)) {
-    if (!empty($scope_autorizado_ids)) {
-        $ids_esc = array_map(function($id) use ($conexion) {
-            return "'" . mysqli_real_escape_string($conexion, (string)$id) . "'";
-        }, $scope_autorizado_ids);
-        $where_autorizado_opciones = " AND id_posicion IN (" . implode(',', $ids_esc) . ")";
-    } else {
-        $where_autorizado_opciones = " AND 1=0";
-    }
-}
-
-$sql_opciones = "
-    SELECT DISTINCT id_posicion, nombre_colaborador, posicion, puesto_lr, distrito
-    FROM hc
-    WHERE semana = " . (int)$semana_actual . "
-      AND anio = " . (int)$anio_actual . "
-      AND nombre_colaborador <> 'VACANTE'
-      AND numero_talento_gs NOT LIKE '%VACANTE%'
-      $where_autorizado_opciones
-    ORDER BY distrito, posicion, nombre_colaborador
-";
-$res_opciones = mysqli_query($conexion, $sql_opciones);
-while ($res_opciones && $row_op = mysqli_fetch_assoc($res_opciones)) {
-    $nivel_op = nivel_dashboard_hc($row_op['posicion'] ?? '', $row_op['puesto_lr'] ?? '');
-    if (isset($jerarquia_opciones[$nivel_op])) {
-        $jerarquia_opciones[$nivel_op][] = $row_op;
-    }
-}
-
-if ($scope_pos !== '') {
-    $scope_pos_esc = mysqli_real_escape_string($conexion, $scope_pos);
-    $sql_scope = "
-        SELECT id_posicion, nombre_colaborador, posicion, puesto_lr, distrito
-        FROM hc
-        WHERE id_posicion = '$scope_pos_esc'
-          AND semana = " . (int)$semana_actual . "
-          AND anio = " . (int)$anio_actual . "
-        LIMIT 1
-    ";
-    $res_scope = mysqli_query($conexion, $sql_scope);
-    if ($res_scope && $row_scope = mysqli_fetch_assoc($res_scope)) {
-        $permitido = ($rol === 'admin') || (is_array($scope_autorizado_ids) && in_array($row_scope['id_posicion'], $scope_autorizado_ids, true));
-        if ($permitido) {
-            $scope_activo = true;
-            $scope_registro = $row_scope;
-            $scope_ids = getTodosSubordinados($conexion, $row_scope['id_posicion'], 6, $semana_actual, $anio_actual);
-            $scope_ids[] = $row_scope['id_posicion'];
-            $scope_ids = array_unique(array_values($scope_ids));
-
-            $folio_ids = getFoliosPorPosiciones($conexion, $scope_ids);
-            $subordinados_ids = $scope_ids;
-
-            $nombre_completo_scope = $row_scope['nombre_colaborador'] ?? '';
-            $posicion_scope = $row_scope['posicion'] ?? '';
-            $distrito_scope = $row_scope['distrito'] ?? $distrito_usuario;
-        }
-    }
-}
-
-$rol_consulta = $scope_activo ? 'scoped' : $rol;
 
 // Fecha de corte única para todo el dashboard.
 // Se usa el día vencido para evitar mezclar meses en cierres o inicios de mes.
@@ -297,11 +165,11 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
     return mysqli_real_escape_string($conexion, $d);
 }, $distritos_equivalentes)) . "'";
 
-$por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
+$por_distrito = in_array($rol, ['admin', 'director_regional', 'director_distrital']);
 $mostrar_meta = $por_distrito;
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if ($rol === 'admin') {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
@@ -321,7 +189,7 @@ if ($rol_consulta === 'admin') {
 $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 
 // ── VENTAS ───────────────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if ($rol === 'admin') {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
 } elseif ($por_distrito) {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
@@ -344,7 +212,7 @@ $kpi_conv = ($kpi_vent > 0) ? round(($kpi_inst / $kpi_vent) * 100, 1) : 0;
 // ── HC ───────────────────────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
 if ($semana_actual && $anio_actual) {
-    if ($rol_consulta === 'admin') {
+    if ($rol === 'admin') {
         $r_hc_act = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs NOT LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
         $r_hc_vac = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
     } else {
@@ -381,7 +249,7 @@ $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
 if ($mostrar_meta) {
-    if ($rol_consulta === 'admin') {
+    if ($rol === 'admin') {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
     } else {
         $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
@@ -395,7 +263,7 @@ if ($mostrar_meta) {
 }
 
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if ($rol === 'admin') {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
 } elseif ($por_distrito) {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
@@ -417,7 +285,7 @@ $inst_3p = (int)($mix_inst['p3'] ?? 0);
 $inst_2p = (int)($mix_inst['p2'] ?? 0);
 
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if ($rol === 'admin') {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
 } elseif ($por_distrito) {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
@@ -461,9 +329,9 @@ for ($i = 5; $i >= 0; $i--) {
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
     FROM instalaciones 
     WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
-if ($rol_consulta !== 'admin' && $por_distrito) {
+if ($rol !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
+} elseif ($rol !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
     $query_inst .= " AND folio_empleado IN ('$ph')";
 }
@@ -484,9 +352,9 @@ while($row = mysqli_fetch_assoc($res_i)) {
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
     FROM ventas 
     WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
-if ($rol_consulta !== 'admin' && $por_distrito) {
+if ($rol !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
+} elseif ($rol !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
     $query_vent .= " AND folio_empleado IN ('$ph')";
 }
@@ -656,48 +524,9 @@ $roles_labels = [
             background:linear-gradient(135deg,#7A2BFF,#FF006C);
             cursor:pointer;
         }
-        .hierarchy-card{
-            margin: 0 0 22px;
-            background: rgba(255,255,255,.78);
-            border: 1px solid rgba(226,232,240,.95);
-            border-radius: 24px;
-            padding: 16px;
-            box-shadow: 0 12px 28px rgba(22,28,60,.07);
-        }
-        .hierarchy-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px}
-        .hierarchy-title{font-size:.82rem;text-transform:uppercase;letter-spacing:.7px;font-weight:900;color:#6b7a99}
-        .hierarchy-current{font-weight:900;color:#1a2540;font-size:1rem}
-        .hierarchy-form{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-        .hierarchy-select{
-            min-width:360px;
-            max-width:100%;
-            border:1px solid #dbe4f0;
-            border-radius:999px;
-            padding:12px 14px;
-            background:#fff;
-            color:#1a2540;
-            font-family:inherit;
-            font-weight:800;
-        }
-        .hierarchy-btn,.hierarchy-clear{
-            border:0;
-            border-radius:999px;
-            padding:12px 16px;
-            font-weight:900;
-            font-family:inherit;
-            cursor:pointer;
-            text-decoration:none;
-            display:inline-flex;
-            align-items:center;
-            gap:7px;
-        }
-        .hierarchy-btn{color:#fff;background:linear-gradient(135deg,#7A2BFF,#FF006C)}
-        .hierarchy-clear{color:#1a2540;background:#eef4ff;border:1px solid #dbe4f0}
-        .hierarchy-note{font-size:.78rem;color:#6b7a99;font-weight:800}
         @media(max-width:900px){
             .dashboard-range-card{align-items:flex-start;flex-direction:column}
             .range-panel{left:auto;right:0;width:320px}
-            .hierarchy-select{min-width:100%}
         }
     </style>
 </head>
@@ -710,13 +539,7 @@ include __DIR__ . '/includes/sidebar.php';
 <main class="main">
     <div class="page-header">
         <div>
-            <h2>
-                <?php if ($scope_activo): ?>
-                    <?= htmlspecialchars($posicion_scope) ?> · <?= htmlspecialchars($nombre_completo_scope) ?>
-                <?php else: ?>
-                    <?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?>
-                <?php endif; ?>
-            </h2>
+            <h2><?= htmlspecialchars($roles_labels[$rol] ?? $rol) ?> <?= htmlspecialchars($distrito_usuario) ?></h2>
             <p><?= htmlspecialchars($dashboard_fecha_label) ?></p>
         </div>
         <div class="user-badge" id="userBadge" onclick="toggleUserMenu(event)">
@@ -811,54 +634,6 @@ include __DIR__ . '/includes/sidebar.php';
                 Mes completo
             </a>
         </div>
-    </section>
-
-    <section class="hierarchy-card">
-        <div class="hierarchy-head">
-            <div>
-                <div class="hierarchy-title">Vista jerárquica</div>
-                <div class="hierarchy-current">
-                    <?php if ($scope_activo): ?>
-                        Viendo tablero de <?= htmlspecialchars($nombre_completo_scope) ?> · <?= htmlspecialchars($posicion_scope) ?> · <?= htmlspecialchars($distrito_scope) ?>
-                    <?php else: ?>
-                        Vista inicial de tu posición
-                    <?php endif; ?>
-                </div>
-                <div class="hierarchy-note">Puedes consultar cualquier nivel permitido por tu línea de reporte.</div>
-            </div>
-        </div>
-
-        <form method="get" class="hierarchy-form">
-            <?php foreach ($_GET as $k => $v): ?>
-                <?php if (!in_array($k, ['scope_pos'], true)): ?>
-                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
-                <?php endif; ?>
-            <?php endforeach; ?>
-
-            <select name="scope_pos" class="hierarchy-select">
-                <option value="">Mi tablero / vista inicial</option>
-                <?php foreach ($jerarquia_opciones as $nivel_op => $opciones): ?>
-                    <?php if (!empty($opciones)): ?>
-                        <optgroup label="<?= htmlspecialchars(label_nivel_dashboard($nivel_op)) ?>">
-                            <?php foreach ($opciones as $op): ?>
-                                <option value="<?= htmlspecialchars($op['id_posicion']) ?>" <?= ($scope_pos === $op['id_posicion']) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($op['distrito']) ?> · <?= htmlspecialchars($op['nombre_colaborador']) ?> · <?= htmlspecialchars($op['posicion']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </optgroup>
-                    <?php endif; ?>
-                <?php endforeach; ?>
-            </select>
-
-            <button type="submit" class="hierarchy-btn">Ver tablero</button>
-            <?php if ($scope_activo): ?>
-                <?php
-                    $qs_clear_scope = $_GET;
-                    unset($qs_clear_scope['scope_pos']);
-                ?>
-                <a class="hierarchy-clear" href="?<?= htmlspecialchars(http_build_query($qs_clear_scope)) ?>">Regresar a mi vista</a>
-            <?php endif; ?>
-        </form>
     </section>
 
     <div class="kpi-grid">
