@@ -12,7 +12,7 @@
  */
 $current_page = $current_page ?? '';
 
-$is_detalle = in_array($current_page, ['ranking', 'hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta'], true);
+$is_detalle = in_array($current_page, ['ranking', 'hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
 $root_path  = $is_detalle ? '../' : '';
 $det_path   = $is_detalle ? '' : 'detalle/';
 
@@ -47,6 +47,9 @@ function txp_nav_active($page, $current_page) {
 
     <a href="<?= $det_path ?>ejecucion_operativa_captura.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_captura', $current_page) ?>">
         <span class="nav-icon">🚀</span> Ejecución Operativa
+    </a>
+    <a href="<?= $det_path ?>ejecucion_operativa_acompanamientos.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_acompanamientos', $current_page) ?>" style="padding-left:42px;font-size:.88rem;">
+        <span class="nav-icon">🤝</span> Acompañamientos
     </a>
 
     <div class="sidebar-bottom">
