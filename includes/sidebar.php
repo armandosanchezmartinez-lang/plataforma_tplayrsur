@@ -42,7 +42,7 @@ function txp_nav_active($page, $current_page) {
         <span class="nav-icon">🎯</span> Captura FCST
     </a>
     <a href="<?= $det_path ?>metas_fcst_dashboard.php" class="nav-item<?= txp_nav_active('fcst_dashboard', $current_page) ?>">
-        <span class="nav-icon">🚦</span> Dashboard FCST
+        <span class="nav-icon">🚦</span> Dashboard METAS/FCST/EJECUCION
     </a>
 
     <a href="<?= $det_path ?>ejecucion_operativa_captura.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_captura', $current_page) ?>">
