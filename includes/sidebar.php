@@ -41,10 +41,6 @@ function txp_nav_active($page, $current_page) {
     <a href="<?= $det_path ?>metas_fcst_captura.php" class="nav-item<?= txp_nav_active('fcst_captura', $current_page) ?>">
         <span class="nav-icon">🎯</span> Captura FCST
     </a>
-    <a href="<?= $det_path ?>metas_fcst_dashboard.php" class="nav-item<?= txp_nav_active('fcst_dashboard', $current_page) ?>">
-        <span class="nav-icon">🚦</span> Dashboard METAS/FCST/EJECUCION
-    </a>
-
     <a href="<?= $det_path ?>ejecucion_operativa_captura.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_captura', $current_page) ?>">
         <span class="nav-icon">🚀</span> Ejecución Operativa
     </a>
@@ -52,6 +48,9 @@ function txp_nav_active($page, $current_page) {
         <span class="nav-icon">🤝</span> Acompañamientos
     </a>
 
+    <a href="<?= $det_path ?>metas_fcst_dashboard.php" class="nav-item<?= txp_nav_active('fcst_dashboard', $current_page) ?>">
+        <span class="nav-icon">🚦</span> Dashboard EJECUCION
+    </a>
     <div class="sidebar-bottom">
         <?php if ($is_detalle): ?>
             <a href="<?= $root_path ?>logout.php" class="logout-btn">⎋ Cerrar sesión</a>
