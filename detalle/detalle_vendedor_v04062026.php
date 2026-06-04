@@ -14,7 +14,7 @@ $rol         = $_SESSION['rol'] ?? 'vendedor';
 $tgs         = mysqli_real_escape_string($conexion, $_GET['tgs'] ?? '');
 
 if (!$tgs) {
-    header("Location: reai.php");
+    header("Location: reai_v2.php");
     exit();
 }
 
@@ -32,7 +32,7 @@ $res_info = mysqli_query($conexion,
 if ($res_info) $info = mysqli_fetch_assoc($res_info);
 
 if (!$info) {
-    header("Location: reai.php");
+    header("Location: reai_v2.php");
     exit();
 }
 
@@ -44,145 +44,74 @@ $ant_meses   = (int)$info['antiguedad_meses'];
 $ant_anios   = (int)$info['antiguedad_anios'];
 $ant_txt     = $ant_anios > 0 ? "{$ant_anios} año(s) " . ($ant_meses % 12) . " mes(es)" : "{$ant_meses} mes(es)";
 
-// ── MODO DE GRÁFICA: SEMANAL / MENSUAL ───────────────────────────────────────
-// Si viene desde REAI mensual, mostrar evolución mensual de instalaciones.
-// Si viene desde REAI semanal o no trae parámetro, conservar comportamiento semanal actual.
-$periodo = $_GET['periodo'] ?? 'semanal';
-if (!in_array($periodo, ['semanal','mensual'], true)) $periodo = 'semanal';
-
-$labels            = [];
-$data_instalado    = [];
-$data_no_instalado = [];
-
-if ($periodo === 'mensual') {
-    // ── VISTA MENSUAL: Enero 2026 a la fecha, agrupada por mes ───────────────
-    $fecha_inicio = '2026-01-01';
-    $fecha_fin    = date('Y-m-d');
-
-    $meses_es = [1=>'ENE',2=>'FEB',3=>'MAR',4=>'ABR',5=>'MAY',6=>'JUN',7=>'JUL',8=>'AGO',9=>'SEP',10=>'OCT',11=>'NOV',12=>'DIC'];
-
-    // Generar meses desde enero 2026 hasta el mes actual
-    $cursor = new DateTime($fecha_inicio);
-    $limite = new DateTime(date('Y-m-01'));
-    $meses = [];
-    while ($cursor <= $limite) {
-        $anio_m = (int)$cursor->format('Y');
-        $mes_m  = (int)$cursor->format('n');
-        $key    = $cursor->format('Y-m');
-        $meses[] = ['key'=>$key, 'anio'=>$anio_m, 'mes'=>$mes_m, 'label'=>$meses_es[$mes_m].'/'.$anio_m];
-        $cursor->modify('+1 month');
-    }
-
-    // Ventas del vendedor desde 01/01/2026
-    $res_ventas = mysqli_query($conexion,
-        "SELECT id_cuenta_brm, fecha_cierre,
-                DATE_FORMAT(fecha_cierre, '%Y-%m') as mes_key
-         FROM ventas
-         WHERE folio_empleado = '$tgs'
-           AND fecha_cierre BETWEEN '$fecha_inicio' AND '$fecha_fin'
-         ORDER BY fecha_cierre");
-
-    $ventas_raw = [];
-    while ($res_ventas && $row = mysqli_fetch_assoc($res_ventas)) {
-        $ventas_raw[] = $row;
-    }
-
-    // Match contra instalaciones por cuenta
-    $cuentas = array_unique(array_column($ventas_raw, 'id_cuenta_brm'));
-    $instaladas = [];
-    if (!empty($cuentas)) {
-        $ph = implode(',', array_fill(0, count($cuentas), '?'));
-        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT cuenta FROM instalaciones WHERE cuenta IN ($ph)");
-        $tipos = str_repeat('s', count($cuentas));
-        mysqli_stmt_bind_param($stmt, $tipos, ...array_values($cuentas));
-        mysqli_stmt_execute($stmt);
-        $res_inst = mysqli_stmt_get_result($stmt);
-        while ($row = mysqli_fetch_assoc($res_inst)) {
-            $instaladas[$row['cuenta']] = true;
-        }
-        mysqli_stmt_close($stmt);
-    }
-
-    foreach ($meses as $m) {
-        $labels[] = $m['label'];
-        $inst = 0; $no_inst = 0;
-        foreach ($ventas_raw as $v) {
-            if ($v['mes_key'] === $m['key']) {
-                if (isset($instaladas[$v['id_cuenta_brm']])) $inst++;
-                else $no_inst++;
-            }
-        }
-        $data_instalado[]    = $inst;
-        $data_no_instalado[] = $no_inst;
-    }
-
-    $chart_title = 'Evolución mensual — Ventas vs Instalaciones';
-    $chart_sub   = 'Enero 2026 a la fecha · Barras apiladas: Instalado / No instalado · Línea: Total ventas';
-    $kpi_period_label = 'Mensual 2026';
-
-} else {
-    // ── VISTA SEMANAL: conservar comportamiento actual ───────────────────────
-    // Generar últimas 18 semanas ISO desde hoy hacia atrás
-    $semanas = [];
-    for ($i = 19; $i >= 0; $i--) {
-        $ts   = strtotime("-{$i} weeks");
-        $anio = (int)date('o', $ts); // año ISO
-        $sem  = (int)date('W', $ts); // semana ISO
-        $semanas[] = ['anio' => $anio, 'sem' => $sem, 'label' => "S{$sem}/{$anio}"];
-    }
-
-    // Traer todas las ventas de las últimas 18 semanas con su id_cuenta_brm
-    $fecha_inicio = date('Y-m-d', strtotime('-18 weeks'));
-    $res_ventas = mysqli_query($conexion,
-        "SELECT id_cuenta_brm, fecha_cierre,
-                YEAR(fecha_cierre)  as anio,
-                WEEK(fecha_cierre, 3) as semana
-         FROM ventas
-         WHERE folio_empleado = '$tgs'
-         AND fecha_cierre >= '$fecha_inicio'
-         ORDER BY fecha_cierre");
-
-    $ventas_raw = [];
-    while ($res_ventas && $row = mysqli_fetch_assoc($res_ventas)) {
-        $ventas_raw[] = $row;
-    }
-
-    // Match contra instalaciones por cuenta
-    $cuentas = array_unique(array_column($ventas_raw, 'id_cuenta_brm'));
-    $instaladas = [];
-    if (!empty($cuentas)) {
-        $ph = implode(',', array_fill(0, count($cuentas), '?'));
-        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT cuenta FROM instalaciones WHERE cuenta IN ($ph)");
-        $tipos = str_repeat('s', count($cuentas));
-        mysqli_stmt_bind_param($stmt, $tipos, ...array_values($cuentas));
-        mysqli_stmt_execute($stmt);
-        $res_inst = mysqli_stmt_get_result($stmt);
-        while ($row = mysqli_fetch_assoc($res_inst)) {
-            $instaladas[$row['cuenta']] = true;
-        }
-        mysqli_stmt_close($stmt);
-    }
-
-    foreach ($semanas as $s) {
-        $labels[] = $s['label'];
-        $inst = 0; $no_inst = 0;
-        foreach ($ventas_raw as $v) {
-            if ((int)$v['anio'] === $s['anio'] && (int)$v['semana'] === $s['sem']) {
-                if (isset($instaladas[$v['id_cuenta_brm']])) $inst++;
-                else $no_inst++;
-            }
-        }
-        $data_instalado[]    = $inst;
-        $data_no_instalado[] = $no_inst;
-    }
-
-    $chart_title = 'Evolución semanal — Ventas vs Instalaciones';
-    $chart_sub   = 'Últimas 18 semanas · Barras apiladas: Instalado / No instalado · Línea: Total ventas';
-    $kpi_period_label = '18 sem';
+// ── 18 SEMANAS ───────────────────────────────────────────────────────────────
+// Generar últimas 18 semanas ISO desde hoy hacia atrás
+$semanas = [];
+for ($i = 19; $i >= 0; $i--) {
+    $ts   = strtotime("-{$i} weeks");
+    $anio = (int)date('o', $ts); // año ISO
+    $sem  = (int)date('W', $ts); // semana ISO
+    $semanas[] = ['anio' => $anio, 'sem' => $sem, 'label' => "S{$sem}/{$anio}"];
 }
 
-// Totales del modo activo
+// ── VENTAS DEL VENDEDOR POR SEMANA ───────────────────────────────────────────
+// Traer todas las ventas de las últimas 18 semanas con su id_cuenta_brm
+$fecha_inicio = date('Y-m-d', strtotime('-18 weeks'));
+$res_ventas = mysqli_query($conexion,
+    "SELECT id_cuenta_brm, fecha_cierre,
+            YEAR(fecha_cierre)  as anio,
+            WEEK(fecha_cierre, 3) as semana
+     FROM ventas
+     WHERE folio_empleado = '$tgs'
+     AND fecha_cierre >= '$fecha_inicio'
+     ORDER BY fecha_cierre");
+
+$ventas_raw = [];
+while ($row = mysqli_fetch_assoc($res_ventas)) {
+    $ventas_raw[] = $row;
+}
+
+// ── MATCH CON INSTALACIONES ──────────────────────────────────────────────────
+$cuentas = array_unique(array_column($ventas_raw, 'id_cuenta_brm'));
+$instaladas = [];
+if (!empty($cuentas)) {
+    $ph = implode(',', array_fill(0, count($cuentas), '?'));
+    $stmt = mysqli_prepare($conexion, "SELECT DISTINCT cuenta FROM instalaciones WHERE cuenta IN ($ph)");
+    $tipos = str_repeat('s', count($cuentas));
+    mysqli_stmt_bind_param($stmt, $tipos, ...array_values($cuentas));
+    mysqli_stmt_execute($stmt);
+    $res_inst = mysqli_stmt_get_result($stmt);
+    while ($row = mysqli_fetch_assoc($res_inst)) {
+        $instaladas[$row['cuenta']] = true;
+    }
+    mysqli_stmt_close($stmt);
+}
+
+// ── AGRUPAR POR SEMANA ───────────────────────────────────────────────────────
+$data_instalado    = [];
+$data_no_instalado = [];
+$labels            = [];
+
+foreach ($semanas as $s) {
+    $labels[] = $s['label'];
+    $inst = 0; $no_inst = 0;
+    foreach ($ventas_raw as $v) {
+        if ((int)$v['anio'] === $s['anio'] && (int)$v['semana'] === $s['sem']) {
+            if (isset($instaladas[$v['id_cuenta_brm']])) {
+                $inst++;
+            } else {
+                $no_inst++;
+            }
+        }
+    }
+    $data_instalado[]    = $inst;
+    $data_no_instalado[] = $no_inst;
+}
+
+// Totales por semana (línea)
 $data_total = array_map(fn($a,$b) => $a+$b, $data_instalado, $data_no_instalado);
+
+// KPIs resumen
 $total_ventas    = array_sum($data_total);
 $total_instalado = array_sum($data_instalado);
 $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) * 100, 1) : 0;
@@ -213,7 +142,7 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
 </aside>
 
 <main class="main">
-    <a href="reai.php?periodo=<?= urlencode($periodo) ?>" class="back-btn">← Volver al seguimiento</a>
+    <a href="reai.php" class="back-btn">← Volver al seguimiento</a>
 
     <!-- TARJETA VENDEDOR -->
     <div class="vendedor-card">
@@ -249,7 +178,7 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
     <!-- KPIs -->
     <div class="kpi-row">
         <div class="kpi-chip">
-            <div class="kpi-chip-label">Ventas (<?= htmlspecialchars($kpi_period_label) ?>)</div>
+            <div class="kpi-chip-label">Ventas (18 sem)</div>
             <div class="kpi-chip-val c-blue"><?= number_format($total_ventas) ?></div>
         </div>
         <div class="kpi-chip">
@@ -268,8 +197,8 @@ $pct_inst        = $total_ventas > 0 ? round(($total_instalado / $total_ventas) 
 
     <!-- GRÁFICA -->
     <div class="chart-card">
-        <div class="chart-title"><?= htmlspecialchars($chart_title) ?></div>
-        <div class="chart-sub"><?= htmlspecialchars($chart_sub) ?></div>
+        <div class="chart-title">Evolución semanal — Ventas vs Instalaciones</div>
+        <div class="chart-sub">Últimas 18 semanas · Barras apiladas: Instalado / No instalado · Línea: Total ventas</div>
         <div class="chart-wrap"><canvas id="cVendedor"></canvas></div>
     </div>
 </main>
