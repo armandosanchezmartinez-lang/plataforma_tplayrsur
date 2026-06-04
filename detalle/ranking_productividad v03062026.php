@@ -344,31 +344,6 @@ function ultima_semana_hc_mes($conexion, $anio, $mes, $fallback_semana) {
     return (int)$fallback_semana;
 }
 
-function ultima_semana_hc_disponible_hasta($conexion, $anio, $semana_limite) {
-    $anio = (int)$anio;
-    $semana_limite = (int)$semana_limite;
-
-    $sql = "
-        SELECT anio, semana
-        FROM hc
-        WHERE anio IS NOT NULL
-          AND semana IS NOT NULL
-          AND (
-                anio < {$anio}
-             OR (anio = {$anio} AND semana <= {$semana_limite})
-          )
-        ORDER BY anio DESC, semana DESC
-        LIMIT 1
-    ";
-
-    $res = mysqli_query($conexion, $sql);
-    if ($res && $row = mysqli_fetch_assoc($res)) {
-        return [(int)$row['anio'], (int)$row['semana']];
-    }
-
-    return [$anio, $semana_limite];
-}
-
 $hc_anio_base = $anio_base;
 $hc_semana_base = $semana_base;
 $hc_anio_actual = $anio_actual;
@@ -388,17 +363,6 @@ if ($periodo === 'mensual') {
 
     $hc_anio_actual = $anio_mes_actual;
     $hc_semana_actual = ultima_semana_hc_mes($conexion, $anio_mes_actual, $mes_actual, $semana_actual);
-
-    // Si el mes actual todavía no tiene HC propio (ej. Junio inicia en SEM23,
-    // pero HC solo está cargado hasta SEM22), usar la última plantilla HC disponible.
-    if (!week_has_hc($conexion, $hc_anio_actual, $hc_semana_actual)) {
-        [$hc_anio_actual, $hc_semana_actual] = ultima_semana_hc_disponible_hasta(
-            $conexion,
-            $anio_mes_actual,
-            $semana_actual
-        );
-        $hc_actual_fallback = true;
-    }
 }
 
 // Corte operativo por default: día vencido del calendario actual.
