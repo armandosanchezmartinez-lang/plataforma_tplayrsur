@@ -362,47 +362,6 @@ function accion_estatus_label($estatus) {
     return $map[$estatus] ?? $estatus;
 }
 
-function cargar_acompanamientos_por_accion($conexion, $id_ejecucion) {
-    $map = [];
-    $stmt = mysqli_prepare($conexion, "SELECT * FROM ejecucion_operativa_acompanamientos WHERE id_ejecucion = ? AND id_accion IS NOT NULL ORDER BY fecha_hora DESC, id DESC");
-    if (!$stmt) return $map;
-    mysqli_stmt_bind_param($stmt, "i", $id_ejecucion);
-    mysqli_stmt_execute($stmt);
-    $res = mysqli_stmt_get_result($stmt);
-    while ($row = mysqli_fetch_assoc($res)) {
-        $id_accion = (int)($row['id_accion'] ?? 0);
-        if ($id_accion <= 0) continue;
-        if (!isset($map[$id_accion])) $map[$id_accion] = [];
-        $map[$id_accion][] = $row;
-    }
-    mysqli_stmt_close($stmt);
-    return $map;
-}
-
-function tipo_acompanamiento_label($tipo) {
-    $map = [
-        'SHADOWING' => 'Shadowing',
-        'COACHING_1_1' => 'Coaching 1:1',
-        'SEGUIMIENTO' => 'Seguimiento',
-        'SUPERVISION_CAMPO' => 'Supervisión campo',
-        'OTRO' => 'Otro'
-    ];
-    return $map[$tipo] ?? $tipo;
-}
-
-function evidencia_link($ruta) {
-    $ruta = trim((string)$ruta);
-    if ($ruta === '') return '';
-    if (preg_match('/^https?:\/\//i', $ruta)) return $ruta;
-    return '../' . ltrim($ruta, '/');
-}
-
-function fecha_hora_mx($fecha_hora) {
-    if (!$fecha_hora) return '—';
-    $ts = strtotime($fecha_hora);
-    return $ts ? date('d/m/Y H:i', $ts) : $fecha_hora;
-}
-
 
 function cargar_subordinados_directos($conexion, $anio, $semana, $id_posicion, $nivel_sub) {
     $rows = [];
@@ -581,7 +540,6 @@ $observaciones = $plan_row['observaciones'] ?? '';
 $palancas = cargar_palancas($conexion);
 $palancas_seleccionadas = cargar_palancas_seleccionadas($conexion, $id_ejecucion);
 $acciones_guardadas = cargar_acciones($conexion, $id_ejecucion);
-$acompanamientos_por_accion = cargar_acompanamientos_por_accion($conexion, $id_ejecucion);
 $acciones_calendario = acciones_por_dia_semana($acciones_guardadas, $anio_actual, $semana_actual);
 $subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado) : [];
 $metas_asignadas = cargar_metas_asignadas_por_superior($conexion, $anio_actual, $semana_actual, $id_posicion);
@@ -612,7 +570,7 @@ $modo_semana = 'SOLO LECTURA';
 <head>
     <meta charset="UTF-8">
     <title>Consulta Ejecución Operativa - TOTALXPEDIENT</title>
-    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=174">
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=173">
     <style>
         :root{--tx-purple:#7A2BFF;--tx-pink:#FF0AC8;--tx-cyan:#00D8FF;--tx-card:rgba(255,255,255,.90);--tx-border:#e2e8f0;--tx-text:#1a2540;--tx-muted:#6b7a99;--tx-green:#10b981;--tx-red:#ef4444;--tx-orange:#f59e0b;}
         *{box-sizing:border-box}
@@ -668,14 +626,6 @@ $modo_semana = 'SOLO LECTURA';
         .calendar-chip.baja{background:#dcfce7;color:#166534}
         .calendar-resp{font-size:.68rem;color:#64748b;font-weight:850;margin-top:6px}
         .calendar-comment{font-size:.68rem;color:#64748b;margin-top:6px;line-height:1.3}
-        .calendar-eye-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
-        .acomp-count{font-size:.66rem;color:#64748b;font-weight:900}
-        .btn-eye{border:1px solid #d8c7ff;background:#f4efff;color:#4c1d95;border-radius:999px;padding:6px 10px;font-size:.72rem;font-weight:950;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:5px}.btn-eye:hover{background:linear-gradient(135deg,rgba(122,43,255,.13),rgba(255,10,200,.10));border-color:#a78bfa}
-        .modal-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9998;padding:24px;align-items:center;justify-content:center}.modal-backdrop.active{display:flex}
-        .modal-card{width:min(980px,96vw);max-height:88vh;overflow:auto;background:white;border-radius:24px;border:1px solid #e2e8f0;box-shadow:0 24px 80px rgba(15,23,42,.35)}
-        .modal-head{position:sticky;top:0;background:white;z-index:2;display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px;border-bottom:1px solid #e2e8f0}.modal-title{font-weight:950;font-size:1.05rem;color:var(--tx-text)}.modal-sub{font-size:.76rem;color:var(--tx-muted);font-weight:800;margin-top:3px}.modal-close{border:none;background:#e8eef7;color:#1a2540;border-radius:12px;padding:8px 11px;font-weight:950;cursor:pointer}.modal-body{padding:18px 20px}
-        .acomp-card{border:1px solid #e2e8f0;background:#f8fafc;border-radius:18px;padding:14px 15px;margin-bottom:12px}.acomp-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}.acomp-person{font-weight:950;color:#1a2540}.acomp-meta{font-size:.72rem;color:#64748b;font-weight:850;margin-top:2px}.acomp-chip{display:inline-flex;border-radius:999px;padding:5px 9px;font-size:.68rem;font-weight:950;background:#ede9fe;color:#5b21b6}.acomp-section{font-size:.8rem;color:#334155;line-height:1.4;margin-top:8px}.acomp-section strong{color:#1a2540}.evidencia-btn{display:inline-flex;align-items:center;gap:6px;margin-top:10px;text-decoration:none;border-radius:999px;padding:8px 11px;background:#eef2ff;color:#3730a3;font-weight:950;font-size:.74rem;border:1px solid #c7d2fe}
-
         .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn-add{background:#e8eef7;color:#1a2540;border:1px solid var(--tx-border);margin-top:14px}.week-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.week-nav a,.week-nav span{display:inline-flex;align-items:center;border-radius:999px;padding:9px 14px;font-size:.78rem;font-weight:900;text-decoration:none}.week-nav a{border:1px solid var(--tx-border);background:rgba(255,255,255,.88);color:var(--tx-text)}.week-nav .current{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%)}.week-nav .disabled{opacity:.45;background:#e8eef7;color:#64748b}.mode-note{font-size:.74rem;color:var(--tx-muted);font-weight:800;margin-top:8px}
         @media(max-width:1150px){.grid{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}.palanca-grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
     </style>
@@ -843,11 +793,6 @@ include __DIR__ . '/../includes/sidebar.php';
                                                     $pr_cls = accion_prioridad_cls($pr);
                                                     $estatus = $a['estatus'] ?? 'PENDIENTE';
                                                 ?>
-                                                    <?php
-                                                        $id_accion_cal = (int)($a['id'] ?? 0);
-                                                        $acomps_accion = $acompanamientos_por_accion[$id_accion_cal] ?? [];
-                                                        $acomps_count = count($acomps_accion);
-                                                    ?>
                                                     <div class="calendar-action prioridad-<?= h($pr_cls) ?>">
                                                         <div class="calendar-action-title"><?= h($a['accion'] ?? 'Acción') ?></div>
                                                         <?php if (!empty($a['descripcion'])): ?>
@@ -863,12 +808,6 @@ include __DIR__ . '/../includes/sidebar.php';
                                                         <?php if (!empty($a['comentario'])): ?>
                                                             <div class="calendar-comment">Comentario: <?= h($a['comentario']) ?></div>
                                                         <?php endif; ?>
-                                                        <?php if ($acomps_count > 0): ?>
-                                                            <div class="calendar-eye-row">
-                                                                <span class="acomp-count"><?= h($acomps_count) ?> acompañamiento<?= $acomps_count === 1 ? '' : 's' ?></span>
-                                                                <button type="button" class="btn-eye" data-modal-target="modal-acomp-<?= h($id_accion_cal) ?>">👁 Ver</button>
-                                                            </div>
-                                                        <?php endif; ?>
                                                     </div>
                                                 <?php endforeach; ?>
                                             <?php endif; ?>
@@ -881,45 +820,6 @@ include __DIR__ . '/../includes/sidebar.php';
                 <?php endif; ?>
             </div>
 
-            <?php foreach ($acciones_guardadas as $a_modal):
-                $id_accion_modal = (int)($a_modal['id'] ?? 0);
-                $acomps_modal = $acompanamientos_por_accion[$id_accion_modal] ?? [];
-                if (empty($acomps_modal)) continue;
-            ?>
-                <div class="modal-backdrop" id="modal-acomp-<?= h($id_accion_modal) ?>" aria-hidden="true">
-                    <div class="modal-card">
-                        <div class="modal-head">
-                            <div>
-                                <div class="modal-title">👁 Acompañamientos · <?= h($a_modal['accion'] ?? 'Acción clave') ?></div>
-                                <div class="modal-sub"><?= h(count($acomps_modal)) ?> registro<?= count($acomps_modal) === 1 ? '' : 's' ?> documentado<?= count($acomps_modal) === 1 ? '' : 's' ?> para esta acción</div>
-                            </div>
-                            <button type="button" class="modal-close" data-modal-close>✕</button>
-                        </div>
-                        <div class="modal-body">
-                            <?php foreach ($acomps_modal as $acomp): ?>
-                                <div class="acomp-card">
-                                    <div class="acomp-top">
-                                        <div>
-                                            <div class="acomp-person"><?= h($acomp['nombre_colaborador'] ?? 'Colaborador') ?></div>
-                                            <div class="acomp-meta"><?= h($acomp['tipo_colaborador'] ?? '') ?> · <?= h(fecha_hora_mx($acomp['fecha_hora'] ?? '')) ?></div>
-                                        </div>
-                                        <span class="acomp-chip"><?= h(tipo_acompanamiento_label($acomp['tipo_acompanamiento'] ?? '')) ?></span>
-                                    </div>
-                                    <div class="acomp-section"><strong>Jefe que acompaña:</strong> <?= h($acomp['nombre_jefe'] ?? '—') ?></div>
-                                    <div class="acomp-section"><strong>Hallazgos principales:</strong><br><?= nl2br(h($acomp['hallazgos_principales'] ?? '—')) ?></div>
-                                    <div class="acomp-section"><strong>Compromisos:</strong><br><?= nl2br(h($acomp['compromisos'] ?? '—')) ?></div>
-                                    <?php if (!empty($acomp['evidencia'])): ?>
-                                        <a class="evidencia-btn" href="<?= h(evidencia_link($acomp['evidencia'])) ?>" target="_blank">📎 Ver evidencia</a>
-                                    <?php else: ?>
-                                        <div class="acomp-section"><strong>Evidencia:</strong> Sin evidencia adjunta.</div>
-                                    <?php endif; ?>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-
             <div class="card full">
                 <div class="card-title"><h2>Control de consulta</h2><span>Solo lectura</span></div>
                 <div class="helper">Esta vista permite revisar el plan operativo sin modificar la captura original.</div>
@@ -931,32 +831,6 @@ include __DIR__ . '/../includes/sidebar.php';
     </form>
 </main>
 
-
-
-<script>
-document.addEventListener('DOMContentLoaded', function(){
-    document.querySelectorAll('[data-modal-target]').forEach(function(btn){
-        btn.addEventListener('click', function(){
-            const modal = document.getElementById(btn.getAttribute('data-modal-target'));
-            if(modal) modal.classList.add('active');
-        });
-    });
-    document.querySelectorAll('[data-modal-close]').forEach(function(btn){
-        btn.addEventListener('click', function(){
-            const modal = btn.closest('.modal-backdrop');
-            if(modal) modal.classList.remove('active');
-        });
-    });
-    document.querySelectorAll('.modal-backdrop').forEach(function(backdrop){
-        backdrop.addEventListener('click', function(e){
-            if(e.target === backdrop) backdrop.classList.remove('active');
-        });
-    });
-    document.addEventListener('keydown', function(e){
-        if(e.key === 'Escape') document.querySelectorAll('.modal-backdrop.active').forEach(m => m.classList.remove('active'));
-    });
-});
-</script>
 
 </body>
 
