@@ -20,6 +20,7 @@ $puede_capturar = ($rol === 'coach');
 function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 function fmt_num($v, $d = 0) { return number_format((float)($v ?? 0), $d); }
 function fmt_prod($v) { return number_format((float)($v ?? 0), 2); }
+function fmt_meta($v) { return number_format((float)($v ?? 0), 0); }
 function table_exists($conexion, $table) {
     $table = mysqli_real_escape_string($conexion, $table);
     $res = mysqli_query($conexion, "SHOW TABLES LIKE '$table'");
@@ -59,6 +60,80 @@ function periodo_label($periodo, $base, $actual) {
         return [$meses[(int)date('n', strtotime($base['inicio']))], $meses[(int)date('n', strtotime($actual['inicio']))]];
     }
     return ['SEM'.$base['semana'], 'SEM'.$actual['semana']];
+}
+
+function normaliza_key($v) {
+    $v = strtoupper(trim((string)$v));
+    $v = str_replace(['Á','É','Í','Ó','Ú','Ñ'], ['A','E','I','O','U','N'], $v);
+    $v = preg_replace('/[^A-Z0-9]+/', ' ', $v);
+    return trim(preg_replace('/\s+/', ' ', $v));
+}
+function meta_mensual_estandar($distrito, $canal, $metal = 'ORO', $metas_estandar = []) {
+    $d = normaliza_key($distrito);
+    $c = normaliza_key($canal);
+    $m = normaliza_key($metal ?: 'ORO');
+
+    if ($c === '' || $c === 'TODOS' || $c === 'ALL' || $c === '*') $c = '*';
+
+    // Prioridad:
+    // 1) Distrito + canal exacto + metal.
+    // 2) Distrito + TODOS + metal.
+    // 3) DEFAULT + TODOS + metal.
+    if (isset($metas_estandar[$d.'|'.$c.'|'.$m])) return (float)$metas_estandar[$d.'|'.$c.'|'.$m];
+    if (isset($metas_estandar[$d.'|*|'.$m])) return (float)$metas_estandar[$d.'|*|'.$m];
+    if (isset($metas_estandar['DEFAULT|*|'.$m])) return (float)$metas_estandar['DEFAULT|*|'.$m];
+
+    // Sin meta estándar configurada en tabla: no se quema meta en código.
+    return 0.0;
+}
+
+function accion_sugerida_reai($reai_total, $prod_3m, $prod_dia, $pct_alcance, $dif, $pct_dif, $inst_actual) {
+    // Prioridad de evaluación:
+    // 1) PROD. 3M
+    // 2) PROD DÍA
+    // 3) % ALCANCE
+    // 4) DIF %
+    // Nunca se sugiere I; Incidencia es sólo documental/informativa.
+    if ((int)$reai_total > 0) return ['SEG', 'status-seg'];
+
+    $p3m_roja      = $prod_3m < .40;
+    $p3m_amarilla  = $prod_3m >= .40 && $prod_3m < .70;
+    $p3m_verde     = $prod_3m >= .70;
+
+    $pd_roja       = $prod_dia < .40;
+    $pd_amarilla   = $prod_dia >= .40 && $prod_dia < .70;
+    $pd_verde      = $prod_dia >= .70;
+
+    $alcance_bajo  = $pct_alcance < 80;
+    $alcance_medio = $pct_alcance >= 80 && $pct_alcance < 100;
+    $alcance_ok    = $pct_alcance >= 100;
+
+    $caida         = $dif < 0;
+    $caida_fuerte  = ($pct_dif <= -50 || $dif <= -2);
+
+    // Histórico sano: no sancionar por una mala lectura aislada.
+    // Sólo se sugiere R si además hay deterioro y bajo alcance.
+    if ($p3m_verde) {
+        if (($pd_roja || $pd_amarilla) && $alcance_bajo && $caida) return ['R', 'status-alert'];
+        return ['OK', 'status-ok'];
+    }
+
+    // Histórico medio: escalar según productividad actual y alcance.
+    if ($p3m_amarilla) {
+        if ($pd_roja && $alcance_bajo && ($caida || $inst_actual == 0)) return ['E', 'status-risk'];
+        if (($pd_roja || $pd_amarilla || $alcance_medio || $alcance_bajo || $caida)) return ['R', 'status-alert'];
+        return ['OK', 'status-ok'];
+    }
+
+    // Histórico rojo: aquí sí hay patrón sostenido.
+    if ($p3m_roja) {
+        if ($pd_roja && $alcance_bajo && ($caida_fuerte || $inst_actual == 0)) return ['A', 'status-risk'];
+        if ($pd_roja && $alcance_bajo) return ['E', 'status-risk'];
+        if ($pd_amarilla || $alcance_medio || $alcance_bajo || $caida) return ['R', 'status-alert'];
+        return ['OK', 'status-ok'];
+    }
+
+    return ['OK', 'status-ok'];
 }
 
 // ── HISTORIAL AJAX ────────────────────────────────────────────────────────────
@@ -157,7 +232,45 @@ if ($periodo === 'mensual') {
 
 $dias_habiles_base   = contar_dias_habiles($conexion, $periodo_base['inicio'], $periodo_base['fin']);
 $dias_habiles_actual = contar_dias_habiles($conexion, $periodo_actual['inicio'], $periodo_actual['fin']);
+
+// PROD. 3M: últimos 3 meses completos anteriores al mes actual del corte operativo.
+// Ejemplo: si el corte está en junio, considera marzo 01 a mayo 31 completos.
+$fecha_3m_inicio = date('Y-m-01', strtotime($ultima_fecha . ' -3 months'));
+$fecha_3m_fin    = date('Y-m-t', strtotime($ultima_fecha . ' -1 month'));
+$dias_habiles_3m = contar_dias_habiles($conexion, $fecha_3m_inicio, $fecha_3m_fin);
+
 [$label_base, $label_actual] = periodo_label($periodo, $periodo_base, $periodo_actual);
+
+// Semana de referencia para buscar meta semanal capturada en ejecución operativa.
+$anio_meta_actual   = (int)date('o', strtotime($ultima_fecha));
+$semana_meta_actual = (int)date('W', strtotime($ultima_fecha));
+$sem_meta_inicio_dt = fecha_iso_inicio($anio_meta_actual, $semana_meta_actual);
+$sem_meta_fin_dt    = clone $sem_meta_inicio_dt;
+$sem_meta_fin_dt->modify('+6 days');
+$dias_habiles_semana_meta = contar_dias_habiles($conexion, $sem_meta_inicio_dt->format('Y-m-d'), $sem_meta_fin_dt->format('Y-m-d'));
+
+// Días hábiles del mes completo para convertir meta mensual estándar a diaria.
+$mes_actual_inicio_meta = date('Y-m-01', strtotime($periodo_actual['inicio']));
+$mes_actual_fin_meta    = date('Y-m-t', strtotime($periodo_actual['inicio']));
+$dias_habiles_mes_actual_total = contar_dias_habiles($conexion, $mes_actual_inicio_meta, $mes_actual_fin_meta);
+
+// Tabla de metas estándar por distrito, canal y metal.
+// Para REAI se toma por ahora el metal ORO del distrito correspondiente.
+$metal_reai_default = 'ORO';
+$metas_estandar = [];
+if (table_exists($conexion, 'reai_metas_estandar')) {
+    $res_me = mysqli_query($conexion, "SELECT distrito, canal_venta, metal, meta_mensual FROM reai_metas_estandar WHERE activo = 1");
+    while ($res_me && $row_me = mysqli_fetch_assoc($res_me)) {
+        $dk = normaliza_key($row_me['distrito'] ?? '');
+        $ck = normaliza_key($row_me['canal_venta'] ?? '');
+        $mk = normaliza_key($row_me['metal'] ?? $metal_reai_default);
+        if ($ck === '' || $ck === 'TODOS' || $ck === 'ALL' || $ck === '*') $ck = '*';
+        if ($mk === '') $mk = normaliza_key($metal_reai_default);
+        if ($dk !== '') {
+            $metas_estandar[$dk . '|' . $ck . '|' . $mk] = (float)($row_me['meta_mensual'] ?? 0);
+        }
+    }
+}
 
 // Última semana HC para plantilla / jerarquía
 $semana_hc = null; $anio_hc = null;
@@ -171,7 +284,7 @@ if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
 $vendedores = [];
 if ($semana_hc && $anio_hc) {
     if ($rol === 'coach') {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
+        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
                      TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
                      c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach
                      FROM hc v
@@ -183,7 +296,7 @@ if ($semana_hc && $anio_hc) {
         $stmt = mysqli_prepare($conexion, $sql_vend);
         mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_hc, $anio_hc);
     } elseif ($rol === 'lider') {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
+        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
                      TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
                      c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach
                      FROM hc v
@@ -195,7 +308,7 @@ if ($semana_hc && $anio_hc) {
         $stmt = mysqli_prepare($conexion, $sql_vend);
         mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_hc, $anio_hc);
     } elseif ($rol === 'director_distrital') {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
+        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
                      TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
                      c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach
                      FROM hc v
@@ -208,7 +321,7 @@ if ($semana_hc && $anio_hc) {
         $stmt = mysqli_prepare($conexion, $sql_vend);
         mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_hc, $anio_hc);
     } else {
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta,
+        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
                      TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
                      c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach
                      FROM hc v
@@ -252,6 +365,14 @@ if (!empty($vendedores)) {
     while ($r = mysqli_fetch_assoc($res_ia)) $stats[$r['folio_empleado']]['inst_actual'] = (int)$r['total'];
     mysqli_stmt_close($stmt_ia);
 
+    // Instalaciones de últimos 3 meses completos anteriores al mes actual.
+    $stmt_i3m = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
+    mysqli_stmt_bind_param($stmt_i3m, 'ss'.$tipos, $fecha_3m_inicio, $fecha_3m_fin, ...array_values($talentos));
+    mysqli_stmt_execute($stmt_i3m);
+    $res_i3m = mysqli_stmt_get_result($stmt_i3m);
+    while ($r = mysqli_fetch_assoc($res_i3m)) $stats[$r['folio_empleado']]['inst_3m'] = (int)$r['total'];
+    mysqli_stmt_close($stmt_i3m);
+
     $stmt_rc = mysqli_prepare($conexion, "SELECT numero_talento_gs, asunto, COUNT(*) AS total, MAX(fecha) AS ultima_fecha FROM reai WHERE numero_talento_gs IN ($ph) GROUP BY numero_talento_gs, asunto");
     mysqli_stmt_bind_param($stmt_rc, $tipos, ...array_values($talentos));
     mysqli_stmt_execute($stmt_rc);
@@ -263,6 +384,51 @@ if (!empty($vendedores)) {
         if (empty($stats[$t]['ultima_reai']) || $r['ultima_fecha'] > $stats[$t]['ultima_reai']) $stats[$t]['ultima_reai'] = $r['ultima_fecha'];
     }
     mysqli_stmt_close($stmt_rc);
+
+    // Metas semanales capturadas desde Ejecución Operativa por vendedor.
+    // Se toma la semana de la última fecha operativa cargada.
+    if (table_exists($conexion, 'ejecucion_operativa_metas')) {
+        $nombres_vend = array_column($vendedores, 'nombre_colaborador');
+        $ph_nombres = implode(',', array_fill(0, count($nombres_vend), '?'));
+        $tipos_nombres = str_repeat('s', count($nombres_vend));
+
+        $sql_meta = "SELECT id_subordinado, nombre_subordinado, meta_asignada
+                     FROM ejecucion_operativa_metas
+                     WHERE anio = ?
+                       AND semana = ?
+                       AND nivel_subordinado = 'VENDEDOR'
+                       AND (id_subordinado IN ($ph) OR nombre_subordinado IN ($ph_nombres))";
+        $stmt_meta = mysqli_prepare($conexion, $sql_meta);
+        if ($stmt_meta) {
+            mysqli_stmt_bind_param(
+                $stmt_meta,
+                'ii'.$tipos.$tipos_nombres,
+                $anio_meta_actual,
+                $semana_meta_actual,
+                ...array_values($talentos),
+                ...array_values($nombres_vend)
+            );
+            mysqli_stmt_execute($stmt_meta);
+            $res_meta = mysqli_stmt_get_result($stmt_meta);
+            while ($r = mysqli_fetch_assoc($res_meta)) {
+                $meta_val = (int)($r['meta_asignada'] ?? 0);
+                $id_sub = (string)($r['id_subordinado'] ?? '');
+                $nom_sub = normaliza_key($r['nombre_subordinado'] ?? '');
+
+                if ($id_sub !== '' && in_array($id_sub, $talentos, true)) {
+                    $stats[$id_sub]['meta_semanal_eo'] = max($stats[$id_sub]['meta_semanal_eo'] ?? 0, $meta_val);
+                }
+
+                foreach ($vendedores as $vend_meta) {
+                    $tgs_meta = $vend_meta['numero_talento_gs'];
+                    if (normaliza_key($vend_meta['nombre_colaborador']) === $nom_sub) {
+                        $stats[$tgs_meta]['meta_semanal_eo'] = max($stats[$tgs_meta]['meta_semanal_eo'] ?? 0, $meta_val);
+                    }
+                }
+            }
+            mysqli_stmt_close($stmt_meta);
+        }
+    }
 }
 
 $total_hc = count($vendedores);
@@ -277,15 +443,23 @@ foreach ($vendedores as $vend) {
     $reai_total = $st['reai_total'] ?? 0;
     if ($reai_total > 0) $total_con_reai++; else $total_sin_reai++;
     $prod_actual_tmp = $dias_habiles_actual > 0 ? round($inst_actual / $dias_habiles_actual, 2) : 0;
+    $inst_3m_tmp = (int)($st['inst_3m'] ?? 0);
+    $prod_3m_tmp = $dias_habiles_3m > 0 ? round($inst_3m_tmp / $dias_habiles_3m, 2) : 0;
     $dif_tmp = $inst_actual - $inst_base;
     $pct_tmp = $inst_base > 0 ? round(($dif_tmp / $inst_base) * 100, 0) : ($inst_actual > 0 ? 100 : 0);
-    $caida_pronunciada_tmp = ($pct_tmp <= -50 || $dif_tmp <= -2);
-    $caida_leve_tmp = ($dif_tmp < 0 && !$caida_pronunciada_tmp);
-    // Sólo contar riesgo cuando existe deterioro real vs período anterior.
-    // Si va igual o mejorando, no se genera acción aunque la productividad aún sea amarilla/roja.
-    if ($reai_total == 0 && $dif_tmp < 0) {
-        if ($caida_pronunciada_tmp || $prod_actual_tmp < .70) $total_riesgo++;
+    $pct_alcance_tmp = 0;
+    $meta_semanal_eo_tmp = (int)($st['meta_semanal_eo'] ?? 0);
+    if ($meta_semanal_eo_tmp > 0) {
+        $meta_diaria_tmp = $meta_semanal_eo_tmp / max(1, $dias_habiles_semana_meta);
+    } else {
+        $meta_mensual_std_tmp = meta_mensual_estandar($vend['distrito'] ?? '', $vend['canal_venta'] ?? '', $metal_reai_default, $metas_estandar);
+        $meta_diaria_tmp = $meta_mensual_std_tmp / max(1, $dias_habiles_mes_actual_total);
     }
+    $meta_prorrateada_tmp = (int)round($meta_diaria_tmp * $dias_habiles_actual, 0);
+    if ($meta_prorrateada_tmp > 0) $pct_alcance_tmp = round(($inst_actual / $meta_prorrateada_tmp) * 100, 0);
+
+    [$accion_tmp, $accion_cls_tmp] = accion_sugerida_reai($reai_total, $prod_3m_tmp, $prod_actual_tmp, $pct_alcance_tmp, $dif_tmp, $pct_tmp, $inst_actual);
+    if ($accion_tmp !== 'OK' && $accion_tmp !== 'SEG') $total_riesgo++;
 }
 ?>
 <!DOCTYPE html>
@@ -293,7 +467,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v6 — TOTALXPEDIENT</title>
+    <title>REAI — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
@@ -352,17 +526,24 @@ foreach ($vendedores as $vend) {
         body.page-reai .table-card th{padding:9px 10px;font-size:.68rem;line-height:1.05;white-space:nowrap;}
         body.page-reai .table-card td{padding:8px 10px;font-size:.76rem;line-height:1.12;vertical-align:middle;}
         body.page-reai .table-card tbody tr{height:46px;}
-        body.page-reai .table-card th:nth-child(1), body.page-reai .table-card td:nth-child(1){width:35%;}
-        body.page-reai .table-card th:nth-child(2), body.page-reai .table-card td:nth-child(2){width:8%;}
-        body.page-reai .table-card th:nth-child(3), body.page-reai .table-card td:nth-child(3){width:8%;}
-        body.page-reai .table-card th:nth-child(4), body.page-reai .table-card td:nth-child(4){width:8%;}
-        body.page-reai .table-card th:nth-child(5), body.page-reai .table-card td:nth-child(5){width:10%;}
-        body.page-reai .table-card th:nth-child(6), body.page-reai .table-card td:nth-child(6){width:9%;}
-        body.page-reai .table-card th:nth-child(7), body.page-reai .table-card td:nth-child(7){width:14%;}
-        body.page-reai .table-card th:nth-child(8), body.page-reai .table-card td:nth-child(8){width:8%;}
+        body.page-reai .table-card th:nth-child(1), body.page-reai .table-card td:nth-child(1){width:22%;}
+        body.page-reai .table-card th:nth-child(2), body.page-reai .table-card td:nth-child(2){width:6%;}
+        body.page-reai .table-card th:nth-child(3), body.page-reai .table-card td:nth-child(3){width:9%;}
+        body.page-reai .table-card th:nth-child(4), body.page-reai .table-card td:nth-child(4){width:6%;}
+        body.page-reai .table-card th:nth-child(5), body.page-reai .table-card td:nth-child(5){width:6%;}
+        body.page-reai .table-card th:nth-child(6), body.page-reai .table-card td:nth-child(6){width:8%;}
+        body.page-reai .table-card th:nth-child(7), body.page-reai .table-card td:nth-child(7){width:7%;}
+        body.page-reai .table-card th:nth-child(8), body.page-reai .table-card td:nth-child(8){width:7%;}
+        body.page-reai .table-card th:nth-child(9), body.page-reai .table-card td:nth-child(9){width:7%;}
+        body.page-reai .table-card th:nth-child(10), body.page-reai .table-card td:nth-child(10){width:6%;}
+        body.page-reai .table-card th:nth-child(11), body.page-reai .table-card td:nth-child(11){width:16%;}
         body.page-reai .table-card .sub-text{font-size:.62rem;line-height:1;margin-top:1px;}
         body.page-reai .reai-badge{min-width:24px;height:24px;padding:0 6px;margin:0 1px;font-size:.68rem;border-radius:8px;}
         body.page-reai .prod-pill{min-width:42px;padding:4px 7px;font-size:.7rem;}
+        body.page-reai .meta-pill{display:inline-flex;min-width:42px;justify-content:center;padding:4px 7px;border-radius:999px;font-weight:900;font-size:.7rem;background:#EEF2FF;color:#3730A3;}
+        body.page-reai .alcance-good{color:#059669;font-weight:900;}
+        body.page-reai .alcance-mid{color:#D97706;font-weight:900;}
+        body.page-reai .alcance-bad{color:#DC2626;font-weight:900;}
         body.page-reai .status-pill{padding:5px 8px;font-size:.68rem;}
         body.page-reai th.sortable{cursor:pointer;user-select:none;position:relative;}
         body.page-reai th.sortable::after{content:'↕';font-size:.62rem;margin-left:6px;color:var(--text2);opacity:.55;}
@@ -415,11 +596,14 @@ include __DIR__ . '/../includes/sidebar.php';
                 <tr>
                     <th class="left sortable" data-sort="text">Nombre</th>
                     <th class="sortable" data-sort="num">Antig.</th>
+                    <th class="sortable" data-sort="num">Meta Prorrateada</th>
                     <th class="sortable" data-sort="num"><?= h($label_base) ?></th>
                     <th class="sortable" data-sort="num"><?= h($label_actual) ?></th>
                     <th class="sortable" data-sort="num">Dif %</th>
                     <th class="sortable" data-sort="num">Prod Día</th>
-                    <th class="sortable" data-sort="text">Acción sugerida</th>
+                    <th class="sortable" data-sort="num">% Alcance</th>
+                    <th class="sortable" data-sort="num">Prod. 3M</th>
+                    <th class="sortable" data-sort="text">Acción</th>
                     <th class="sep">REAI</th>
                 </tr>
             </thead>
@@ -435,6 +619,24 @@ include __DIR__ . '/../includes/sidebar.php';
                 $pct       = $inst_base > 0 ? round(($dif / $inst_base) * 100, 0) : ($inst_act > 0 ? 100 : 0);
                 $prod      = $dias_habiles_actual > 0 ? round($inst_act / $dias_habiles_actual, 2) : 0;
                 $prod_cls  = $prod >= .70 ? 'prod-good' : ($prod >= .40 ? 'prod-mid' : 'prod-bad');
+                $inst_3m   = (int)($st['inst_3m'] ?? 0);
+                $prod_3m   = $dias_habiles_3m > 0 ? round($inst_3m / $dias_habiles_3m, 2) : 0;
+                $prod_3m_cls = $prod_3m >= .70 ? 'prod-good' : ($prod_3m >= .40 ? 'prod-mid' : 'prod-bad');
+
+                // Meta prorrateada por vendedor:
+                // 1) Si Ejecución Operativa tiene meta semanal > 0, se convierte a meta diaria.
+                // 2) Si no hay meta capturada, se usa la tabla reai_metas_estandar.
+                $meta_semanal_eo = (int)($st['meta_semanal_eo'] ?? 0);
+                if ($meta_semanal_eo > 0) {
+                    $meta_diaria = $meta_semanal_eo / max(1, $dias_habiles_semana_meta);
+                } else {
+                    $meta_mensual_std = meta_mensual_estandar($vend['distrito'] ?? '', $vend['canal_venta'] ?? '', $metal_reai_default, $metas_estandar);
+                    $meta_diaria = $meta_mensual_std / max(1, $dias_habiles_mes_actual_total);
+                }
+                $meta_prorrateada = (int)round($meta_diaria * $dias_habiles_actual, 0);
+                $pct_alcance = $meta_prorrateada > 0 ? round(($inst_act / $meta_prorrateada) * 100, 0) : 0;
+                $alcance_cls = $pct_alcance >= 100 ? 'alcance-good' : ($pct_alcance >= 80 ? 'alcance-mid' : 'alcance-bad');
+
                 $pct_cls   = $pct > 0 ? 'pct-up' : ($pct < 0 ? 'pct-down' : 'pct-flat');
                 $reai      = $st['reai'] ?? [];
                 $cnt_r     = $reai['Retroalimentación'] ?? 0;
@@ -443,30 +645,9 @@ include __DIR__ . '/../includes/sidebar.php';
                 $cnt_i     = $reai['Incidencia'] ?? 0;
                 $reai_total = (int)($st['reai_total'] ?? 0);
 
-                // Regla de acción sugerida v6:
-                // - Nunca sugerir I; Incidencia es sólo documental/informativa.
-                // - Si el colaborador va igual o mejor que el período anterior (dif >= 0), NO sugerir acción.
-                // - Si la productividad es buena (verde >= .70), NO sugerir acción aunque exista caída leve.
-                // - Sólo accionar cuando hay deterioro real (dif < 0) y productividad no verde.
-                // - Leve: caída negativa leve + productividad amarilla => Aplicar R.
-                // - Medio: caída negativa leve + productividad roja => Aplicar E.
-                // - Grave: caída negativa pronunciada o cero productividad con caída => Aplicar A.
-                $caida_pronunciada = ($pct <= -50 || $dif <= -2);
-                $caida_leve        = ($dif < 0 && !$caida_pronunciada);
-
-                if ($reai_total > 0) {
-                    $estatus_txt = 'En seguimiento'; $estatus_cls = 'status-seg';
-                } elseif ($dif >= 0 || $prod >= .70) {
-                    $estatus_txt = 'OK'; $estatus_cls = 'status-ok';
-                } elseif ($caida_pronunciada || $inst_act == 0) {
-                    $estatus_txt = 'Aplicar A'; $estatus_cls = 'status-risk';
-                } elseif ($prod < .40 && $caida_leve) {
-                    $estatus_txt = 'Aplicar E'; $estatus_cls = 'status-risk';
-                } elseif ($prod >= .40 && $prod < .70 && $caida_leve) {
-                    $estatus_txt = 'Aplicar R'; $estatus_cls = 'status-alert';
-                } else {
-                    $estatus_txt = 'OK'; $estatus_cls = 'status-ok';
-                }
+                // Acción sugerida: prioridad PROD. 3M > PROD DÍA > % ALCANCE > DIF %.
+                // Se muestran etiquetas cortas para no desplazar la columna REAI.
+                [$estatus_txt, $estatus_cls] = accion_sugerida_reai($reai_total, $prod_3m, $prod, $pct_alcance, $dif, $pct, $inst_act);
             ?>
             <tr data-nombre="<?= strtolower(h($nombre)) ?>">
                 <td class="left" data-sort-value="<?= h($nombre) ?>">
@@ -478,10 +659,13 @@ include __DIR__ . '/../includes/sidebar.php';
                     <div class="sub-text"><?= h($tgs) ?></div>
                 </td>
                 <td data-sort-value="<?= $antig ?>"><span style="font-weight:800;"><?= $antig ?></span> <span class="sub-text">m</span></td>
+                <td data-sort-value="<?= $meta_prorrateada ?>"><span class="meta-pill"><?= fmt_meta($meta_prorrateada) ?></span></td>
                 <td data-sort-value="<?= $inst_base ?>"><span style="font-weight:900;"><?= fmt_num($inst_base) ?></span></td>
                 <td data-sort-value="<?= $inst_act ?>"><span style="font-weight:900;"><?= fmt_num($inst_act) ?></span></td>
                 <td data-sort-value="<?= $pct ?>"><span class="<?= $pct_cls ?>"><?= $dif >= 0 ? '+' : '' ?><?= fmt_num($dif) ?> / <?= $pct >= 0 ? '+' : '' ?><?= fmt_num($pct) ?>%</span></td>
                 <td data-sort-value="<?= $prod ?>"><span class="prod-pill <?= $prod_cls ?>"><?= fmt_prod($prod) ?></span></td>
+                <td data-sort-value="<?= $pct_alcance ?>"><span class="<?= $alcance_cls ?>"><?= fmt_num($pct_alcance) ?>%</span></td>
+                <td data-sort-value="<?= $prod_3m ?>"><span class="prod-pill <?= $prod_3m_cls ?>" title="<?= date('d/m/Y', strtotime($fecha_3m_inicio)) ?> - <?= date('d/m/Y', strtotime($fecha_3m_fin)) ?> · Inst: <?= fmt_num($inst_3m) ?> · DH: <?= fmt_num($dias_habiles_3m) ?>"><?= fmt_prod($prod_3m) ?></span></td>
                 <td data-sort-value="<?= h($estatus_txt) ?>"><span class="status-pill <?= $estatus_cls ?>"><?= h($estatus_txt) ?></span></td>
                 <td class="sep">
                     <?php
@@ -578,7 +762,15 @@ function ordenarTabla(colIndex, tipo, th) {
     });
     rows.forEach(row => tbody.appendChild(row));
 }
-document.addEventListener('DOMContentLoaded', inicializarOrdenamiento);
+document.addEventListener('DOMContentLoaded', function() {
+    inicializarOrdenamiento();
+    const colActual = 4; // columna actual: JUN / SEM actual, índice 0-based después de Meta Prorrateada
+    const thActual = document.querySelectorAll('th.sortable')[colActual];
+    if (thActual) {
+        thActual.dataset.order = 'asc'; // fuerza primer clic programático a descendente
+        ordenarTabla(colActual, thActual.dataset.sort || 'num', thActual);
+    }
+});
 function abrirModal(talento, nombre, asunto) {
     currentTalento = talento; currentNombre = nombre; currentAsunto = asunto;
     document.getElementById('modalTitle').textContent = nombre + ' — ' + asunto;
