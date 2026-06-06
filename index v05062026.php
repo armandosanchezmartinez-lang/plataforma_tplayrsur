@@ -586,6 +586,7 @@ $cumplimiento_inferior_real = [];
 $cumplimiento_inferior_meta = [];
 $cumplimiento_inferior_pct = [];
 $cumplimiento_inferior_fuente = [];
+$cumplimiento_inferior_visual_pct = [];
 $cumplimiento_inferior_items = [];
 
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
@@ -669,9 +670,20 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
                 );
             }
 
-            $meta = ($meta_oficial > 0)
-                ? $meta_oficial
-                : (($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0);
+            if ($meta_oficial > 0) {
+                $meta = $meta_oficial;
+                $meta_fuente = 'operativa';
+            } elseif (in_array($nivel_actual_dashboard, ['lider','coach'], true)) {
+                // Para Líder -> Coaches y Coach -> Vendedores:
+                // si no hay meta capturada en ejecucion_operativa_metas, NO se calcula meta artificial.
+                // Se muestra el desempeño como "sin meta" para no confundir con una meta oficial.
+                $meta = 0;
+                $meta_fuente = 'sin_meta';
+            } else {
+                // Fallback para otros niveles donde aún no exista meta operativa asignada.
+                $meta = ($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0;
+                $meta_fuente = 'hc';
+            }
 
             if ($real <= 0 && $meta <= 0) continue;
             $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
@@ -680,7 +692,7 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
                 'real'=>$real,
                 'meta'=>$meta,
                 'pct'=>$pct,
-                'meta_fuente'=>($meta_oficial > 0 ? 'operativa' : 'hc')
+                'meta_fuente'=>$meta_fuente
             ];
         }
     }
@@ -692,12 +704,22 @@ usort($tmp, function($a, $b) {
 });
 $tmp = array_slice($tmp, 0, 10);
 
+$max_real_sin_meta = 0;
+foreach ($tmp as $r_tmp) {
+    if (($r_tmp['meta_fuente'] ?? '') === 'sin_meta') {
+        $max_real_sin_meta = max($max_real_sin_meta, (int)($r_tmp['real'] ?? 0));
+    }
+}
+
 foreach ($tmp as $r) {
     $cumplimiento_inferior_labels[] = $r['label'];
     $cumplimiento_inferior_real[] = (int)$r['real'];
     $cumplimiento_inferior_meta[] = (int)$r['meta'];
     $cumplimiento_inferior_pct[] = (float)$r['pct'];
     $cumplimiento_inferior_fuente[] = $r['meta_fuente'] ?? '';
+    $cumplimiento_inferior_visual_pct[] = (($r['meta_fuente'] ?? '') === 'sin_meta' && $max_real_sin_meta > 0)
+        ? round(((int)$r['real'] / $max_real_sin_meta) * 100, 1)
+        : (float)$r['pct'];
 }
 
 
@@ -879,6 +901,7 @@ foreach ($cumplimiento_inferior_labels as $idx_ci => $nombre_ci) {
         'real'   => (int)($cumplimiento_inferior_real[$idx_ci] ?? 0),
         'meta'   => (int)($cumplimiento_inferior_meta[$idx_ci] ?? 0),
         'pct'    => (float)($cumplimiento_inferior_pct[$idx_ci] ?? 0),
+        'visual_pct' => (float)($cumplimiento_inferior_visual_pct[$idx_ci] ?? ($cumplimiento_inferior_pct[$idx_ci] ?? 0)),
         'fuente' => $cumplimiento_inferior_fuente[$idx_ci] ?? '',
     ];
 }
@@ -1133,6 +1156,7 @@ $roles_labels = [
         .cumplimiento-fill.ok{background:linear-gradient(90deg,#00A6FF,#00E5FF);}
         .cumplimiento-fill.warn{background:linear-gradient(90deg,#7A2BFF,#B026FF);}
         .cumplimiento-fill.risk{background:linear-gradient(90deg,#FF006C,#FF4FA3);}
+        .cumplimiento-fill.neutral{background:linear-gradient(90deg,#64748B,#CBD5E1);}
         .cumplimiento-metric{
             font-size:.86rem;
             font-weight:950;
@@ -1488,10 +1512,12 @@ include __DIR__ . '/includes/sidebar.php';
             <?php foreach ($cumplimiento_inferior_items as $item): ?>
                 <?php
                     $pct_item = (float)($item['pct'] ?? 0);
+                    $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
                     $real_item = (int)($item['real'] ?? 0);
                     $meta_item = (int)($item['meta'] ?? 0);
-                    $bar_width = min($pct_item, 180);
-                    $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
+                    $sin_meta_item = (($item['fuente'] ?? '') === 'sin_meta');
+                    $bar_width = min($visual_pct_item, 180);
+                    $bar_class = $sin_meta_item ? 'neutral' : (($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk'));
                 ?>
                 <div class="cumplimiento-row">
                     <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
@@ -1501,8 +1527,13 @@ include __DIR__ . '/includes/sidebar.php';
                         <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
                     </div>
                     <div class="cumplimiento-metric">
-                        <?= number_format($pct_item, 0) ?>%
-                        <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?><?= (($item['fuente'] ?? '') === 'operativa') ? ' · EO' : '' ?></span>
+                        <?php if ($sin_meta_item): ?>
+                            <?= number_format($real_item) ?>
+                            <span class="cumplimiento-sub">Sin meta</span>
+                        <?php else: ?>
+                            <?= number_format($pct_item, 0) ?>%
+                            <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?><?= (($item['fuente'] ?? '') === 'operativa') ? ' · EO' : '' ?></span>
+                        <?php endif; ?>
                     </div>
                 </div>
             <?php endforeach; ?>

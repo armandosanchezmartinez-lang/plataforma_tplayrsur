@@ -85,6 +85,28 @@ function nivel_dashboard_hc($posicion, $puesto_lr) {
     return 'otro';
 }
 
+
+function tx_meta_propia_operativa_dashboard($conexion, $anio, $semana, $id_posicion) {
+    $sql = "
+        SELECT meta_asignada
+        FROM ejecucion_operativa_metas
+        WHERE anio = ?
+          AND semana = ?
+          AND id_subordinado = ?
+          AND meta_asignada > 0
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ";
+    $stmt = mysqli_prepare($conexion, $sql);
+    if (!$stmt) return 0;
+    mysqli_stmt_bind_param($stmt, "iis", $anio, $semana, $id_posicion);
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    $row = $res ? mysqli_fetch_assoc($res) : null;
+    mysqli_stmt_close($stmt);
+    return (int)($row['meta_asignada'] ?? 0);
+}
+
 function label_nivel_dashboard($nivel) {
     $labels = [
         'director_distrital' => 'Directores Distritales',
@@ -324,7 +346,7 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
 }, $distritos_equivalentes)) . "'";
 
 $por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
-$mostrar_meta = $por_distrito || $scope_filtrar_por_distrito;
+$mostrar_meta = $por_distrito || $scope_filtrar_por_distrito || (($meta_propia_operativa_dashboard ?? 0) > 0);
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
@@ -411,18 +433,25 @@ $kpi_meta_acum      = 0;
 $kpi_meta_pct       = 0;
 
 if ($mostrar_meta) {
-    if ($rol_consulta === 'admin') {
-        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
-    } elseif ($scope_filtrar_por_distrito) {
-        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($scope_distritos_sql)");
+    if (($meta_propia_operativa_dashboard ?? 0) > 0 && !$scope_filtrar_por_distrito && !$por_distrito) {
+        // Meta asignada al tablero actual desde Ejecución Operativa.
+        // Ejemplo: meta del Líder capturada por su Director Distrital.
+        $kpi_meta_acum = (int)$meta_propia_operativa_dashboard;
+        $kpi_meta_pct  = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     } else {
-        $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
-    }
+        if ($rol_consulta === 'admin') {
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
+        } elseif ($scope_filtrar_por_distrito) {
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($scope_distritos_sql)");
+        } else {
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
+        }
 
-    if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
-        $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
-        $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
-        $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
+        if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
+            $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
+            $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
+            $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
+        }
     }
 }
 
@@ -592,6 +621,20 @@ $cumplimiento_inferior_items = [];
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
 $root_dashboard_id = $scope_activo ? ($scope_registro['id_posicion'] ?? '') : $id_posicion;
 $root_dashboard_distrito = $scope_activo ? ($distrito_scope ?? $distrito_usuario) : $distrito_usuario;
+
+// Meta propia capturada en Ejecución Operativa para el tablero actual.
+// Aplica, por ejemplo, cuando el usuario está firmado como Líder o cuando admin consulta a un Líder.
+// Si existe, activa la tarjeta Avance vs Meta aunque el tablero no sea distrital.
+$meta_propia_operativa_dashboard = 0;
+if (!empty($root_dashboard_id) && in_array($nivel_actual_dashboard, ['lider','coach','vendedor'], true)) {
+    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
+        $conexion,
+        $anio_operativo_dashboard,
+        $semana_operativa_dashboard,
+        $root_dashboard_id
+    );
+}
+
 
 if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
     $cumplimiento_inferior_subtitulo = 'Distritos · Real vs Meta';
@@ -1448,7 +1491,7 @@ include __DIR__ . '/includes/sidebar.php';
                     <span class="kpi-sub" style="margin-bottom: 10px;">Instalaciones</span>
                     
                     <span class="kpi-val" style="color:#f59e0b; font-size: 1.3rem;"><?= number_format($kpi_meta_acum) ?></span>
-                    <span class="kpi-sub">Meta (Día <?= $dias_transcurridos ?>)</span>
+                    <span class="kpi-sub"><?= (($meta_propia_operativa_dashboard ?? 0) > 0 && !$scope_filtrar_por_distrito && !$por_distrito) ? "Meta EO" : ("Meta (Día " . $dias_transcurridos . ")") ?></span>
                 </div>
             </div>
         </div>
