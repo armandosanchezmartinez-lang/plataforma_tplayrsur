@@ -346,6 +346,27 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
 }, $distritos_equivalentes)) . "'";
 
 $por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
+
+// Contexto jerárquico temprano para activar meta propia en tablero inicial o scope.
+// IMPORTANTE: debe calcularse antes de $mostrar_meta.
+$nivel_actual_dashboard_pre = $scope_activo
+    ? $scope_nivel
+    : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
+
+$root_dashboard_id_pre = $scope_activo
+    ? ($scope_registro['id_posicion'] ?? '')
+    : $id_posicion;
+
+$meta_propia_operativa_dashboard = 0;
+if (!empty($root_dashboard_id_pre) && in_array($nivel_actual_dashboard_pre, ['lider','coach','vendedor'], true)) {
+    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
+        $conexion,
+        $anio_operativo_dashboard,
+        $semana_operativa_dashboard,
+        $root_dashboard_id_pre
+    );
+}
+
 $mostrar_meta = $por_distrito || $scope_filtrar_por_distrito || (($meta_propia_operativa_dashboard ?? 0) > 0);
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
@@ -621,19 +642,6 @@ $cumplimiento_inferior_items = [];
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
 $root_dashboard_id = $scope_activo ? ($scope_registro['id_posicion'] ?? '') : $id_posicion;
 $root_dashboard_distrito = $scope_activo ? ($distrito_scope ?? $distrito_usuario) : $distrito_usuario;
-
-// Meta propia capturada en Ejecución Operativa para el tablero actual.
-// Aplica, por ejemplo, cuando el usuario está firmado como Líder o cuando admin consulta a un Líder.
-// Si existe, activa la tarjeta Avance vs Meta aunque el tablero no sea distrital.
-$meta_propia_operativa_dashboard = 0;
-if (!empty($root_dashboard_id) && in_array($nivel_actual_dashboard, ['lider','coach','vendedor'], true)) {
-    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
-        $conexion,
-        $anio_operativo_dashboard,
-        $semana_operativa_dashboard,
-        $root_dashboard_id
-    );
-}
 
 
 if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
