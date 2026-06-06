@@ -494,52 +494,6 @@ function tx_real_inst_folios($conexion, $folios, $mes, $anio, $cond_dia_fecha) {
     return (int)($row['total'] ?? 0);
 }
 
-
-function tx_meta_operativa_asignada($conexion, $anio, $semana, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado) {
-    $sql = "
-        SELECT COALESCE(SUM(meta_asignada),0) AS meta
-        FROM ejecucion_operativa_metas
-        WHERE anio = ?
-          AND semana = ?
-          AND id_superior = ?
-          AND id_subordinado = ?
-          AND nivel_superior = ?
-          AND nivel_subordinado = ?
-    ";
-    $stmt = mysqli_prepare($conexion, $sql);
-    if (!$stmt) return 0;
-    mysqli_stmt_bind_param(
-        $stmt,
-        "iissss",
-        $anio,
-        $semana,
-        $id_superior,
-        $id_subordinado,
-        $nivel_superior,
-        $nivel_subordinado
-    );
-    mysqli_stmt_execute($stmt);
-    $res = mysqli_stmt_get_result($stmt);
-    $row = $res ? mysqli_fetch_assoc($res) : null;
-    mysqli_stmt_close($stmt);
-    return (int)($row['meta'] ?? 0);
-}
-
-function tx_nivel_operativo_meta($nivel_dashboard) {
-    if ($nivel_dashboard === 'director_distrital') return 'DIRECTOR_DISTRITAL';
-    if ($nivel_dashboard === 'lider') return 'LIDER_VENTAS';
-    if ($nivel_dashboard === 'coach') return 'COACH_VENTAS';
-    return '';
-}
-
-function tx_nivel_operativo_subordinado($nivel_dashboard) {
-    if ($nivel_dashboard === 'lider') return 'LIDER_VENTAS';
-    if ($nivel_dashboard === 'coach') return 'COACH_VENTAS';
-    if ($nivel_dashboard === 'vendedor') return 'VENDEDOR';
-    return '';
-}
-
-
 $cumplimiento_inferior_titulo = 'Cumplimiento del nivel inferior vs meta';
 $cumplimiento_inferior_subtitulo = '';
 $cumplimiento_inferior_labels = [];
@@ -600,48 +554,18 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             if ($target_nivel_inferior === 'vendedor' && $child_hc === 0) $child_hc = 1;
             $hc_total_children += $child_hc;
             $children_calc[] = [
-                'id_posicion' => $child['id_posicion'] ?? '',
                 'label' => $child['nombre_colaborador'] ?? '',
                 'folios' => $child_folios,
-                'hc' => $child_hc,
-                'nivel_dashboard' => $target_nivel_inferior
+                'hc' => $child_hc
             ];
         }
 
         foreach ($children_calc as $child) {
             $real = tx_real_inst_folios($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
-
-            // Meta oficial de Ejecución Operativa:
-            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se usa esa meta.
-            // Si no existe o es 0, se conserva el cálculo automático por proporción de HC.
-            $nivel_superior_meta = tx_nivel_operativo_meta($nivel_actual_dashboard);
-            $nivel_subordinado_meta = tx_nivel_operativo_subordinado($target_nivel_inferior);
-            $meta_oficial = 0;
-            if ($nivel_superior_meta !== '' && $nivel_subordinado_meta !== '' && !empty($child['id_posicion'])) {
-                $meta_oficial = tx_meta_operativa_asignada(
-                    $conexion,
-                    $anio_actual,
-                    $semana_actual,
-                    $root_dashboard_id,
-                    $child['id_posicion'],
-                    $nivel_superior_meta,
-                    $nivel_subordinado_meta
-                );
-            }
-
-            $meta = ($meta_oficial > 0)
-                ? $meta_oficial
-                : (($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0);
-
+            $meta = ($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0;
             if ($real <= 0 && $meta <= 0) continue;
             $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
-            $tmp[] = [
-                'label'=>$child['label'],
-                'real'=>$real,
-                'meta'=>$meta,
-                'pct'=>$pct,
-                'meta_fuente'=>($meta_oficial > 0 ? 'operativa' : 'hc')
-            ];
+            $tmp[] = ['label'=>$child['label'], 'real'=>$real, 'meta'=>$meta, 'pct'=>$pct];
         }
     }
 }
