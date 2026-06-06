@@ -252,6 +252,11 @@ $fecha_corte_timestamp = strtotime('-1 day');
 $mes_actual   = (int)date('n', $fecha_corte_timestamp);
 $anio_query   = (int)date('Y', $fecha_corte_timestamp);
 
+// Semana operativa del corte para consultar metas capturadas en Ejecución Operativa.
+// No usar $semana_actual aquí, porque esa variable viene del último HC cargado.
+$semana_operativa_dashboard = (int)date('W', $fecha_corte_timestamp);
+$anio_operativo_dashboard   = (int)date('Y', $fecha_corte_timestamp);
+
 $meses_es = [
     1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',
     7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'
@@ -494,12 +499,93 @@ function tx_real_inst_folios($conexion, $folios, $mes, $anio, $cond_dia_fecha) {
     return (int)($row['total'] ?? 0);
 }
 
+
+function tx_meta_operativa_asignada($conexion, $anio, $semana, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado) {
+    // 1) Búsqueda exacta: semana/año + superior + subordinado + niveles.
+    $sql = "
+        SELECT COALESCE(SUM(meta_asignada),0) AS meta
+        FROM ejecucion_operativa_metas
+        WHERE anio = ?
+          AND semana = ?
+          AND id_superior = ?
+          AND id_subordinado = ?
+          AND nivel_superior = ?
+          AND nivel_subordinado = ?
+    ";
+    $stmt = mysqli_prepare($conexion, $sql);
+    if ($stmt) {
+        mysqli_stmt_bind_param(
+            $stmt,
+            "iissss",
+            $anio,
+            $semana,
+            $id_superior,
+            $id_subordinado,
+            $nivel_superior,
+            $nivel_subordinado
+        );
+        mysqli_stmt_execute($stmt);
+        $res = mysqli_stmt_get_result($stmt);
+        $row = $res ? mysqli_fetch_assoc($res) : null;
+        mysqli_stmt_close($stmt);
+        $meta = (int)($row['meta'] ?? 0);
+        if ($meta > 0) return $meta;
+    }
+
+    // 2) Respaldo: si el dashboard está consultando desde admin/scope y el id_superior no coincide,
+    // tomar la última meta positiva capturada para ese subordinado en la misma semana/año/niveles.
+    $sql = "
+        SELECT meta_asignada AS meta
+        FROM ejecucion_operativa_metas
+        WHERE anio = ?
+          AND semana = ?
+          AND id_subordinado = ?
+          AND nivel_superior = ?
+          AND nivel_subordinado = ?
+          AND meta_asignada > 0
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ";
+    $stmt = mysqli_prepare($conexion, $sql);
+    if (!$stmt) return 0;
+    mysqli_stmt_bind_param(
+        $stmt,
+        "iisss",
+        $anio,
+        $semana,
+        $id_subordinado,
+        $nivel_superior,
+        $nivel_subordinado
+    );
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    $row = $res ? mysqli_fetch_assoc($res) : null;
+    mysqli_stmt_close($stmt);
+    return (int)($row['meta'] ?? 0);
+}
+
+function tx_nivel_operativo_meta($nivel_dashboard) {
+    if ($nivel_dashboard === 'director_distrital') return 'DIRECTOR_DISTRITAL';
+    if ($nivel_dashboard === 'lider') return 'LIDER_VENTAS';
+    if ($nivel_dashboard === 'coach') return 'COACH_VENTAS';
+    return '';
+}
+
+function tx_nivel_operativo_subordinado($nivel_dashboard) {
+    if ($nivel_dashboard === 'lider') return 'LIDER_VENTAS';
+    if ($nivel_dashboard === 'coach') return 'COACH_VENTAS';
+    if ($nivel_dashboard === 'vendedor') return 'VENDEDOR';
+    return '';
+}
+
+
 $cumplimiento_inferior_titulo = 'Cumplimiento del nivel inferior vs meta';
 $cumplimiento_inferior_subtitulo = '';
 $cumplimiento_inferior_labels = [];
 $cumplimiento_inferior_real = [];
 $cumplimiento_inferior_meta = [];
 $cumplimiento_inferior_pct = [];
+$cumplimiento_inferior_fuente = [];
 $cumplimiento_inferior_items = [];
 
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
@@ -554,18 +640,48 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             if ($target_nivel_inferior === 'vendedor' && $child_hc === 0) $child_hc = 1;
             $hc_total_children += $child_hc;
             $children_calc[] = [
+                'id_posicion' => $child['id_posicion'] ?? '',
                 'label' => $child['nombre_colaborador'] ?? '',
                 'folios' => $child_folios,
-                'hc' => $child_hc
+                'hc' => $child_hc,
+                'nivel_dashboard' => $target_nivel_inferior
             ];
         }
 
         foreach ($children_calc as $child) {
             $real = tx_real_inst_folios($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
-            $meta = ($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0;
+
+            // Meta oficial de Ejecución Operativa:
+            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se usa esa meta.
+            // Si no existe o es 0, se conserva el cálculo automático por proporción de HC.
+            $nivel_superior_meta = tx_nivel_operativo_meta($nivel_actual_dashboard);
+            $nivel_subordinado_meta = tx_nivel_operativo_subordinado($target_nivel_inferior);
+            $meta_oficial = 0;
+            if ($nivel_superior_meta !== '' && $nivel_subordinado_meta !== '' && !empty($child['id_posicion'])) {
+                $meta_oficial = tx_meta_operativa_asignada(
+                    $conexion,
+                    $anio_operativo_dashboard,
+                    $semana_operativa_dashboard,
+                    $root_dashboard_id,
+                    $child['id_posicion'],
+                    $nivel_superior_meta,
+                    $nivel_subordinado_meta
+                );
+            }
+
+            $meta = ($meta_oficial > 0)
+                ? $meta_oficial
+                : (($hc_total_children > 0) ? round($meta_base * ($child['hc'] / $hc_total_children)) : 0);
+
             if ($real <= 0 && $meta <= 0) continue;
             $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
-            $tmp[] = ['label'=>$child['label'], 'real'=>$real, 'meta'=>$meta, 'pct'=>$pct];
+            $tmp[] = [
+                'label'=>$child['label'],
+                'real'=>$real,
+                'meta'=>$meta,
+                'pct'=>$pct,
+                'meta_fuente'=>($meta_oficial > 0 ? 'operativa' : 'hc')
+            ];
         }
     }
 }
@@ -581,6 +697,7 @@ foreach ($tmp as $r) {
     $cumplimiento_inferior_real[] = (int)$r['real'];
     $cumplimiento_inferior_meta[] = (int)$r['meta'];
     $cumplimiento_inferior_pct[] = (float)$r['pct'];
+    $cumplimiento_inferior_fuente[] = $r['meta_fuente'] ?? '';
 }
 
 
@@ -762,6 +879,7 @@ foreach ($cumplimiento_inferior_labels as $idx_ci => $nombre_ci) {
         'real'   => (int)($cumplimiento_inferior_real[$idx_ci] ?? 0),
         'meta'   => (int)($cumplimiento_inferior_meta[$idx_ci] ?? 0),
         'pct'    => (float)($cumplimiento_inferior_pct[$idx_ci] ?? 0),
+        'fuente' => $cumplimiento_inferior_fuente[$idx_ci] ?? '',
     ];
 }
 usort($cumplimiento_inferior_items, function($a, $b) {
@@ -1384,7 +1502,7 @@ include __DIR__ . '/includes/sidebar.php';
                     </div>
                     <div class="cumplimiento-metric">
                         <?= number_format($pct_item, 0) ?>%
-                        <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?></span>
+                        <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?><?= (($item['fuente'] ?? '') === 'operativa') ? ' · EO' : '' ?></span>
                     </div>
                 </div>
             <?php endforeach; ?>
