@@ -41,7 +41,7 @@ function txp_nav_active($page, $current_page) {
     <a href="<?= $det_path ?>metas_fcst_captura.php" class="nav-item<?= txp_nav_active('fcst_captura', $current_page) ?>">
         <span class="nav-icon">🎯</span> Captura FCST
     </a>
-    <a href="<?= $det_path ?>ejecucion_operativa_captura.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_captura', $current_page) ?>">
+    <a href="<?= $det_path ?>ejecucion_operativa_captura.php?v=81" class="nav-item<?= txp_nav_active('ejecucion_operativa_captura', $current_page) ?>">
         <span class="nav-icon">🚀</span> Ejecución Operativa
     </a>
     <a href="<?= $det_path ?>ejecucion_operativa_acompanamientos.php" class="nav-item<?= txp_nav_active('ejecucion_operativa_acompanamientos', $current_page) ?>" style="padding-left:42px;font-size:.88rem;">
