@@ -1869,66 +1869,38 @@ const pluginTotalesArriba = {
 };
 
 // 2. OPCIONES DE LAS BARRAS
-// FIX: ampliar el eje Y con un colchón de 10% sobre el valor mensual más alto.
-// Esto evita que la etiqueta superior del mes más alto quede recortada.
-function txStackTotals(matrix){
-    if (!matrix || !matrix.length) return [];
-    const len = Math.max(...matrix.map(row => row.length || 0));
-    const totals = Array(len).fill(0);
-    matrix.forEach(row => {
-        row.forEach((value, idx) => {
-            totals[idx] += Number(value || 0);
-        });
-    });
-    return totals;
-}
-
-function txRoundedAxisMax(maxValue){
-    const padded = Math.ceil((Number(maxValue || 0) * 1.10));
-    if (padded <= 100) return 100;
-    const step = padded <= 1000 ? 100 : 200;
-    return Math.ceil(padded / step) * step;
-}
-
-function makeStackOpts(matrix){
-    const totals = txStackTotals(matrix);
-    const maxTotal = totals.length ? Math.max(...totals) : 0;
-    const axisMax = txRoundedAxisMax(maxTotal);
-
-    return {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: {
-            padding: { top: 26 }
-        },
-        plugins: { 
-            legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
-            datalabels: { 
-                display: (context) => context.dataset.data[context.dataIndex] > 0, 
-                color: '#ffffff',
-                font: { weight: 'bold', size: 11 },
-                textShadowColor: 'rgba(0, 0, 0, 0.5)',
-                textShadowBlur: 4,
-                formatter: Math.round
-            }
-        },
-        scales: {
-            y: { 
-                stacked: true, 
-                beginAtZero: true,
-                max: axisMax,
-                grace: '10%',
-                grid: { color: '#e2e8f4' },
-                ticks: { font: { size: 11 } }
-            },
-            x: { 
-                stacked: true, 
-                grid: { display: false },
-                ticks: { font: { size: 11, weight: 'bold' } } 
-            }
+const stackOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { 
+        legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+        datalabels: { 
+            display: (context) => context.dataset.data[context.dataIndex] > 0, 
+            color: '#ffffff',
+            font: { weight: 'bold', size: 11 },
+            textShadowColor: 'rgba(0, 0, 0, 0.5)',
+            textShadowBlur: 4,
+            formatter: Math.round
         }
-    };
-}
+    },
+    scales: {
+        y: { 
+            stacked: true, 
+            beginAtZero: true, 
+            grid: { color: '#e2e8f4' },
+            ticks: { font: { size: 11 } },
+            suggestedMax: (ctx) => {
+                const max = ctx.chart.scales.y?.max;
+                return max ? max * 1.25 : null;
+            }
+        },
+        x: { 
+            stacked: true, 
+            grid: { display: false },
+            ticks: { font: { size: 11, weight: 'bold' } } 
+        }
+    }
+};
 
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
@@ -1941,7 +1913,7 @@ new Chart(document.getElementById('cInstEvo'), {
             borderRadius: i === instCanales.length - 1 ? 4 : 0,
         }))
     },
-    options: makeStackOpts(instData),
+    options: stackOpts,
     plugins: [pluginTotalesArriba]
 });
 
@@ -1956,7 +1928,7 @@ new Chart(document.getElementById('cVentEvo'), {
             borderRadius: i === ventCanales.length - 1 ? 4 : 0,
         }))
     },
-    options: makeStackOpts(ventData),
+    options: stackOpts,
     plugins: [pluginTotalesArriba]
 });
 </script>
