@@ -355,11 +355,46 @@ function obtener_ins_semana($conexion, $anio, $semana, $nivel, $distrito, $folio
     return $total;
 }
 
-$anio_actual = (int)date('Y');
-$semana_actual = (int)date('W');
+$anio_hoy = (int)date('Y');
+$semana_hoy = (int)date('W');
+
+$anio_actual = isset($_GET['anio']) ? (int)$_GET['anio'] : $anio_hoy;
+$semana_actual = isset($_GET['semana']) ? (int)$_GET['semana'] : $semana_hoy;
+if ($semana_actual < 1) $semana_actual = 1;
+if ($semana_actual > 53) $semana_actual = 53;
+
+$max_anio_nav = $anio_hoy;
+$max_semana_nav = $semana_hoy + 1;
+if ($max_semana_nav > 53) {
+    $max_semana_nav = 1;
+    $max_anio_nav++;
+}
+
+if ($anio_actual > $max_anio_nav || ($anio_actual === $max_anio_nav && $semana_actual > $max_semana_nav)) {
+    $anio_actual = $max_anio_nav;
+    $semana_actual = $max_semana_nav;
+}
+
 list($semana_anterior, $anio_semana_anterior) = semana_anterior_calc($semana_actual, $anio_actual);
 
-$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
+/*
+ * Regla HC / Línea de reporte:
+ * - Semana pasada o histórica: HC de la misma semana seleccionada.
+ * - Semana corriente y una semana futura permitida: HC de la última semana cerrada disponible.
+ *   Ejemplo: SEM 22 y SEM 23 usan HC SEM 21 cuando SEM 22 es la corriente.
+ */
+if ($anio_actual < $anio_hoy || ($anio_actual === $anio_hoy && $semana_actual < $semana_hoy)) {
+    $anio_hc = $anio_actual;
+    $semana_hc = $semana_actual;
+} else {
+    list($semana_hc, $anio_hc) = semana_anterior_calc($semana_hoy, $anio_hoy);
+}
+
+$es_semana_pasada = ($anio_actual < $anio_hoy || ($anio_actual === $anio_hoy && $semana_actual < $semana_hoy));
+$es_semana_actual = ($anio_actual === $anio_hoy && $semana_actual === $semana_hoy);
+$es_semana_futura = ($anio_actual > $anio_hoy || ($anio_actual === $anio_hoy && $semana_actual > $semana_hoy));
+
+$responsable = buscar_responsable_sesion($conexion, $anio_hc, $semana_hc, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
 $id_posicion = (string)$responsable['id_posicion'];
 $posicion_lr = $responsable['posicion_lr'] ?? null;
 $numero_talento_gs = $responsable['numero_talento_gs'] ?? '';
@@ -381,7 +416,7 @@ try {
 
 $id_ejecucion = (int)$ejecucion['id'];
 $estatus_ejecucion = $ejecucion['estatus'] ?? 'BORRADOR';
-$bloqueado = in_array($estatus_ejecucion, ['ENVIADO','CERRADO'], true);
+$bloqueado = in_array($estatus_ejecucion, ['ENVIADO','CERRADO'], true) || $es_semana_pasada;
 
 $forecast_row = cargar_forecast_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
 $compromiso_row = cargar_compromiso_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
@@ -390,7 +425,10 @@ $plan_row = cargar_plan($conexion, $id_ejecucion);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $accion_form = $_POST['accion_form'] ?? 'guardar';
 
-    if ($bloqueado) {
+    if ($es_semana_pasada) {
+        $mensaje = 'Semana histórica en modo consulta. No se pueden modificar planes anteriores.';
+        $tipo_mensaje = 'error';
+    } elseif ($bloqueado) {
         $mensaje = 'Este plan ya fue enviado/cerrado y no puede modificarse.';
         $tipo_mensaje = 'error';
     } else {
@@ -419,7 +457,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $acciones_estatus = $_POST['accion_estatus'] ?? [];
         $acciones_comentario = $_POST['accion_comentario'] ?? [];
 
-        $subordinados_tmp = cargar_subordinados_directos($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_subordinado);
+        $subordinados_tmp = cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado);
         $meta_responsable_tmp = obtener_meta_responsable($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_ejecucion, $distrito);
         $meta_distribuida_tmp = 0;
         foreach ($subordinados_tmp as $sub) {
@@ -612,7 +650,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ejecucion = cargar_o_crear_ejecucion($conexion, $anio_actual, $semana_actual, $responsable, $nivel_ejecucion, $distrito, $usuario);
     $id_ejecucion = (int)$ejecucion['id'];
     $estatus_ejecucion = $ejecucion['estatus'] ?? 'BORRADOR';
-    $bloqueado = in_array($estatus_ejecucion, ['ENVIADO','CERRADO'], true);
+    $bloqueado = in_array($estatus_ejecucion, ['ENVIADO','CERRADO'], true) || $es_semana_pasada;
     $forecast_row = cargar_forecast_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
     $compromiso_row = cargar_compromiso_actual($conexion, $anio_actual, $semana_actual, $id_posicion);
     $plan_row = cargar_plan($conexion, $id_ejecucion);
@@ -638,7 +676,7 @@ $observaciones = $plan_row['observaciones'] ?? '';
 $palancas = cargar_palancas($conexion);
 $palancas_seleccionadas = cargar_palancas_seleccionadas($conexion, $id_ejecucion);
 $acciones_guardadas = cargar_acciones($conexion, $id_ejecucion);
-$subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_actual, $semana_actual, $id_posicion, $nivel_subordinado) : [];
+$subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado) : [];
 $metas_asignadas = cargar_metas_asignadas_por_superior($conexion, $anio_actual, $semana_actual, $id_posicion);
 
 $meta_distribuida = 0;
@@ -651,6 +689,16 @@ $disabled = $bloqueado ? 'disabled' : '';
 $readonly_class = $bloqueado ? 'readonly' : '';
 
 while (count($acciones_guardadas) < 5) $acciones_guardadas[] = [];
+
+list($semana_nav_prev, $anio_nav_prev) = semana_anterior_calc($semana_actual, $anio_actual);
+$semana_nav_next = $semana_actual + 1;
+$anio_nav_next = $anio_actual;
+if ($semana_nav_next > 53) {
+    $semana_nav_next = 1;
+    $anio_nav_next++;
+}
+$mostrar_next = !($anio_nav_next > $max_anio_nav || ($anio_nav_next === $max_anio_nav && $semana_nav_next > $max_semana_nav));
+$modo_semana = $es_semana_pasada ? 'CONSULTA HISTÓRICA' : ($es_semana_futura ? 'PLAN FUTURO' : 'SEMANA ACTUAL');
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -673,7 +721,7 @@ while (count($acciones_guardadas) < 5) $acciones_guardadas[] = [];
         .alert{border-radius:16px;padding:14px 16px;margin-bottom:18px;line-height:1.45;font-weight:700}.alert.exito{background:#dcfce7;color:#166534}.alert.error{background:#fee2e2;color:#991b1b}.helper{font-size:.78rem;color:var(--tx-muted);line-height:1.45;margin-top:8px}
         .table-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:16px;background:rgba(255,255,255,.70)}table{width:100%;border-collapse:collapse;font-size:.8rem}th,td{padding:12px 10px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}th{background:#f8fafc;color:#475569;text-transform:uppercase;letter-spacing:.45px;font-size:.7rem;font-weight:900}tr:last-child td{border-bottom:none}.num{text-align:right}.sub-name{font-weight:900}.sub-meta-input{max-width:120px;text-align:right;font-weight:900}.mini{font-size:.72rem;color:var(--tx-muted);font-weight:700;margin-top:2px}
         .palanca-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.palanca-item{border:1px solid #e2e8f0;background:rgba(255,255,255,.68);border-radius:18px;padding:14px}.palanca-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}.palanca-top input{width:auto}.palanca-name{font-weight:900}.actions-grid td input,.actions-grid td textarea,.actions-grid td select{font-size:.78rem;padding:9px;border-radius:12px}.actions-grid textarea{min-height:50px}
-        .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}
+        .actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}.actions-right{display:flex;gap:12px;flex-wrap:wrap}.btn{border:none;border-radius:14px;padding:12px 18px;font-weight:900;cursor:pointer;font-size:.9rem;font-family:inherit;text-decoration:none}.btn-secondary{background:#e8eef7;color:#1a2540}.btn-primary{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%);box-shadow:0 12px 28px rgba(122,43,255,.20)}.btn-danger{color:white;background:linear-gradient(135deg,#16a34a 0%,#059669 100%);box-shadow:0 12px 28px rgba(22,163,74,.18)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn-add{background:#e8eef7;color:#1a2540;border:1px solid var(--tx-border);margin-top:14px}.week-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.week-nav a,.week-nav span{display:inline-flex;align-items:center;border-radius:999px;padding:9px 14px;font-size:.78rem;font-weight:900;text-decoration:none}.week-nav a{border:1px solid var(--tx-border);background:rgba(255,255,255,.88);color:var(--tx-text)}.week-nav .current{color:white;background:linear-gradient(135deg,var(--tx-purple) 0%,var(--tx-pink) 100%)}.week-nav .disabled{opacity:.45;background:#e8eef7;color:#64748b}.mode-note{font-size:.74rem;color:var(--tx-muted);font-weight:800;margin-top:8px}
         @media(max-width:1150px){.grid{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}.palanca-grid{grid-template-columns:1fr}.page-header{flex-direction:column}.status-card{width:100%}}
     </style>
 </head>
@@ -691,8 +739,19 @@ include __DIR__ . '/../includes/sidebar.php';
             <div class="pill-row">
                 <span class="pill active">CAPTURA</span>
                 <span class="pill"><?= h(etiqueta_nivel($nivel_ejecucion)) ?></span>
-                <span class="pill">SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span>
+                <span class="pill"><?= h($modo_semana) ?></span>
+                <span class="pill">SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span><span class="pill">HC SEM <?= h($semana_hc) ?> · <?= h($anio_hc) ?></span>
             </div>
+            <div class="week-nav">
+                <a href="?anio=<?= h($anio_nav_prev) ?>&semana=<?= h($semana_nav_prev) ?>">← SEM <?= h($semana_nav_prev) ?></a>
+                <span class="current">SEM <?= h($semana_actual) ?></span>
+                <?php if ($mostrar_next): ?>
+                    <a href="?anio=<?= h($anio_nav_next) ?>&semana=<?= h($semana_nav_next) ?>">SEM <?= h($semana_nav_next) ?> →</a>
+                <?php else: ?>
+                    <span class="disabled">SEM <?= h($semana_nav_next) ?> →</span>
+                <?php endif; ?>
+            </div>
+            <div class="mode-note">Semanas pasadas: solo consulta · Semana actual/futura permitida: editable hasta enviar.</div>
         </div>
         <div class="status-card">
             <div class="status-label">Estado del plan</div>
@@ -722,27 +781,40 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
 
         <div class="grid" style="margin-top:20px;">
-            <div class="card">
-                <div class="card-title"><h2>1. Compromiso FCST</h2><span>¿A qué me comprometo?</span></div>
-                <div class="field">
-                    <label>Forecast compromiso de la semana actual</label>
-                    <input type="number" name="forecast" min="0" step="1" value="<?= h($forecast_valor) ?>" <?= $disabled ?>>
-                    <div class="helper">Se guarda en <strong>metas_forecast_semanal</strong> con nivel <?= h($nivel_ejecucion) ?>.</div>
+            <div class="card full">
+                <div class="card-title"><h2>1. Distribución de metas</h2><span><?= h(etiqueta_nivel($nivel_ejecucion)) ?> → <?= h(etiqueta_nivel($nivel_subordinado)) ?></span></div>
+                <div class="helper" style="margin-bottom:12px;">Regla: para enviar el plan, la suma asignada debe ser igual o superior a tu meta semanal.</div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Subordinado</th><th>Puesto</th><th>Distrito</th><th class="num">Meta asignada</th></tr></thead>
+                        <tbody>
+                            <?php if (empty($subordinados)): ?>
+                                <tr><td colspan="4">No se encontraron subordinados directos con la línea de reporte HC utilizada.</td></tr>
+                            <?php else: ?>
+                                <?php foreach ($subordinados as $sub):
+                                    $sid = $sub['id_posicion'];
+                                    $meta_sub = (int)($metas_asignadas[$sid]['meta_asignada'] ?? 0);
+                                ?>
+                                    <tr>
+                                        <td><div class="sub-name"><?= h($sub['nombre_colaborador']) ?></div><div class="mini">ID posición: <?= h($sid) ?> · Talento: <?= h($sub['numero_talento_gs']) ?></div></td>
+                                        <td><?= h($sub['posicion']) ?></td>
+                                        <td><?= h(normalizar_distrito_eo($sub['distrito'] ?? '')) ?></td>
+                                        <td class="num"><input class="sub-meta-input" type="number" min="0" step="1" name="meta_sub[<?= h($sid) ?>]" value="<?= h($meta_sub) ?>" <?= $disabled ?>></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
                 </div>
-                <div class="field"><label>Lo que me impulsó en la semana anterior</label><textarea name="impulso_semana_anterior" <?= $disabled ?>><?= h($impulso) ?></textarea></div>
-                <div class="field"><label>Lo que me restó en la semana anterior</label><textarea name="resto_semana_anterior" <?= $disabled ?>><?= h($resto) ?></textarea></div>
-            </div>
-
-            <div class="card">
-                <div class="card-title"><h2>2. Contexto y ejecución</h2><span>FCST reforzado</span></div>
-                <div class="field"><label>Información clave de la competencia</label><textarea name="competencia" <?= $disabled ?>><?= h($competencia_txt) ?></textarea></div>
-                <div class="field"><label>Acciones clave a ejecutar</label><textarea name="acciones_clave" <?= $disabled ?>><?= h($acciones_fcst) ?></textarea></div>
-                <div class="field"><label>Necesidades y apoyos requeridos</label><textarea name="necesidades_apoyo" <?= $disabled ?>><?= h($necesidades) ?></textarea></div>
+                <div class="pill-row">
+                    <span class="pill">Meta propia: <?= number_format($meta_responsable) ?></span>
+                    <span class="pill">Distribuida: <?= number_format($meta_distribuida) ?></span>
+                    <span class="pill <?= $pendiente_asignar > 0 ? '' : 'active' ?>"><?= $pendiente_asignar > 0 ? 'Pendiente: '.number_format($pendiente_asignar) : 'Distribución completa' ?></span>
+                </div>
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>3. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
-                <div class="grid">
+                <div class="card-title"><h2>2. Plan Operativo</h2><span>¿Cómo lo voy a lograr?</span></div>
                     <div class="field"><label>Estrategia general</label><textarea name="estrategia_general" <?= $disabled ?>><?= h($estrategia_general) ?></textarea></div>
                     <div class="field"><label>Riesgos detectados</label><textarea name="riesgos_detectados" <?= $disabled ?>><?= h($riesgos_detectados) ?></textarea></div>
                     <div class="field"><label>Apoyos requeridos</label><textarea name="apoyos_requeridos" <?= $disabled ?>><?= h($apoyos_requeridos) ?></textarea></div>
@@ -751,7 +823,7 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>4. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
+                <div class="card-title"><h2>3. Palancas de ejecución</h2><span>Selecciona prioridades</span></div>
                 <?php if (empty($palancas)): ?>
                     <div class="alert error">No hay palancas activas cargadas en <strong>ejecucion_operativa_palancas</strong>.</div>
                 <?php else: ?>
@@ -781,43 +853,11 @@ include __DIR__ . '/../includes/sidebar.php';
             </div>
 
             <div class="card full">
-                <div class="card-title"><h2>5. Distribución de metas</h2><span><?= h(etiqueta_nivel($nivel_ejecucion)) ?> → <?= h(etiqueta_nivel($nivel_subordinado)) ?></span></div>
-                <div class="helper" style="margin-bottom:12px;">Regla: para enviar el plan, la suma asignada debe ser igual o superior a tu meta semanal.</div>
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr><th>Subordinado</th><th>Puesto</th><th>Distrito</th><th class="num">Meta asignada</th></tr></thead>
-                        <tbody>
-                            <?php if (empty($subordinados)): ?>
-                                <tr><td colspan="4">No se encontraron subordinados directos para la semana actual.</td></tr>
-                            <?php else: ?>
-                                <?php foreach ($subordinados as $sub):
-                                    $sid = $sub['id_posicion'];
-                                    $meta_sub = (int)($metas_asignadas[$sid]['meta_asignada'] ?? 0);
-                                ?>
-                                    <tr>
-                                        <td><div class="sub-name"><?= h($sub['nombre_colaborador']) ?></div><div class="mini">ID posición: <?= h($sid) ?> · Talento: <?= h($sub['numero_talento_gs']) ?></div></td>
-                                        <td><?= h($sub['posicion']) ?></td>
-                                        <td><?= h(normalizar_distrito_eo($sub['distrito'] ?? '')) ?></td>
-                                        <td class="num"><input class="sub-meta-input" type="number" min="0" step="1" name="meta_sub[<?= h($sid) ?>]" value="<?= h($meta_sub) ?>" <?= $disabled ?>></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
-                <div class="pill-row">
-                    <span class="pill">Meta propia: <?= number_format($meta_responsable) ?></span>
-                    <span class="pill">Distribuida: <?= number_format($meta_distribuida) ?></span>
-                    <span class="pill <?= $pendiente_asignar > 0 ? '' : 'active' ?>"><?= $pendiente_asignar > 0 ? 'Pendiente: '.number_format($pendiente_asignar) : 'Distribución completa' ?></span>
-                </div>
-            </div>
-
-            <div class="card full">
-                <div class="card-title"><h2>6. Acciones clave</h2><span>Compromisos de ejecución</span></div>
+                <div class="card-title"><h2>4. Acciones clave</h2><span>Compromisos de ejecución</span></div>
                 <div class="table-wrap">
                     <table class="actions-grid">
                         <thead><tr><th>Acción</th><th>Descripción</th><th>Responsable</th><th>Fecha</th><th>Prioridad</th><th>Estatus</th><th>Comentario</th></tr></thead>
-                        <tbody>
+                        <tbody id="accionesBody">
                         <?php foreach ($acciones_guardadas as $i => $a): ?>
                             <tr>
                                 <td><input type="text" name="accion_item[]" value="<?= h($a['accion'] ?? '') ?>" <?= $disabled ?>></td>
@@ -832,11 +872,16 @@ include __DIR__ . '/../includes/sidebar.php';
                         </tbody>
                     </table>
                 </div>
+                <?php if (!$bloqueado): ?>
+                    <button type="button" class="btn btn-add" id="btnAgregarAccion">+ Agregar acción clave</button>
+                <?php endif; ?>
             </div>
 
             <div class="card full">
                 <div class="card-title"><h2>Control de plan</h2><span><?= $bloqueado ? 'Solo lectura' : 'Editable hasta enviar' ?></span></div>
-                <?php if ($bloqueado): ?>
+                <?php if ($es_semana_pasada): ?>
+                    <div class="helper">Semana histórica en modo consulta. No se permiten modificaciones.</div>
+                <?php elseif ($bloqueado): ?>
                     <div class="helper">Este plan ya fue enviado. Para modificarlo se deberá reabrir desde administración en una fase posterior.</div>
                 <?php else: ?>
                     <div class="helper">Puedes guardar como borrador. Al enviar, el plan queda bloqueado y validará la distribución de metas.</div>
@@ -852,5 +897,47 @@ include __DIR__ . '/../includes/sidebar.php';
         </div>
     </form>
 </main>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('btnAgregarAccion');
+    const tbody = document.getElementById('accionesBody');
+
+    if (!btn || !tbody) return;
+
+    btn.addEventListener('click', function () {
+        const tr = document.createElement('tr');
+
+        tr.innerHTML = `
+            <td><input type="text" name="accion_item[]" value=""></td>
+            <td><textarea name="accion_desc[]"></textarea></td>
+            <td><input type="text" name="accion_resp[]" value=""></td>
+            <td><input type="date" name="accion_fecha[]" value=""></td>
+            <td>
+                <select name="accion_prioridad[]">
+                    <option value="ALTA">Alta</option>
+                    <option value="MEDIA" selected>Media</option>
+                    <option value="BAJA">Baja</option>
+                </select>
+            </td>
+            <td>
+                <select name="accion_estatus[]">
+                    <option value="PENDIENTE" selected>Pendiente</option>
+                    <option value="EN_PROCESO">En proceso</option>
+                    <option value="COMPLETADA">Completada</option>
+                    <option value="CANCELADA">Cancelada</option>
+                </select>
+            </td>
+            <td><input type="text" name="accion_comentario[]" value=""></td>
+        `;
+
+        tbody.appendChild(tr);
+
+        const firstInput = tr.querySelector('input, textarea, select');
+        if (firstInput) firstInput.focus();
+    });
+});
+</script>
 </body>
+
 </html>
