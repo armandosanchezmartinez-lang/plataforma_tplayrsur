@@ -1490,10 +1490,19 @@ $roles_labels = [
 
         .dashboard-analytics-grid{
             display:grid;
-            grid-template-columns:30% 30% 20% 20%;
+            /*
+             * Layout responsivo:
+             * Antes usábamos 30% 30% 20% 20% + gap:18px.
+             * Eso suma 100% + gaps y provoca desbordamiento horizontal.
+             * Con fr mantenemos la proporción 30/30/20/20 sin rebasar el ancho disponible.
+             */
+            grid-template-columns:minmax(0, 3fr) minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr);
             gap:18px;
             align-items:stretch;
             margin:0 0 22px;
+            width:100%;
+            max-width:100%;
+            overflow:hidden;
         }
         .dashboard-analytics-grid > .evo-card,
         .dashboard-analytics-grid > .kpi-card,
@@ -1563,10 +1572,19 @@ $roles_labels = [
 
         .kpi-grid-main{
             display:grid;
-            grid-template-columns:28% 18% 18% 18% 18%;
+            /*
+             * Layout responsivo:
+             * Antes usábamos 28% 18% 18% 18% 18% + gap:18px.
+             * Eso suma 100% + gaps y puede desbordar el navegador.
+             * Con fr mantenemos la proporción visual sin exceder el contenedor.
+             */
+            grid-template-columns:minmax(0, 28fr) minmax(0, 18fr) minmax(0, 18fr) minmax(0, 18fr) minmax(0, 18fr);
             gap:18px;
             align-items:stretch;
             margin:0 0 22px;
+            width:100%;
+            max-width:100%;
+            overflow:hidden;
         }
         .kpi-grid-main > .kpi-card{
             margin:0;
@@ -1574,7 +1592,8 @@ $roles_labels = [
             height:100%;
         }
         .kpi-grid-main .kpi-speed-layout{
-            min-height:170px;
+            min-height:150px;
+            overflow:hidden;
         }
         .kpi-grid-main .speedometer-container{
             transform:scale(.86);
@@ -1589,6 +1608,60 @@ $roles_labels = [
         .cumplimiento-panel-canal{
             padding:20px;
         }
+
+        /* Contención general para evitar que tarjetas o gráficas rompan el ancho del dashboard */
+        .main{
+            max-width:100%;
+            overflow-x:hidden;
+        }
+        .kpi-card,
+        .chart-card,
+        .evo-card,
+        .hierarchy-performance-card{
+            min-width:0;
+            max-width:100%;
+            box-sizing:border-box;
+            overflow:hidden;
+        }
+        .chart-wrap,
+        .evo-wrap{
+            position:relative;
+            width:100%;
+            max-width:100%;
+            overflow:hidden;
+        }
+        .chart-wrap canvas,
+        .evo-wrap canvas{
+            max-width:100% !important;
+        }
+        .dashboard-analytics-grid .chart-wrap{
+            min-height:210px;
+        }
+        .dashboard-analytics-grid .kpi-speed-layout{
+            min-height:210px;
+            overflow:hidden;
+        }
+        .dashboard-analytics-grid .speedometer-container{
+            max-width:100%;
+            transform:scale(.82);
+            transform-origin:center;
+        }
+        .dashboard-analytics-grid .speed-numbers .speed-val{
+            font-size:1.65rem;
+        }
+        .dashboard-analytics-grid .speed-numbers{
+            min-width:96px;
+        }
+        .dashboard-analytics-grid .chart-title{
+            font-size:.88rem;
+            line-height:1.15;
+        }
+        .dashboard-analytics-grid .chart-card{
+            display:flex;
+            flex-direction:column;
+            justify-content:space-between;
+        }
+
         @media(max-width:1200px){
             .kpi-grid-main{
                 grid-template-columns:1fr 1fr;
@@ -1597,7 +1670,14 @@ $roles_labels = [
 
         @media(max-width:1200px){
             .dashboard-analytics-grid{
-                grid-template-columns:1fr 1fr;
+                grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+            }
+        }
+
+        @media(max-width:760px){
+            .dashboard-analytics-grid,
+            .kpi-grid-main{
+                grid-template-columns:1fr;
             }
         }
 
