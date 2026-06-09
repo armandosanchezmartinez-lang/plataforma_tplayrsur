@@ -538,53 +538,33 @@ function tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin
     return $count;
 }
 
+
+function tx_canales_consolidados_dashboard($canal) {
+    $c = strtoupper(trim((string)$canal));
+    if (in_array($c, ['CALL CENTER','CALL CENTER BTL','CALL CENTER WEB'])) {
+        return ['CALL CENTER BTL','CALL CENTER WEB'];
+    }
+    if (in_array($c, ['AUTOEMPRESARIOS','AUTOEMPRESARIOS AUTORIZADOS'])) {
+        return ['AUTOEMPRESARIOS'];
+    }
+    if (in_array($c, ['ECOMMERCE','ECOMMERCE +','WINBACK','VENTA DIGITAL','DISTRIBUIDOR','DESARROLLOS','OTRO'])) {
+        return ['ECOMMERCE','WINBACK','VENTA DIGITAL','DISTRIBUIDOR','DESARROLLOS','OTRO'];
+    }
+    return [trim((string)$canal)];
+}
 function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $dia_inicio, $dia_fin, $scope_sql = '') {
-    $canal_esc = mysqli_real_escape_string($conexion, (string)$canal);
     $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
-
-    /*
-    |--------------------------------------------------------------------------
-    | TOTALXPEDIENT - META POR CANAL DE VENTA
-    |--------------------------------------------------------------------------
-    |
-    | Regla vigente para Dashboard Ejecutivo:
-    |
-    | La meta por canal se calcula con:
-    |
-    |     META = SUM(meta_diaria)
-    |
-    | tomando únicamente los registros del rango seleccionado en el calendario
-    | del dashboard.
-    |
-    | Motivo:
-    | La tabla metas_instalacion ya contiene un registro por día del mes.
-    | Por lo tanto, si el usuario selecciona del día 01 al 08, la meta correcta
-    | es la suma de meta_diaria de esos 8 días, respetando exactamente lo cargado
-    | para cada fecha.
-    |
-    | Ventajas:
-    | - No se calculan días hábiles manualmente.
-    | - Si un domingo o festivo trae meta 0, se respeta.
-    | - Si algún día trae una meta especial, también se respeta.
-    | - La suma de metas por canal debe cuadrar con la meta del velocímetro
-    |   Avance vs Meta, siempre que ambos usen el mismo rango.
-    |
-    | Importante:
-    | Si en el futuro cambia el importador de metas y deja de cargar un registro
-    | por día, esta función deberá revisarse antes de modificar el cálculo.
-    |
-    | Fecha documentación: Junio 2026
-    | Proyecto: TotalXpedient Dashboard Ejecutivo
-    |--------------------------------------------------------------------------
-    */
-
+    $canales = tx_canales_consolidados_dashboard($canal);
+    $canales_sql = "'" . implode("','", array_map(function($v) use ($conexion){
+        return mysqli_real_escape_string($conexion, strtoupper(trim($v)));
+    }, $canales)) . "'";
     $r = mysqli_query($conexion, "
         SELECT COALESCE(SUM(meta_diaria),0) AS meta_rango
         FROM metas_instalacion
         WHERE mes_num = ".(int)$mes."
           AND anio = ".(int)$anio."
           AND dia BETWEEN ".(int)$dia_inicio." AND ".(int)$dia_fin."
-          AND canal = '$canal_esc'
+          AND UPPER(TRIM(canal)) IN ($canales_sql)
           $where_scope
     ");
     $row = $r ? mysqli_fetch_assoc($r) : null;
@@ -592,17 +572,19 @@ function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $d
 }
 
 function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_fecha, $scope_sql = '') {
-    $canal_esc = mysqli_real_escape_string($conexion, (string)$canal);
     $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
-
+    $canales = tx_canales_consolidados_dashboard($canal);
+    $canales_sql = "'" . implode("','", array_map(function($v) use ($conexion){
+        return mysqli_real_escape_string($conexion, trim($v));
+    }, $canales)) . "'";
     $r = mysqli_query($conexion, "
         SELECT COUNT(cuenta) AS total
         FROM instalaciones
-        WHERE MONTH(fecha) = ".(int)$mes."
-          AND YEAR(fecha) = ".(int)$anio."
+        WHERE MONTH(fecha)=".(int)$mes."
+          AND YEAR(fecha)=".(int)$anio."
           $cond_dia_fecha
           AND origen_prospecto <> '-'
-          AND origen_prospecto = '$canal_esc'
+          AND origen_prospecto IN ($canales_sql)
           $where_scope
     ");
     $row = $r ? mysqli_fetch_assoc($r) : null;
@@ -935,7 +917,7 @@ if ($mostrar_cumplimiento_canal) {
     while ($res_canales && $crow = mysqli_fetch_assoc($res_canales)) {
         $canal = trim((string)($crow['canal'] ?? ''));
         if ($canal === '' || $canal === '-') continue;
-        $canales_cumplimiento[$canal] = $canal;
+        if (in_array(strtoupper($canal), ['CALL CENTER BTL','CALL CENTER WEB'])) $canales_cumplimiento['CALL CENTER']='CALL CENTER'; elseif (strtoupper($canal)=='AUTOEMPRESARIOS AUTORIZADOS') $canales_cumplimiento['AUTOEMPRESARIOS']='AUTOEMPRESARIOS'; elseif (in_array(strtoupper($canal), ['ECOMMERCE','WINBACK','VENTA DIGITAL','DISTRIBUIDOR','DESARROLLOS','OTRO'])) $canales_cumplimiento['ECOMMERCE']='ECOMMERCE'; else $canales_cumplimiento[$canal]=$canal;
     }
 
     foreach ($canales_cumplimiento as $canal) {
