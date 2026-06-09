@@ -539,25 +539,122 @@ function tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin
 }
 
 
-function tx_canales_consolidados_dashboard($canal) {
-    $c = strtoupper(trim((string)$canal));
-    if (in_array($c, ['CALL CENTER','CALL CENTER BTL','CALL CENTER WEB'])) {
-        return ['CALL CENTER BTL','CALL CENTER WEB'];
-    }
-    if (in_array($c, ['AUTOEMPRESARIOS','AUTOEMPRESARIOS AUTORIZADOS'])) {
-        return ['AUTOEMPRESARIOS'];
-    }
-    if (in_array($c, ['ECOMMERCE','ECOMMERCE +','WINBACK','VENTA DIGITAL','DISTRIBUIDOR','DESARROLLOS','OTRO'])) {
-        return ['ECOMMERCE','WINBACK','VENTA DIGITAL','DISTRIBUIDOR','DESARROLLOS','OTRO'];
-    }
-    return [trim((string)$canal)];
+function tx_canales_cumplimiento_dashboard() {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - HOMOLOGACIÓN DE CANALES PARA CUMPLIMIENTO
+    |--------------------------------------------------------------------------
+    |
+    | Vista: Cumplimiento por canal de venta.
+    |
+    | Las tablas no usan exactamente los mismos nombres:
+    |
+    | metas_instalacion.canal:
+    |   Cambaceo, Punto de Venta, Call Center BTL, Call Center Web,
+    |   Autoempresarios, Venta Técnico, Ecommerce.
+    |
+    | instalaciones.origen_prospecto:
+    |   Cambaceo, Punto de Venta, Call Center, Autoempresarios Autorizados,
+    |   eCommerce, Venta Digital, Winback, Desarrollos, Distribuidor, Otro.
+    |
+    | Regla vigente de consolidación:
+    |
+    |   Cambaceo:
+    |       Meta = Cambaceo
+    |       Real = Cambaceo
+    |
+    |   Punto de Venta:
+    |       Meta = Punto de Venta
+    |       Real = Punto de Venta
+    |
+    |   Call Center:
+    |       Meta = Call Center BTL + Call Center Web
+    |       Real = Call Center
+    |
+    |   Autoempresarios Autorizados:
+    |       Meta = Autoempresarios + Venta Técnico
+    |       Real = Autoempresarios Autorizados
+    |
+    |   eCommerce:
+    |       Meta = Ecommerce
+    |       Real = eCommerce
+    |
+    |   Otros:
+    |       Meta = 0, salvo que en el futuro se cargue una meta específica.
+    |       Real = Venta Digital + Winback + Desarrollos + Distribuidor + Otro.
+    |
+    | Si cambia el importador o los nombres de canales, actualizar este mapa.
+    |
+    | Fecha documentación: Junio 2026
+    | Proyecto: TotalXpedient Dashboard Ejecutivo
+    |--------------------------------------------------------------------------
+    */
+    return [
+        'Cambaceo' => [
+            'meta' => ['Cambaceo'],
+            'real' => ['Cambaceo']
+        ],
+        'Punto de Venta' => [
+            'meta' => ['Punto de Venta'],
+            'real' => ['Punto de Venta']
+        ],
+        'Call Center' => [
+            'meta' => ['Call Center BTL', 'Call Center Web'],
+            'real' => ['Call Center']
+        ],
+        'Autoempresarios Autorizados' => [
+            'meta' => ['Autoempresarios', 'Venta Técnico'],
+            'real' => ['Autoempresarios Autorizados']
+        ],
+        'eCommerce' => [
+            'meta' => ['Ecommerce'],
+            'real' => ['eCommerce']
+        ],
+        'Otros' => [
+            'meta' => [],
+            'real' => ['Venta Digital', 'Winback', 'Desarrollos', 'Distribuidor', 'Otro']
+        ],
+    ];
 }
+
+function tx_sql_in_upper_trim($conexion, $vals) {
+    $vals = array_values(array_filter(array_unique($vals), function($v) {
+        return trim((string)$v) !== '';
+    }));
+    if (empty($vals)) return "''";
+    return "'" . implode("','", array_map(function($v) use ($conexion) {
+        return mysqli_real_escape_string($conexion, strtoupper(trim((string)$v)));
+    }, $vals)) . "'";
+}
+
 function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $dia_inicio, $dia_fin, $scope_sql = '') {
     $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
-    $canales = tx_canales_consolidados_dashboard($canal);
-    $canales_sql = "'" . implode("','", array_map(function($v) use ($conexion){
-        return mysqli_real_escape_string($conexion, strtoupper(trim($v)));
-    }, $canales)) . "'";
+    $mapa = tx_canales_cumplimiento_dashboard();
+    $canales_meta = $mapa[$canal]['meta'] ?? [];
+
+    if (empty($canales_meta)) return 0;
+
+    $canales_sql = tx_sql_in_upper_trim($conexion, $canales_meta);
+
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - META POR CANAL DE VENTA
+    |--------------------------------------------------------------------------
+    |
+    | La meta por canal se calcula con:
+    |
+    |     META = SUM(meta_diaria)
+    |
+    | usando el rango seleccionado en el calendario del dashboard.
+    |
+    | Esto respeta la carga diaria real de metas:
+    | si un día viene con meta 0, especial o ajustada, se toma tal cual.
+    |
+    | La suma de metas por canal debe cuadrar con la meta del velocímetro
+    | Avance vs Meta, siempre que ambos usen el mismo rango y el mismo scope.
+    |--------------------------------------------------------------------------
+    */
+
     $r = mysqli_query($conexion, "
         SELECT COALESCE(SUM(meta_diaria),0) AS meta_rango
         FROM metas_instalacion
@@ -573,18 +670,22 @@ function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $d
 
 function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_fecha, $scope_sql = '') {
     $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
-    $canales = tx_canales_consolidados_dashboard($canal);
-    $canales_sql = "'" . implode("','", array_map(function($v) use ($conexion){
-        return mysqli_real_escape_string($conexion, trim($v));
-    }, $canales)) . "'";
+    $mapa = tx_canales_cumplimiento_dashboard();
+    $canales_real = $mapa[$canal]['real'] ?? [];
+
+    if (empty($canales_real)) return 0;
+
+    $canales_sql = tx_sql_in_upper_trim($conexion, $canales_real);
+
     $r = mysqli_query($conexion, "
         SELECT COUNT(cuenta) AS total
         FROM instalaciones
         WHERE MONTH(fecha)=".(int)$mes."
           AND YEAR(fecha)=".(int)$anio."
           $cond_dia_fecha
+          AND origen_prospecto IS NOT NULL
           AND origen_prospecto <> '-'
-          AND origen_prospecto IN ($canales_sql)
+          AND UPPER(TRIM(origen_prospecto)) IN ($canales_sql)
           $where_scope
     ");
     $row = $r ? mysqli_fetch_assoc($r) : null;
@@ -873,7 +974,7 @@ foreach ($tmp as $r) {
 // ── CUMPLIMIENTO POR CANAL DE VENTA ──────────────────────────────────────────
 // Visible únicamente para Administrador, Director Regional y Director Distrital.
 // Compara Venta instalada (instalaciones.origen_prospecto) vs meta por canal en metas_instalacion.
-// La meta se obtiene con SUM(meta_diaria) del rango seleccionado en el calendario.
+// Usa mapa consolidado para homologar nombres entre metas_instalacion e instalaciones.
 $cumplimiento_canal_items = [];
 $mostrar_cumplimiento_canal = false;
 $scope_canal_sql = '';
@@ -892,33 +993,9 @@ if ($rol_consulta === 'admin') {
 }
 
 if ($mostrar_cumplimiento_canal) {
-    $canales_cumplimiento = [];
-    $where_scope_canal = $scope_canal_sql !== '' ? " AND distrito IN ($scope_canal_sql)" : "";
-
-    $res_canales = mysqli_query($conexion, "
-        SELECT DISTINCT canal AS canal
-        FROM metas_instalacion
-        WHERE mes_num = ".(int)$mes_actual."
-          AND anio = ".(int)$anio_query."
-          AND dia BETWEEN ".(int)$dia_inicio_dashboard." AND ".(int)$dia_fin_dashboard."
-          AND canal IS NOT NULL
-          AND TRIM(canal) <> ''
-          $where_scope_canal
-        UNION
-        SELECT DISTINCT origen_prospecto AS canal
-        FROM instalaciones
-        WHERE MONTH(fecha) = ".(int)$mes_actual."
-          AND YEAR(fecha) = ".(int)$anio_query."
-          $cond_dia_fecha
-          AND origen_prospecto <> '-'
-          $where_scope_canal
-    ");
-
-    while ($res_canales && $crow = mysqli_fetch_assoc($res_canales)) {
-        $canal = trim((string)($crow['canal'] ?? ''));
-        if ($canal === '' || $canal === '-') continue;
-        if (in_array(strtoupper($canal), ['CALL CENTER BTL','CALL CENTER WEB'])) $canales_cumplimiento['CALL CENTER']='CALL CENTER'; elseif (strtoupper($canal)=='AUTOEMPRESARIOS AUTORIZADOS') $canales_cumplimiento['AUTOEMPRESARIOS']='AUTOEMPRESARIOS'; elseif (in_array(strtoupper($canal), ['ECOMMERCE','WINBACK','VENTA DIGITAL','DISTRIBUIDOR','DESARROLLOS','OTRO'])) $canales_cumplimiento['ECOMMERCE']='ECOMMERCE'; else $canales_cumplimiento[$canal]=$canal;
-    }
+    // Catálogo fijo consolidado para evitar duplicados como:
+    // Call Center / Call Center BTL / Call Center Web.
+    $canales_cumplimiento = array_keys(tx_canales_cumplimiento_dashboard());
 
     foreach ($canales_cumplimiento as $canal) {
         $real_canal = tx_real_inst_canal_dashboard(
