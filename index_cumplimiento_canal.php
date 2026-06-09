@@ -547,6 +547,7 @@ function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $d
         FROM metas_instalacion
         WHERE mes_num = ".(int)$mes."
           AND anio = ".(int)$anio."
+          AND dia = 1
           AND canal = '$canal_esc'
           $where_scope
     ");
@@ -865,6 +866,7 @@ foreach ($tmp as $r) {
 // ── CUMPLIMIENTO POR CANAL DE VENTA ──────────────────────────────────────────
 // Visible únicamente para Administrador, Director Regional y Director Distrital.
 // Compara Venta instalada (instalaciones.origen_prospecto) vs meta por canal en metas_instalacion.
+// IMPORTANTE: metas_instalacion contiene la meta mensual repetida por día; por eso se lee dia=1.
 $cumplimiento_canal_items = [];
 $mostrar_cumplimiento_canal = false;
 $scope_canal_sql = '';
@@ -891,6 +893,7 @@ if ($mostrar_cumplimiento_canal) {
         FROM metas_instalacion
         WHERE mes_num = ".(int)$mes_actual."
           AND anio = ".(int)$anio_query."
+          AND dia = 1
           AND canal IS NOT NULL
           AND TRIM(canal) <> ''
           $where_scope_canal
