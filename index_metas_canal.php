@@ -461,16 +461,16 @@ if ($mostrar_meta) {
         $kpi_meta_pct  = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     } else {
         if ($rol_consulta === 'admin') {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard");
         } elseif ($scope_filtrar_por_distrito) {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($scope_distritos_sql)");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard AND distrito IN ($scope_distritos_sql)");
         } else {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard AND distrito IN ($distritos_sql)");
         }
 
         if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
             $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
-            $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
+            $kpi_meta_acum     = round($meta_diaria_total);
             $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
         }
     }
@@ -542,28 +542,53 @@ function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $d
     $canal_esc = mysqli_real_escape_string($conexion, (string)$canal);
     $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
 
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - META POR CANAL DE VENTA
+    |--------------------------------------------------------------------------
+    |
+    | Regla vigente para Dashboard Ejecutivo:
+    |
+    | La meta por canal se calcula con:
+    |
+    |     META = SUM(meta_diaria)
+    |
+    | tomando únicamente los registros del rango seleccionado en el calendario
+    | del dashboard.
+    |
+    | Motivo:
+    | La tabla metas_instalacion ya contiene un registro por día del mes.
+    | Por lo tanto, si el usuario selecciona del día 01 al 08, la meta correcta
+    | es la suma de meta_diaria de esos 8 días, respetando exactamente lo cargado
+    | para cada fecha.
+    |
+    | Ventajas:
+    | - No se calculan días hábiles manualmente.
+    | - Si un domingo o festivo trae meta 0, se respeta.
+    | - Si algún día trae una meta especial, también se respeta.
+    | - La suma de metas por canal debe cuadrar con la meta del velocímetro
+    |   Avance vs Meta, siempre que ambos usen el mismo rango.
+    |
+    | Importante:
+    | Si en el futuro cambia el importador de metas y deja de cargar un registro
+    | por día, esta función deberá revisarse antes de modificar el cálculo.
+    |
+    | Fecha documentación: Junio 2026
+    | Proyecto: TotalXpedient Dashboard Ejecutivo
+    |--------------------------------------------------------------------------
+    */
+
     $r = mysqli_query($conexion, "
-        SELECT COALESCE(SUM(meta),0) AS meta_mes
+        SELECT COALESCE(SUM(meta_diaria),0) AS meta_rango
         FROM metas_instalacion
         WHERE mes_num = ".(int)$mes."
           AND anio = ".(int)$anio."
-          AND dia = 1
+          AND dia BETWEEN ".(int)$dia_inicio." AND ".(int)$dia_fin."
           AND canal = '$canal_esc'
           $where_scope
     ");
     $row = $r ? mysqli_fetch_assoc($r) : null;
-    $meta_mes = (float)($row['meta_mes'] ?? 0);
-
-    if ($rango_mode === 'completo') {
-        return (int)round($meta_mes);
-    }
-
-    $ultimo_dia = (int)date('t', strtotime(sprintf('%04d-%02d-01', (int)$anio, (int)$mes)));
-    $habiles_mes = tx_dias_habiles_rango_mes($conexion, $anio, $mes, 1, $ultimo_dia);
-    $habiles_rango = tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin);
-
-    if ($habiles_mes <= 0) return 0;
-    return (int)round(($meta_mes / $habiles_mes) * $habiles_rango);
+    return (int)round((float)($row['meta_rango'] ?? 0));
 }
 
 function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_fecha, $scope_sql = '') {
@@ -866,7 +891,7 @@ foreach ($tmp as $r) {
 // ── CUMPLIMIENTO POR CANAL DE VENTA ──────────────────────────────────────────
 // Visible únicamente para Administrador, Director Regional y Director Distrital.
 // Compara Venta instalada (instalaciones.origen_prospecto) vs meta por canal en metas_instalacion.
-// IMPORTANTE: metas_instalacion contiene la meta mensual repetida por día; por eso se lee dia=1.
+// La meta se obtiene con SUM(meta_diaria) del rango seleccionado en el calendario.
 $cumplimiento_canal_items = [];
 $mostrar_cumplimiento_canal = false;
 $scope_canal_sql = '';
@@ -893,7 +918,7 @@ if ($mostrar_cumplimiento_canal) {
         FROM metas_instalacion
         WHERE mes_num = ".(int)$mes_actual."
           AND anio = ".(int)$anio_query."
-          AND dia = 1
+          AND dia BETWEEN ".(int)$dia_inicio_dashboard." AND ".(int)$dia_fin_dashboard."
           AND canal IS NOT NULL
           AND TRIM(canal) <> ''
           $where_scope_canal
