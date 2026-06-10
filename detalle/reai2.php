@@ -280,190 +280,329 @@ if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
     $anio_hc   = (int)$row_sem['anio'];
 }
 
-// ── OBTENER VENDEDORES SEGÚN JERARQUÍA ───────────────────────────────────────
+// ── OBTENER COLABORADORES SEGÚN JERARQUÍA ────────────────────────────────────
+// REAI jerárquico:
+// ADMIN / DIRECCIÓN REGIONAL ve 4 bloques en la misma matriz: Directores Distritales, Líderes, Coaches y Vendedores.
+// Director Distrital ve: Líderes, Coaches y Vendedores de su distrito/línea.
+// Líder ve: Coaches y Vendedores de su línea.
+// Coach ve: Vendedores de su línea.
 $vendedores = [];
-$agrupador_label = 'Línea directa';
-if ($semana_hc && $anio_hc) {
-    if ($rol === 'coach') {
-        // Línea directa del coach: sus vendedores.
-        $agrupador_label = 'Línea directa · Vendedores';
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
-                     c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach,
-                     NULL AS nombre_lider, NULL AS talento_lider,
-                     NULL AS nombre_director, NULL AS talento_director,
-                     v.nombre_colaborador AS linea_directa_nombre,
-                     v.numero_talento_gs AS linea_directa_id,
-                     'VENDEDOR' AS linea_directa_nivel,
-                     '' AS linea_indirecta
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     WHERE v.posicion_lr = ? AND v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_hc, $anio_hc);
-    } elseif ($rol === 'lider') {
-        // Línea directa del líder: coaches. Línea indirecta: vendedores.
-        $agrupador_label = 'Línea directa · Coaches';
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
-                     c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach,
-                     NULL AS nombre_lider, NULL AS talento_lider,
-                     NULL AS nombre_director, NULL AS talento_director,
-                     c.nombre_colaborador AS linea_directa_nombre,
-                     c.numero_talento_gs AS linea_directa_id,
-                     'COACH' AS linea_directa_nivel,
-                     CONCAT('Vendedor: ', v.nombre_colaborador) AS linea_indirecta
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     WHERE c.posicion_lr = ? AND v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY c.nombre_colaborador, v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_hc, $anio_hc);
-    } elseif ($rol === 'director_distrital') {
-        // Línea directa del director distrital: líderes. Línea indirecta: coaches y vendedores.
-        $agrupador_label = 'Línea directa · Líderes';
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
-                     c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach,
-                     l.nombre_colaborador AS nombre_lider, l.numero_talento_gs AS talento_lider,
-                     NULL AS nombre_director, NULL AS talento_director,
-                     l.nombre_colaborador AS linea_directa_nombre,
-                     l.numero_talento_gs AS linea_directa_id,
-                     'LÍDER' AS linea_directa_nivel,
-                     CONCAT('Coach: ', c.nombre_colaborador, ' · Vendedor: ', v.nombre_colaborador) AS linea_indirecta
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     INNER JOIN hc l ON c.posicion_lr = l.id_posicion AND l.semana = v.semana AND l.anio = v.anio
-                     WHERE l.posicion_lr = ? AND v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY l.nombre_colaborador, c.nombre_colaborador, v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana_hc, $anio_hc);
-    } else {
-        // ADMIN / DIRECCIÓN REGIONAL:
-        // Línea directa: Directores Distritales.
-        // Línea indirecta: Líderes, Coaches y Vendedores.
-        $agrupador_label = 'Línea directa · Directores Distritales';
-        $sql_vend = "SELECT v.nombre_colaborador, v.numero_talento_gs, v.fecha_alta, v.distrito, v.posicion AS canal_venta,
-                     TIMESTAMPDIFF(MONTH, v.fecha_alta, CURDATE()) AS antiguedad,
-                     c.nombre_colaborador AS nombre_coach, c.numero_talento_gs AS talento_coach,
-                     l.nombre_colaborador AS nombre_lider, l.numero_talento_gs AS talento_lider,
-                     d.nombre_colaborador AS nombre_director, d.numero_talento_gs AS talento_director,
-                     COALESCE(d.nombre_colaborador, v.distrito, 'SIN DIRECTOR') AS linea_directa_nombre,
-                     COALESCE(d.numero_talento_gs, v.distrito, 'SIN_DIRECTOR') AS linea_directa_id,
-                     'DIRECTOR DISTRITAL' AS linea_directa_nivel,
-                     CONCAT('Líder: ', COALESCE(l.nombre_colaborador,'—'), ' · Coach: ', COALESCE(c.nombre_colaborador,'—'), ' · Vendedor: ', v.nombre_colaborador) AS linea_indirecta
-                     FROM hc v
-                     INNER JOIN hc c ON v.posicion_lr = c.id_posicion AND c.semana = v.semana AND c.anio = v.anio
-                     LEFT JOIN hc l ON c.posicion_lr = l.id_posicion AND l.semana = v.semana AND l.anio = v.anio
-                     LEFT JOIN hc d ON l.posicion_lr = d.id_posicion AND d.semana = v.semana AND d.anio = v.anio
-                     WHERE v.posicion IN ($puestos_in)
-                     AND v.semana = ? AND v.anio = ?
-                     AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                     ORDER BY linea_directa_nombre, l.nombre_colaborador, c.nombre_colaborador, v.nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql_vend);
-        mysqli_stmt_bind_param($stmt, "ii", $semana_hc, $anio_hc);
+$hc_rows = [];
+$children_by_lr = [];
+$by_id_posicion = [];
+$by_talento = [];
+
+function es_puesto_vendedor_reai($posicion, $puestos_comerciales) {
+    return in_array(trim((string)$posicion), $puestos_comerciales, true);
+}
+function es_director_distrital_reai($row) {
+    $p = normaliza_key($row['posicion'] ?? '');
+    return strpos($p, 'DIRECTOR DISTRITAL') !== false;
+}
+function inferir_nivel_reai($row, $puestos_comerciales) {
+    if (es_puesto_vendedor_reai($row['posicion'] ?? '', $puestos_comerciales)) return 'VENDEDOR';
+    if (es_director_distrital_reai($row)) return 'DIRECTOR DISTRITAL';
+    $p = normaliza_key($row['posicion'] ?? '');
+    if (strpos($p, 'COACH') !== false) return 'COACH';
+    if (strpos($p, 'LIDER') !== false || strpos($p, 'GERENTE') !== false) return 'LÍDER';
+    return 'COLABORADOR';
+}
+function obtener_vendedores_descendientes_reai($id_posicion, &$children_by_lr, $puestos_comerciales, &$memo = []) {
+    $key = (string)$id_posicion;
+    if (isset($memo[$key])) return $memo[$key];
+    $out = [];
+    foreach ($children_by_lr[$key] ?? [] as $child) {
+        if (es_puesto_vendedor_reai($child['posicion'] ?? '', $puestos_comerciales)) {
+            if (!empty($child['numero_talento_gs'])) $out[] = (string)$child['numero_talento_gs'];
+        } else {
+            $out = array_merge($out, obtener_vendedores_descendientes_reai($child['id_posicion'] ?? '', $children_by_lr, $puestos_comerciales, $memo));
+        }
     }
-    mysqli_stmt_execute($stmt);
-    $res_vend = mysqli_stmt_get_result($stmt);
-    while ($row = mysqli_fetch_assoc($res_vend)) $vendedores[] = $row;
-    mysqli_stmt_close($stmt);
+    $out = array_values(array_unique(array_filter($out)));
+    $memo[$key] = $out;
+    return $out;
+}
+function crear_fila_reai($row, $nivel, $child_talentos = []) {
+    $antig = 0;
+    if (!empty($row['fecha_alta']) && $row['fecha_alta'] !== '0000-00-00') {
+        try {
+            $fa = new DateTime($row['fecha_alta']);
+            $hoy = new DateTime();
+            $antig = max(0, ($hoy->format('Y') - $fa->format('Y')) * 12 + ($hoy->format('n') - $fa->format('n')));
+        } catch (Exception $e) { $antig = 0; }
+    }
+    return [
+        'nombre_colaborador' => $row['nombre_colaborador'] ?? '',
+        'numero_talento_gs'  => (string)($row['numero_talento_gs'] ?? ''),
+        'id_posicion'        => (string)($row['id_posicion'] ?? ''),
+        'posicion_lr'        => (string)($row['posicion_lr'] ?? ''),
+        'fecha_alta'         => $row['fecha_alta'] ?? null,
+        'distrito'           => $row['distrito'] ?? '',
+        'canal_venta'        => $row['posicion'] ?? '',
+        'posicion'           => $row['posicion'] ?? '',
+        'antiguedad'         => $antig,
+        'nivel_reai'         => $nivel,
+        'child_talentos'     => array_values(array_unique(array_filter($child_talentos))),
+    ];
+}
+function ordenar_por_nombre_reai(&$arr) {
+    usort($arr, function($a, $b) { return strcasecmp($a['nombre_colaborador'] ?? '', $b['nombre_colaborador'] ?? ''); });
 }
 
-// ── MÉTRICAS POR VENDEDOR ────────────────────────────────────────────────────
+if ($semana_hc && $anio_hc) {
+    $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, distrito, fecha_alta
+               FROM hc
+               WHERE semana = ? AND anio = ?
+                 AND numero_talento_gs NOT LIKE '%VACANTE%'
+                 AND nombre_colaborador NOT LIKE '%VACANTE%'";
+    $stmt_hc = mysqli_prepare($conexion, $sql_hc);
+    mysqli_stmt_bind_param($stmt_hc, "ii", $semana_hc, $anio_hc);
+    mysqli_stmt_execute($stmt_hc);
+    $res_hc = mysqli_stmt_get_result($stmt_hc);
+    while ($r = mysqli_fetch_assoc($res_hc)) {
+        $r['id_posicion'] = (string)($r['id_posicion'] ?? '');
+        $r['posicion_lr'] = (string)($r['posicion_lr'] ?? '');
+        $r['numero_talento_gs'] = (string)($r['numero_talento_gs'] ?? '');
+        $hc_rows[] = $r;
+        if ($r['id_posicion'] !== '') $by_id_posicion[$r['id_posicion']] = $r;
+        if ($r['numero_talento_gs'] !== '') $by_talento[$r['numero_talento_gs']] = $r;
+        $children_by_lr[$r['posicion_lr']][] = $r;
+    }
+    mysqli_stmt_close($stmt_hc);
+
+    $memo_desc = [];
+    $agregar_fila = function($row, $nivel) use (&$vendedores, &$children_by_lr, $puestos_comerciales, &$memo_desc) {
+        if (empty($row['numero_talento_gs'])) return;
+        if ($nivel === 'VENDEDOR') {
+            $childs = [(string)$row['numero_talento_gs']];
+        } else {
+            $childs = obtener_vendedores_descendientes_reai($row['id_posicion'] ?? '', $children_by_lr, $puestos_comerciales, $memo_desc);
+        }
+        // Se muestra el puesto aunque temporalmente no tenga vendedores descendientes; sus métricas quedan en cero.
+        $vendedores[] = crear_fila_reai($row, $nivel, $childs);
+    };
+
+    $directores = array_values(array_filter($hc_rows, function($r) { return es_director_distrital_reai($r); }));
+    ordenar_por_nombre_reai($directores);
+
+    if ($rol === 'admin' || $rol === 'director_regional') {
+        // 1) Línea directa: Directores Distritales.
+        foreach ($directores as $dd) $agregar_fila($dd, 'DIRECTOR DISTRITAL');
+
+        // 2) Línea indirecta: Líderes, Coaches y Vendedores.
+        $lideres = [];
+        foreach ($directores as $dd) {
+            foreach ($children_by_lr[(string)$dd['id_posicion']] ?? [] as $l) {
+                if (!es_puesto_vendedor_reai($l['posicion'] ?? '', $puestos_comerciales)) $lideres[] = $l;
+            }
+        }
+        ordenar_por_nombre_reai($lideres);
+        foreach ($lideres as $l) $agregar_fila($l, 'LÍDER');
+
+        $coaches = [];
+        foreach ($lideres as $l) {
+            foreach ($children_by_lr[(string)$l['id_posicion']] ?? [] as $c) {
+                if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
+            }
+        }
+        ordenar_por_nombre_reai($coaches);
+        foreach ($coaches as $c) $agregar_fila($c, 'COACH');
+
+        $vend_rows = [];
+        foreach ($coaches as $c) {
+            foreach ($children_by_lr[(string)$c['id_posicion']] ?? [] as $v) {
+                if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+            }
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
+    } elseif ($rol === 'director_distrital') {
+        $lideres = [];
+        foreach ($children_by_lr[(string)$id_posicion] ?? [] as $l) {
+            if (!es_puesto_vendedor_reai($l['posicion'] ?? '', $puestos_comerciales)) $lideres[] = $l;
+        }
+        ordenar_por_nombre_reai($lideres);
+        foreach ($lideres as $l) $agregar_fila($l, 'LÍDER');
+
+        $coaches = [];
+        foreach ($lideres as $l) {
+            foreach ($children_by_lr[(string)$l['id_posicion']] ?? [] as $c) {
+                if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
+            }
+        }
+        ordenar_por_nombre_reai($coaches);
+        foreach ($coaches as $c) $agregar_fila($c, 'COACH');
+
+        $vend_rows = [];
+        foreach ($coaches as $c) {
+            foreach ($children_by_lr[(string)$c['id_posicion']] ?? [] as $v) {
+                if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+            }
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
+    } elseif ($rol === 'lider') {
+        $coaches = [];
+        foreach ($children_by_lr[(string)$id_posicion] ?? [] as $c) {
+            if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
+        }
+        ordenar_por_nombre_reai($coaches);
+        foreach ($coaches as $c) $agregar_fila($c, 'COACH');
+
+        $vend_rows = [];
+        foreach ($coaches as $c) {
+            foreach ($children_by_lr[(string)$c['id_posicion']] ?? [] as $v) {
+                if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+            }
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
+    } elseif ($rol === 'coach') {
+        $vend_rows = [];
+        foreach ($children_by_lr[(string)$id_posicion] ?? [] as $v) {
+            if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
+    } else {
+        if (isset($by_talento[(string)$talento_gs_coach])) $agregar_fila($by_talento[(string)$talento_gs_coach], inferir_nivel_reai($by_talento[(string)$talento_gs_coach], $puestos_comerciales));
+    }
+}
+
+// ── MÉTRICAS POR NIVEL / COLABORADOR ───────────────────────────────────────
 $stats = [];
 if (!empty($vendedores)) {
-    $talentos = array_column($vendedores, 'numero_talento_gs');
-    $ph = implode(',', array_fill(0, count($talentos), '?'));
-    $tipos = str_repeat('s', count($talentos));
+    $talentos_reai = array_values(array_unique(array_filter(array_map(function($v) { return (string)($v['numero_talento_gs'] ?? ''); }, $vendedores))));
+    $talentos_metricas = [];
+    foreach ($vendedores as $row) {
+        foreach (($row['child_talentos'] ?? []) as $tv) $talentos_metricas[] = (string)$tv;
+    }
+    $talentos_metricas = array_values(array_unique(array_filter($talentos_metricas)));
 
     $fi_base = $periodo_base['inicio'];
     $ff_base = $periodo_base['fin'];
     $fi_act  = $periodo_actual['inicio'];
     $ff_act  = $periodo_actual['fin'];
 
-    $stmt_ib = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_ib, 'ss'.$tipos, $fi_base, $ff_base, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_ib);
-    $res_ib = mysqli_stmt_get_result($stmt_ib);
-    while ($r = mysqli_fetch_assoc($res_ib)) $stats[$r['folio_empleado']]['inst_base'] = (int)$r['total'];
-    mysqli_stmt_close($stmt_ib);
+    $metricas_vendedor = [];
+    if (!empty($talentos_metricas)) {
+        $phm = implode(',', array_fill(0, count($talentos_metricas), '?'));
+        $tiposm = str_repeat('s', count($talentos_metricas));
 
-    $stmt_ia = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_ia, 'ss'.$tipos, $fi_act, $ff_act, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_ia);
-    $res_ia = mysqli_stmt_get_result($stmt_ia);
-    while ($r = mysqli_fetch_assoc($res_ia)) $stats[$r['folio_empleado']]['inst_actual'] = (int)$r['total'];
-    mysqli_stmt_close($stmt_ia);
+        $stmt_ib = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($phm) GROUP BY folio_empleado");
+        mysqli_stmt_bind_param($stmt_ib, 'ss'.$tiposm, $fi_base, $ff_base, ...array_values($talentos_metricas));
+        mysqli_stmt_execute($stmt_ib);
+        $res_ib = mysqli_stmt_get_result($stmt_ib);
+        while ($r = mysqli_fetch_assoc($res_ib)) $metricas_vendedor[$r['folio_empleado']]['inst_base'] = (int)$r['total'];
+        mysqli_stmt_close($stmt_ib);
 
-    // Instalaciones de últimos 3 meses completos anteriores al mes actual.
-    $stmt_i3m = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($ph) GROUP BY folio_empleado");
-    mysqli_stmt_bind_param($stmt_i3m, 'ss'.$tipos, $fecha_3m_inicio, $fecha_3m_fin, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_i3m);
-    $res_i3m = mysqli_stmt_get_result($stmt_i3m);
-    while ($r = mysqli_fetch_assoc($res_i3m)) $stats[$r['folio_empleado']]['inst_3m'] = (int)$r['total'];
-    mysqli_stmt_close($stmt_i3m);
+        $stmt_ia = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($phm) GROUP BY folio_empleado");
+        mysqli_stmt_bind_param($stmt_ia, 'ss'.$tiposm, $fi_act, $ff_act, ...array_values($talentos_metricas));
+        mysqli_stmt_execute($stmt_ia);
+        $res_ia = mysqli_stmt_get_result($stmt_ia);
+        while ($r = mysqli_fetch_assoc($res_ia)) $metricas_vendedor[$r['folio_empleado']]['inst_actual'] = (int)$r['total'];
+        mysqli_stmt_close($stmt_ia);
 
-    $stmt_rc = mysqli_prepare($conexion, "SELECT numero_talento_gs, asunto, COUNT(*) AS total, MAX(fecha) AS ultima_fecha FROM reai WHERE numero_talento_gs IN ($ph) GROUP BY numero_talento_gs, asunto");
-    mysqli_stmt_bind_param($stmt_rc, $tipos, ...array_values($talentos));
-    mysqli_stmt_execute($stmt_rc);
-    $res_rc = mysqli_stmt_get_result($stmt_rc);
-    while ($r = mysqli_fetch_assoc($res_rc)) {
-        $t = $r['numero_talento_gs'];
-        $stats[$t]['reai'][$r['asunto']] = (int)$r['total'];
-        $stats[$t]['reai_total'] = ($stats[$t]['reai_total'] ?? 0) + (int)$r['total'];
-        if (empty($stats[$t]['ultima_reai']) || $r['ultima_fecha'] > $stats[$t]['ultima_reai']) $stats[$t]['ultima_reai'] = $r['ultima_fecha'];
+        $stmt_i3m = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($phm) GROUP BY folio_empleado");
+        mysqli_stmt_bind_param($stmt_i3m, 'ss'.$tiposm, $fecha_3m_inicio, $fecha_3m_fin, ...array_values($talentos_metricas));
+        mysqli_stmt_execute($stmt_i3m);
+        $res_i3m = mysqli_stmt_get_result($stmt_i3m);
+        while ($r = mysqli_fetch_assoc($res_i3m)) $metricas_vendedor[$r['folio_empleado']]['inst_3m'] = (int)$r['total'];
+        mysqli_stmt_close($stmt_i3m);
     }
-    mysqli_stmt_close($stmt_rc);
 
-    // Metas semanales capturadas desde Ejecución Operativa por vendedor.
-    // Se toma la semana de la última fecha operativa cargada.
-    if (table_exists($conexion, 'ejecucion_operativa_metas')) {
-        $nombres_vend = array_column($vendedores, 'nombre_colaborador');
-        $ph_nombres = implode(',', array_fill(0, count($nombres_vend), '?'));
-        $tipos_nombres = str_repeat('s', count($nombres_vend));
+    // Conteo REAI por el talento mostrado en la fila: Director/Líder/Coach/Vendedor.
+    if (!empty($talentos_reai)) {
+        $phr = implode(',', array_fill(0, count($talentos_reai), '?'));
+        $tiposr = str_repeat('s', count($talentos_reai));
+        $stmt_rc = mysqli_prepare($conexion, "SELECT numero_talento_gs, asunto, COUNT(*) AS total, MAX(fecha) AS ultima_fecha FROM reai WHERE numero_talento_gs IN ($phr) GROUP BY numero_talento_gs, asunto");
+        mysqli_stmt_bind_param($stmt_rc, $tiposr, ...array_values($talentos_reai));
+        mysqli_stmt_execute($stmt_rc);
+        $res_rc = mysqli_stmt_get_result($stmt_rc);
+        while ($r = mysqli_fetch_assoc($res_rc)) {
+            $t = (string)$r['numero_talento_gs'];
+            $stats[$t]['reai'][$r['asunto']] = (int)$r['total'];
+            $stats[$t]['reai_total'] = ($stats[$t]['reai_total'] ?? 0) + (int)$r['total'];
+            if (empty($stats[$t]['ultima_reai']) || $r['ultima_fecha'] > $stats[$t]['ultima_reai']) $stats[$t]['ultima_reai'] = $r['ultima_fecha'];
+        }
+        mysqli_stmt_close($stmt_rc);
+    }
+
+    // Metas EO por vendedor: para niveles superiores se suman las metas de sus vendedores descendientes.
+    $metas_eo_vendedor = [];
+    if (!empty($talentos_metricas) && table_exists($conexion, 'ejecucion_operativa_metas')) {
+        $nombres_por_talento = [];
+        foreach ($hc_rows as $hr) {
+            if (in_array((string)($hr['numero_talento_gs'] ?? ''), $talentos_metricas, true)) {
+                $nombres_por_talento[(string)$hr['numero_talento_gs']] = $hr['nombre_colaborador'] ?? '';
+            }
+        }
+        $nombres_vend = array_values(array_unique(array_filter(array_values($nombres_por_talento))));
+        $ph_t = implode(',', array_fill(0, count($talentos_metricas), '?'));
+        $tipos_t = str_repeat('s', count($talentos_metricas));
+        $ph_n = !empty($nombres_vend) ? implode(',', array_fill(0, count($nombres_vend), '?')) : "''";
+        $tipos_n = str_repeat('s', count($nombres_vend));
 
         $sql_meta = "SELECT id_subordinado, nombre_subordinado, meta_asignada
                      FROM ejecucion_operativa_metas
                      WHERE anio = ?
                        AND semana = ?
                        AND nivel_subordinado = 'VENDEDOR'
-                       AND (id_subordinado IN ($ph) OR nombre_subordinado IN ($ph_nombres))";
+                       AND (id_subordinado IN ($ph_t)" . (!empty($nombres_vend) ? " OR nombre_subordinado IN ($ph_n)" : "") . ")";
         $stmt_meta = mysqli_prepare($conexion, $sql_meta);
         if ($stmt_meta) {
-            mysqli_stmt_bind_param(
-                $stmt_meta,
-                'ii'.$tipos.$tipos_nombres,
-                $anio_meta_actual,
-                $semana_meta_actual,
-                ...array_values($talentos),
-                ...array_values($nombres_vend)
-            );
+            if (!empty($nombres_vend)) {
+                mysqli_stmt_bind_param($stmt_meta, 'ii'.$tipos_t.$tipos_n, $anio_meta_actual, $semana_meta_actual, ...array_values($talentos_metricas), ...array_values($nombres_vend));
+            } else {
+                mysqli_stmt_bind_param($stmt_meta, 'ii'.$tipos_t, $anio_meta_actual, $semana_meta_actual, ...array_values($talentos_metricas));
+            }
             mysqli_stmt_execute($stmt_meta);
             $res_meta = mysqli_stmt_get_result($stmt_meta);
             while ($r = mysqli_fetch_assoc($res_meta)) {
                 $meta_val = (int)($r['meta_asignada'] ?? 0);
                 $id_sub = (string)($r['id_subordinado'] ?? '');
-                $nom_sub = normaliza_key($r['nombre_subordinado'] ?? '');
-
-                if ($id_sub !== '' && in_array($id_sub, $talentos, true)) {
-                    $stats[$id_sub]['meta_semanal_eo'] = max($stats[$id_sub]['meta_semanal_eo'] ?? 0, $meta_val);
+                if ($id_sub !== '' && in_array($id_sub, $talentos_metricas, true)) {
+                    $metas_eo_vendedor[$id_sub] = max($metas_eo_vendedor[$id_sub] ?? 0, $meta_val);
+                    continue;
                 }
-
-                foreach ($vendedores as $vend_meta) {
-                    $tgs_meta = $vend_meta['numero_talento_gs'];
-                    if (normaliza_key($vend_meta['nombre_colaborador']) === $nom_sub) {
-                        $stats[$tgs_meta]['meta_semanal_eo'] = max($stats[$tgs_meta]['meta_semanal_eo'] ?? 0, $meta_val);
-                    }
+                $nom_sub = normaliza_key($r['nombre_subordinado'] ?? '');
+                foreach ($nombres_por_talento as $tg => $nom) {
+                    if (normaliza_key($nom) === $nom_sub) $metas_eo_vendedor[$tg] = max($metas_eo_vendedor[$tg] ?? 0, $meta_val);
                 }
             }
             mysqli_stmt_close($stmt_meta);
+        }
+    }
+
+    // Consolidado por fila visible.
+    foreach ($vendedores as $row) {
+        $tgs_row = (string)$row['numero_talento_gs'];
+        $childs = $row['child_talentos'] ?? [];
+        $stats[$tgs_row]['inst_base'] = 0;
+        $stats[$tgs_row]['inst_actual'] = 0;
+        $stats[$tgs_row]['inst_3m'] = 0;
+        $stats[$tgs_row]['meta_semanal_eo'] = 0;
+        $stats[$tgs_row]['meta_prorrateada'] = 0;
+
+        foreach ($childs as $tv) {
+            $stats[$tgs_row]['inst_base']   += (int)($metricas_vendedor[$tv]['inst_base'] ?? 0);
+            $stats[$tgs_row]['inst_actual'] += (int)($metricas_vendedor[$tv]['inst_actual'] ?? 0);
+            $stats[$tgs_row]['inst_3m']     += (int)($metricas_vendedor[$tv]['inst_3m'] ?? 0);
+            $stats[$tgs_row]['meta_semanal_eo'] += (int)($metas_eo_vendedor[$tv] ?? 0);
+        }
+
+        if ($stats[$tgs_row]['meta_semanal_eo'] > 0) {
+            $meta_diaria_row = $stats[$tgs_row]['meta_semanal_eo'] / max(1, $dias_habiles_semana_meta);
+            $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
+        } else {
+            // Si no existe meta EO, se suman metas estándar de cada vendedor descendiente.
+            $meta_mensual_sum = 0.0;
+            foreach ($childs as $tv) {
+                $hr = $by_talento[$tv] ?? [];
+                $meta_mensual_sum += meta_mensual_estandar($hr['distrito'] ?? ($row['distrito'] ?? ''), $hr['posicion'] ?? '', $metal_reai_default, $metas_estandar);
+            }
+            $meta_diaria_row = $meta_mensual_sum / max(1, $dias_habiles_mes_actual_total);
+            $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
         }
     }
 }
@@ -556,10 +695,6 @@ foreach ($vendedores as $vend) {
         body.page-reai .pct-up{color:#059669;font-weight:900;}
         body.page-reai .pct-down{color:#DC2626;font-weight:900;}
         body.page-reai .pct-flat{color:var(--text2);font-weight:900;}
-        body.page-reai .group-row td{background:linear-gradient(90deg,rgba(122,43,255,.13),rgba(14,165,233,.07));border-top:1px solid rgba(122,43,255,.16);border-bottom:1px solid rgba(122,43,255,.10);padding:12px 14px!important;}
-        body.page-reai .group-title{font-size:.78rem;font-weight:950;color:var(--text);text-transform:uppercase;letter-spacing:.4px;}
-        body.page-reai .group-sub{font-size:.68rem;color:var(--text2);font-weight:800;margin-top:3px;}
-        body.page-reai .linea-indirecta{font-size:.62rem;color:var(--text2);margin-top:3px;line-height:1.2;}
 
         /* Ajuste v3: tabla más compacta y headers ordenables */
         body.page-reai .table-card{border-radius:16px;overflow:hidden;}
@@ -586,6 +721,9 @@ foreach ($vendedores as $vend) {
         body.page-reai .alcance-mid{color:#D97706;font-weight:900;}
         body.page-reai .alcance-bad{color:#DC2626;font-weight:900;}
         body.page-reai .status-pill{padding:5px 8px;font-size:.68rem;}
+
+        body.page-reai .group-row td{background:linear-gradient(90deg, rgba(122,43,255,.12), rgba(0,164,255,.08));color:#1F2A44;font-weight:900;text-transform:uppercase;letter-spacing:.5px;font-size:.72rem;padding:10px 12px;border-top:1px solid rgba(122,43,255,.14);border-bottom:1px solid rgba(122,43,255,.10);}
+        body.page-reai .nivel-chip{display:inline-flex;align-items:center;padding:2px 7px;border-radius:999px;background:#EEF2FF;color:#3730A3;font-size:.58rem;font-weight:900;margin-left:6px;vertical-align:middle;}
         body.page-reai th.sortable{cursor:pointer;user-select:none;position:relative;}
         body.page-reai th.sortable::after{content:'↕';font-size:.62rem;margin-left:6px;color:var(--text2);opacity:.55;}
         body.page-reai th.sortable.sort-asc::after{content:'↑';opacity:1;color:#7A2BFF;}
@@ -623,7 +761,7 @@ include __DIR__ . '/../includes/sidebar.php';
 
     <div class="toolbar-v2">
         <div class="search-bar">
-            <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador, director, líder o coach..." oninput="filtrarTabla()">
+            <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador, nivel o distrito..." oninput="filtrarTabla()">
         </div>
         <div class="period-tabs">
             <a class="<?= $periodo === 'semanal' ? 'active' : '' ?>" href="?periodo=semanal">Semanal</a>
@@ -635,28 +773,32 @@ include __DIR__ . '/../includes/sidebar.php';
         <table>
             <thead>
                 <tr>
-                    <th class="left">Nombre</th>
-                    <th >Antig.</th>
-                    <th >Meta Prorrateada</th>
-                    <th ><?= h($label_base) ?></th>
-                    <th ><?= h($label_actual) ?></th>
-                    <th >Dif %</th>
-                    <th >Prod Día</th>
-                    <th >% Alcance</th>
-                    <th >Prod. 3M</th>
-                    <th >Acción</th>
+                    <th class="left sortable" data-sort="text">Nombre / Nivel</th>
+                    <th class="sortable" data-sort="num">Antig.</th>
+                    <th class="sortable" data-sort="num">Meta Prorrateada</th>
+                    <th class="sortable" data-sort="num"><?= h($label_base) ?></th>
+                    <th class="sortable" data-sort="num"><?= h($label_actual) ?></th>
+                    <th class="sortable" data-sort="num">Dif %</th>
+                    <th class="sortable" data-sort="num">Prod Día</th>
+                    <th class="sortable" data-sort="num">% Alcance</th>
+                    <th class="sortable" data-sort="num">Prod. 3M</th>
+                    <th class="sortable" data-sort="text">Acción</th>
                     <th class="sep">REAI</th>
                 </tr>
             </thead>
             <tbody id="tablaBody">
-            <?php $grupo_actual = null; ?>
+            <?php $grupo_actual_reai = null; ?>
             <?php foreach ($vendedores as $vend):
+                $nivel_reai = $vend['nivel_reai'] ?? 'VENDEDOR';
+                if ($grupo_actual_reai !== $nivel_reai):
+                    $grupo_actual_reai = $nivel_reai;
+                    $grupo_label = ($nivel_reai === 'DIRECTOR DISTRITAL') ? 'Línea Directa · Directores Distritales' : (($nivel_reai === 'LÍDER') ? 'Línea Indirecta · Líderes de Venta' : (($nivel_reai === 'COACH') ? 'Línea Indirecta · Coaches de Venta' : 'Línea Indirecta · Vendedores'));
+            ?>
+            <tr class="group-row" data-group-row="1"><td colspan="11"><?= h($grupo_label) ?></td></tr>
+            <?php endif; ?>
+            <?php
                 $tgs       = $vend['numero_talento_gs'];
                 $nombre    = $vend['nombre_colaborador'];
-                $grupo_id  = (string)($vend['linea_directa_id'] ?? ($vend['linea_directa_nombre'] ?? 'SIN_GRUPO'));
-                $grupo_nom = (string)($vend['linea_directa_nombre'] ?? 'Sin línea directa');
-                $grupo_niv = (string)($vend['linea_directa_nivel'] ?? 'Línea directa');
-                $linea_ind = (string)($vend['linea_indirecta'] ?? '');
                 $antig     = (int)($vend['antiguedad'] ?? 0);
                 $st        = $stats[$tgs] ?? [];
                 $inst_base = (int)($st['inst_base'] ?? 0);
@@ -669,17 +811,8 @@ include __DIR__ . '/../includes/sidebar.php';
                 $prod_3m   = $dias_habiles_3m > 0 ? round($inst_3m / $dias_habiles_3m, 2) : 0;
                 $prod_3m_cls = $prod_3m >= .70 ? 'prod-good' : ($prod_3m >= .40 ? 'prod-mid' : 'prod-bad');
 
-                // Meta prorrateada por vendedor:
-                // 1) Si Ejecución Operativa tiene meta semanal > 0, se convierte a meta diaria.
-                // 2) Si no hay meta capturada, se usa la tabla reai_metas_estandar.
-                $meta_semanal_eo = (int)($st['meta_semanal_eo'] ?? 0);
-                if ($meta_semanal_eo > 0) {
-                    $meta_diaria = $meta_semanal_eo / max(1, $dias_habiles_semana_meta);
-                } else {
-                    $meta_mensual_std = meta_mensual_estandar($vend['distrito'] ?? '', $vend['canal_venta'] ?? '', $metal_reai_default, $metas_estandar);
-                    $meta_diaria = $meta_mensual_std / max(1, $dias_habiles_mes_actual_total);
-                }
-                $meta_prorrateada = (int)round($meta_diaria * $dias_habiles_actual, 0);
+                // Meta prorrateada consolidada según nivel visible.
+                $meta_prorrateada = (int)($st['meta_prorrateada'] ?? 0);
                 $pct_alcance = $meta_prorrateada > 0 ? round(($inst_act / $meta_prorrateada) * 100, 0) : 0;
                 $alcance_cls = $pct_alcance >= 100 ? 'alcance-good' : ($pct_alcance >= 80 ? 'alcance-mid' : 'alcance-bad');
 
@@ -695,23 +828,15 @@ include __DIR__ . '/../includes/sidebar.php';
                 // Se muestran etiquetas cortas para no desplazar la columna REAI.
                 [$estatus_txt, $estatus_cls] = accion_sugerida_reai($reai_total, $prod_3m, $prod, $pct_alcance, $dif, $pct, $inst_act);
             ?>
-            <?php if ($grupo_actual !== $grupo_id): $grupo_actual = $grupo_id; ?>
-            <tr class="group-row" data-row-type="group" data-nombre="<?= strtolower(h($grupo_nom)) ?>">
-                <td colspan="11">
-                    <div class="group-title"><?= h($agrupador_label) ?>: <?= h($grupo_nom) ?></div>
-                    <div class="group-sub">Nivel: <?= h($grupo_niv) ?> · Línea indirecta visible en cada colaborador</div>
-                </td>
-            </tr>
-            <?php endif; ?>
-            <tr data-row-type="data" data-nombre="<?= strtolower(h($nombre . ' ' . $grupo_nom . ' ' . ($vend['nombre_lider'] ?? '') . ' ' . ($vend['nombre_coach'] ?? ''))) ?>">
+            <tr data-nombre="<?= strtolower(h($nombre . ' ' . $nivel_reai . ' ' . ($vend['distrito'] ?? ''))) ?>" data-nivel="<?= h($nivel_reai) ?>">
                 <td class="left" data-sort-value="<?= h($nombre) ?>">
                     <div style="font-weight:600;">
                         <a href="detalle_vendedor.php?tgs=<?= urlencode($tgs) ?>&periodo=<?= urlencode($periodo) ?>" style="color:var(--blue);text-decoration:none;font-weight:700;" title="Ver detalle del vendedor">
                             <?= h($nombre) ?>
                         </a>
+                        <span class="nivel-chip"><?= h($nivel_reai) ?></span>
                     </div>
-                    <div class="sub-text"><?= h($tgs) ?></div>
-                    <?php if ($linea_ind !== ''): ?><div class="linea-indirecta">Línea indirecta · <?= h($linea_ind) ?></div><?php endif; ?>
+                    <div class="sub-text"><?= h($tgs) ?> · <?= h($vend['distrito'] ?? '') ?> · HC base: <?= fmt_num(count($vend['child_talentos'] ?? [])) ?></div>
                 </td>
                 <td data-sort-value="<?= $antig ?>"><span style="font-weight:800;"><?= $antig ?></span> <span class="sub-text">m</span></td>
                 <td data-sort-value="<?= $meta_prorrateada ?>"><span class="meta-pill"><?= fmt_meta($meta_prorrateada) ?></span></td>
@@ -780,24 +905,21 @@ const endpointActual = window.location.pathname.split('/').pop() || '';
 function filtrarTabla() {
     const q = document.getElementById('buscador').value.toLowerCase();
     const rows = Array.from(document.querySelectorAll('#tablaBody tr'));
-    let currentGroup = null;
-    let groupHasVisible = false;
-    const flushGroup = () => { if (currentGroup) currentGroup.classList.toggle('hidden', q !== '' && !groupHasVisible); };
-
     rows.forEach(tr => {
-        if (tr.dataset.rowType === 'group') {
-            flushGroup();
-            currentGroup = tr;
-            groupHasVisible = (q === '' || (tr.dataset.nombre || '').includes(q));
-            tr.classList.toggle('hidden', false);
-            return;
-        }
+        if (tr.dataset.groupRow === '1') return;
         const n = tr.dataset.nombre || '';
-        const visible = (q === '' || n.includes(q) || (currentGroup && (currentGroup.dataset.nombre || '').includes(q)));
-        tr.classList.toggle('hidden', !visible);
-        if (visible) groupHasVisible = true;
+        tr.classList.toggle('hidden', q !== '' && !n.includes(q));
     });
-    flushGroup();
+    // Oculta encabezados de grupo sin filas visibles debajo.
+    rows.forEach((tr, idx) => {
+        if (tr.dataset.groupRow !== '1') return;
+        let visible = false;
+        for (let i = idx + 1; i < rows.length; i++) {
+            if (rows[i].dataset.groupRow === '1') break;
+            if (!rows[i].classList.contains('hidden')) { visible = true; break; }
+        }
+        tr.classList.toggle('hidden', !visible);
+    });
 }
 
 function inicializarOrdenamiento() {
@@ -814,7 +936,17 @@ function ordenarTabla(colIndex, tipo, th) {
     th.classList.add(asc ? 'sort-asc' : 'sort-desc');
 
     const rows = Array.from(tbody.querySelectorAll('tr'));
-    rows.sort((a, b) => {
+    const groups = [];
+    let current = null;
+    rows.forEach(row => {
+        if (row.dataset.groupRow === '1') {
+            current = {header: row, rows: []};
+            groups.push(current);
+        } else if (current) {
+            current.rows.push(row);
+        }
+    });
+    const cmp = (a, b) => {
         const ca = a.children[colIndex];
         const cb = b.children[colIndex];
         let va = ca?.dataset.sortValue ?? ca?.innerText ?? '';
@@ -829,12 +961,21 @@ function ordenarTabla(colIndex, tipo, th) {
         va = String(va).toLowerCase();
         vb = String(vb).toLowerCase();
         return asc ? va.localeCompare(vb, 'es') : vb.localeCompare(va, 'es');
+    };
+    groups.forEach(g => {
+        tbody.appendChild(g.header);
+        g.rows.sort(cmp).forEach(row => tbody.appendChild(row));
     });
-    rows.forEach(row => tbody.appendChild(row));
+    filtrarTabla();
 }
 document.addEventListener('DOMContentLoaded', function() {
-    // Se conserva el orden jerárquico por Línea Directa / Línea Indirecta.
-    // El ordenamiento por columnas queda desactivado para no romper los grupos.
+    inicializarOrdenamiento();
+    const colActual = 4; // columna actual: JUN / SEM actual, índice 0-based después de Meta Prorrateada
+    const thActual = document.querySelectorAll('th.sortable')[colActual];
+    if (thActual) {
+        thActual.dataset.order = 'asc'; // fuerza primer clic programático a descendente
+        ordenarTabla(colActual, thActual.dataset.sort || 'num', thActual);
+    }
 });
 function abrirModal(talento, nombre, asunto) {
     currentTalento = talento; currentNombre = nombre; currentAsunto = asunto;
