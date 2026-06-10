@@ -497,6 +497,7 @@ $vendedores = array_values(array_filter($vendedores, function($row) use ($vista_
 }));
 
 $mostrar_hc_col = ($vista_nivel !== 'VENDEDOR');
+$mostrar_alcance_3m = in_array($vista_nivel, ['DIRECTOR DISTRITAL','LÍDER'], true);
 $colspan_reai = $mostrar_hc_col ? 12 : 11;
 
 // ── MÉTRICAS POR NIVEL / COLABORADOR ───────────────────────────────────────
@@ -613,6 +614,7 @@ if (!empty($vendedores)) {
         $stats[$tgs_row]['inst_3m'] = 0;
         $stats[$tgs_row]['meta_semanal_eo'] = 0;
         $stats[$tgs_row]['meta_prorrateada'] = 0;
+        $stats[$tgs_row]['meta_3m'] = 0;
 
         foreach ($childs as $tv) {
             $stats[$tgs_row]['inst_base']   += (int)($metricas_vendedor[$tv]['inst_base'] ?? 0);
@@ -621,16 +623,20 @@ if (!empty($vendedores)) {
             $stats[$tgs_row]['meta_semanal_eo'] += (int)($metas_eo_vendedor[$tv] ?? 0);
         }
 
+        // Meta 3M: para Director Distrital y Líder se utiliza como base el acumulado de metas mensuales estándar
+        // de los vendedores descendientes durante los últimos 3 meses completos. Esta métrica alimenta ALCANCE 3M.
+        $meta_mensual_sum = 0.0;
+        foreach ($childs as $tv) {
+            $hr = $by_talento[$tv] ?? [];
+            $meta_mensual_sum += meta_mensual_estandar($hr['distrito'] ?? ($row['distrito'] ?? ''), $hr['posicion'] ?? '', $metal_reai_default, $metas_estandar);
+        }
+        $stats[$tgs_row]['meta_3m'] = (int)round($meta_mensual_sum * 3, 0);
+
         if ($stats[$tgs_row]['meta_semanal_eo'] > 0) {
             $meta_diaria_row = $stats[$tgs_row]['meta_semanal_eo'] / max(1, $dias_habiles_semana_meta);
             $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
         } else {
             // Si no existe meta EO, se suman metas estándar de cada vendedor descendiente.
-            $meta_mensual_sum = 0.0;
-            foreach ($childs as $tv) {
-                $hr = $by_talento[$tv] ?? [];
-                $meta_mensual_sum += meta_mensual_estandar($hr['distrito'] ?? ($row['distrito'] ?? ''), $hr['posicion'] ?? '', $metal_reai_default, $metas_estandar);
-            }
             $meta_diaria_row = $meta_mensual_sum / max(1, $dias_habiles_mes_actual_total);
             $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
         }
@@ -675,7 +681,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2.2 — TOTALXPEDIENT</title>
+    <title>REAI v2.3 — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
@@ -835,7 +841,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <th class="sortable" data-sort="num">Dif %</th>
                     <th class="sortable" data-sort="num">Prod Día</th>
                     <th class="sortable" data-sort="num">% Alcance</th>
-                    <th class="sortable" data-sort="num">Prod. 3M</th>
+                    <th class="sortable" data-sort="num"><?= $mostrar_alcance_3m ? 'Alcance 3M' : 'Prod. 3M' ?></th>
                     <th class="sortable" data-sort="text">Acción</th>
                     <th class="sep">REAI</th>
                 </tr>
@@ -865,8 +871,13 @@ include __DIR__ . '/../includes/sidebar.php';
                 $prod      = $dias_habiles_actual > 0 ? round($inst_act / (($nivel_reai === 'VENDEDOR') ? 1 : $hc_activo) / $dias_habiles_actual, 2) : 0;
                 $prod_cls  = $prod >= .70 ? 'prod-good' : ($prod >= .40 ? 'prod-mid' : 'prod-bad');
                 $inst_3m   = (int)($st['inst_3m'] ?? 0);
+                $meta_3m   = (int)($st['meta_3m'] ?? 0);
                 $prod_3m   = $dias_habiles_3m > 0 ? round($inst_3m / $dias_habiles_3m, 2) : 0;
-                $prod_3m_cls = $prod_3m >= .70 ? 'prod-good' : ($prod_3m >= .40 ? 'prod-mid' : 'prod-bad');
+                $alcance_3m = $meta_3m > 0 ? round(($inst_3m / $meta_3m) * 100, 0) : 0;
+                $valor_3m = $mostrar_alcance_3m ? $alcance_3m : $prod_3m;
+                $prod_3m_cls = $mostrar_alcance_3m
+                    ? ($alcance_3m >= 100 ? 'prod-good' : ($alcance_3m >= 80 ? 'prod-mid' : 'prod-bad'))
+                    : ($prod_3m >= .70 ? 'prod-good' : ($prod_3m >= .40 ? 'prod-mid' : 'prod-bad'));
 
                 // Meta prorrateada consolidada según nivel visible.
                 $meta_prorrateada = (int)($st['meta_prorrateada'] ?? 0);
@@ -903,7 +914,7 @@ include __DIR__ . '/../includes/sidebar.php';
                 <td data-sort-value="<?= $pct ?>"><span class="<?= $pct_cls ?>"><?= $dif >= 0 ? '+' : '' ?><?= fmt_num($dif) ?> / <?= $pct >= 0 ? '+' : '' ?><?= fmt_num($pct) ?>%</span></td>
                 <td data-sort-value="<?= $prod ?>"><span class="prod-pill <?= $prod_cls ?>"><?= fmt_prod($prod) ?></span></td>
                 <td data-sort-value="<?= $pct_alcance ?>"><span class="<?= $alcance_cls ?>"><?= fmt_num($pct_alcance) ?>%</span></td>
-                <td data-sort-value="<?= $prod_3m ?>"><span class="prod-pill <?= $prod_3m_cls ?>" title="<?= date('d/m/Y', strtotime($fecha_3m_inicio)) ?> - <?= date('d/m/Y', strtotime($fecha_3m_fin)) ?> · Inst: <?= fmt_num($inst_3m) ?> · DH: <?= fmt_num($dias_habiles_3m) ?>"><?= fmt_prod($prod_3m) ?></span></td>
+                <td data-sort-value="<?= $valor_3m ?>"><span class="prod-pill <?= $prod_3m_cls ?>" title="<?= date('d/m/Y', strtotime($fecha_3m_inicio)) ?> - <?= date('d/m/Y', strtotime($fecha_3m_fin)) ?> · Inst: <?= fmt_num($inst_3m) ?><?= $mostrar_alcance_3m ? ' · Meta 3M: '.fmt_num($meta_3m) : ' · DH: '.fmt_num($dias_habiles_3m) ?>"><?= $mostrar_alcance_3m ? fmt_num($alcance_3m).'%' : fmt_prod($prod_3m) ?></span></td>
                 <td data-sort-value="<?= h($estatus_txt) ?>"><span class="status-pill <?= $estatus_cls ?>"><?= h($estatus_txt) ?></span></td>
                 <td class="sep">
                     <?php
