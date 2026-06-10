@@ -461,16 +461,16 @@ if ($mostrar_meta) {
         $kpi_meta_pct  = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     } else {
         if ($rol_consulta === 'admin') {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard");
         } elseif ($scope_filtrar_por_distrito) {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($scope_distritos_sql)");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard AND distrito IN ($scope_distritos_sql)");
         } else {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia=1 AND distrito IN ($distritos_sql)");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard AND distrito IN ($distritos_sql)");
         }
 
         if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
             $meta_diaria_total = (float)($row_meta['meta_diaria_total'] ?? 0);
-            $kpi_meta_acum     = round($meta_diaria_total * $dias_transcurridos);
+            $kpi_meta_acum     = round($meta_diaria_total);
             $kpi_meta_pct      = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
         }
     }
@@ -494,6 +494,202 @@ function tx_sql_in_escaped($conexion, $vals) {
     return "'" . implode("','", array_map(function($v) use ($conexion) {
         return mysqli_real_escape_string($conexion, (string)$v);
     }, $vals)) . "'";
+}
+
+
+function tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin) {
+    $inicio = sprintf('%04d-%02d-%02d', (int)$anio, (int)$mes, (int)$dia_inicio);
+    $fin    = sprintf('%04d-%02d-%02d', (int)$anio, (int)$mes, (int)$dia_fin);
+
+    // Se excluyen domingos y fechas registradas en dias_inhabiles.
+    // Si la tabla dias_inhabiles no existe o no trae datos, al menos excluye domingos.
+    $sql = "
+        SELECT COUNT(*) AS total
+        FROM (
+            SELECT DATE_ADD('$inicio', INTERVAL n DAY) AS fecha
+            FROM (
+                SELECT a.N + b.N * 10 + c.N * 100 AS n
+                FROM 
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a,
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b,
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) c
+            ) nums
+            WHERE DATE_ADD('$inicio', INTERVAL n DAY) <= '$fin'
+        ) calendario
+        WHERE DAYOFWEEK(fecha) <> 1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM dias_inhabiles di
+              WHERE di.fecha = calendario.fecha
+          )
+    ";
+    $r = mysqli_query($conexion, $sql);
+    if ($r && $row = mysqli_fetch_assoc($r)) {
+        return (int)($row['total'] ?? 0);
+    }
+
+    // Fallback defensivo si algo falla en SQL.
+    $count = 0;
+    $ts_ini = strtotime($inicio);
+    $ts_fin = strtotime($fin);
+    for ($ts = $ts_ini; $ts <= $ts_fin; $ts += 86400) {
+        if ((int)date('w', $ts) !== 0) $count++;
+    }
+    return $count;
+}
+
+
+function tx_canales_cumplimiento_dashboard() {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - HOMOLOGACIÓN DE CANALES PARA CUMPLIMIENTO
+    |--------------------------------------------------------------------------
+    |
+    | Vista: Cumplimiento por canal de venta.
+    |
+    | Las tablas no usan exactamente los mismos nombres:
+    |
+    | metas_instalacion.canal:
+    |   Cambaceo, Punto de Venta, Call Center BTL, Call Center Web,
+    |   Autoempresarios, Venta Técnico, Ecommerce.
+    |
+    | instalaciones.origen_prospecto:
+    |   Cambaceo, Punto de Venta, Call Center, Autoempresarios Autorizados,
+    |   eCommerce, Venta Digital, Winback, Desarrollos, Distribuidor, Otro.
+    |
+    | Regla vigente de consolidación:
+    |
+    |   Cambaceo:
+    |       Meta = Cambaceo
+    |       Real = Cambaceo
+    |
+    |   Punto de Venta:
+    |       Meta = Punto de Venta
+    |       Real = Punto de Venta
+    |
+    |   Call Center:
+    |       Meta = Call Center BTL + Call Center Web
+    |       Real = Call Center
+    |
+    |   Autoempresarios Autorizados:
+    |       Meta = Autoempresarios + Venta Técnico
+    |       Real = Autoempresarios Autorizados
+    |
+    |   eCommerce:
+    |       Meta = Ecommerce
+    |       Real = eCommerce
+    |
+    |   Otros:
+    |       Meta = 0, salvo que en el futuro se cargue una meta específica.
+    |       Real = Venta Digital + Winback + Desarrollos + Distribuidor + Otro.
+    |
+    | Si cambia el importador o los nombres de canales, actualizar este mapa.
+    |
+    | Fecha documentación: Junio 2026
+    | Proyecto: TotalXpedient Dashboard Ejecutivo
+    |--------------------------------------------------------------------------
+    */
+    return [
+        'Cambaceo' => [
+            'meta' => ['Cambaceo'],
+            'real' => ['Cambaceo']
+        ],
+        'Punto de Venta' => [
+            'meta' => ['Punto de Venta'],
+            'real' => ['Punto de Venta']
+        ],
+        'Call Center' => [
+            'meta' => ['Call Center BTL', 'Call Center Web'],
+            'real' => ['Call Center']
+        ],
+        'Autoempresarios Autorizados' => [
+            'meta' => ['Autoempresarios', 'Venta Técnico'],
+            'real' => ['Autoempresarios Autorizados']
+        ],
+        'eCommerce' => [
+            'meta' => ['Ecommerce'],
+            'real' => ['eCommerce']
+        ],
+        'Otros' => [
+            'meta' => [],
+            'real' => ['Venta Digital', 'Winback', 'Desarrollos', 'Distribuidor', 'Otro']
+        ],
+    ];
+}
+
+function tx_sql_in_upper_trim($conexion, $vals) {
+    $vals = array_values(array_filter(array_unique($vals), function($v) {
+        return trim((string)$v) !== '';
+    }));
+    if (empty($vals)) return "''";
+    return "'" . implode("','", array_map(function($v) use ($conexion) {
+        return mysqli_real_escape_string($conexion, strtoupper(trim((string)$v)));
+    }, $vals)) . "'";
+}
+
+function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $dia_inicio, $dia_fin, $scope_sql = '') {
+    $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
+    $mapa = tx_canales_cumplimiento_dashboard();
+    $canales_meta = $mapa[$canal]['meta'] ?? [];
+
+    if (empty($canales_meta)) return 0;
+
+    $canales_sql = tx_sql_in_upper_trim($conexion, $canales_meta);
+
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - META POR CANAL DE VENTA
+    |--------------------------------------------------------------------------
+    |
+    | La meta por canal se calcula con:
+    |
+    |     META = SUM(meta_diaria)
+    |
+    | usando el rango seleccionado en el calendario del dashboard.
+    |
+    | Esto respeta la carga diaria real de metas:
+    | si un día viene con meta 0, especial o ajustada, se toma tal cual.
+    |
+    | La suma de metas por canal debe cuadrar con la meta del velocímetro
+    | Avance vs Meta, siempre que ambos usen el mismo rango y el mismo scope.
+    |--------------------------------------------------------------------------
+    */
+
+    $r = mysqli_query($conexion, "
+        SELECT COALESCE(SUM(meta_diaria),0) AS meta_rango
+        FROM metas_instalacion
+        WHERE mes_num = ".(int)$mes."
+          AND anio = ".(int)$anio."
+          AND dia BETWEEN ".(int)$dia_inicio." AND ".(int)$dia_fin."
+          AND UPPER(TRIM(canal)) IN ($canales_sql)
+          $where_scope
+    ");
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    return (int)round((float)($row['meta_rango'] ?? 0));
+}
+
+function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_fecha, $scope_sql = '') {
+    $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
+    $mapa = tx_canales_cumplimiento_dashboard();
+    $canales_real = $mapa[$canal]['real'] ?? [];
+
+    if (empty($canales_real)) return 0;
+
+    $canales_sql = tx_sql_in_upper_trim($conexion, $canales_real);
+
+    $r = mysqli_query($conexion, "
+        SELECT COUNT(cuenta) AS total
+        FROM instalaciones
+        WHERE MONTH(fecha)=".(int)$mes."
+          AND YEAR(fecha)=".(int)$anio."
+          $cond_dia_fecha
+          AND origen_prospecto IS NOT NULL
+          AND origen_prospecto <> '-'
+          AND UPPER(TRIM(origen_prospecto)) IN ($canales_sql)
+          $where_scope
+    ");
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    return (int)($row['total'] ?? 0);
 }
 
 function tx_meta_acum_distrito($conexion, $distrito, $mes, $anio, $dias) {
@@ -774,6 +970,75 @@ foreach ($tmp as $r) {
 }
 
 
+
+// ── CUMPLIMIENTO POR CANAL DE VENTA ──────────────────────────────────────────
+// Visible únicamente para Administrador, Director Regional y Director Distrital.
+// Compara Venta instalada (instalaciones.origen_prospecto) vs meta por canal en metas_instalacion.
+// Usa mapa consolidado para homologar nombres entre metas_instalacion e instalaciones.
+$cumplimiento_canal_items = [];
+$mostrar_cumplimiento_canal = false;
+$scope_canal_sql = '';
+
+if ($rol_consulta === 'admin') {
+    $mostrar_cumplimiento_canal = true;
+    $scope_canal_sql = '';
+} elseif ($scope_filtrar_por_distrito) {
+    $mostrar_cumplimiento_canal = true;
+    $scope_canal_sql = $scope_distritos_sql;
+} elseif (!$scope_activo && in_array($rol, ['director_regional','director_distrital'], true)) {
+    $mostrar_cumplimiento_canal = true;
+    if ($rol === 'director_distrital') {
+        $scope_canal_sql = $distritos_sql;
+    }
+}
+
+if ($mostrar_cumplimiento_canal) {
+    // Catálogo fijo consolidado para evitar duplicados como:
+    // Call Center / Call Center BTL / Call Center Web.
+    $canales_cumplimiento = array_keys(tx_canales_cumplimiento_dashboard());
+
+    foreach ($canales_cumplimiento as $canal) {
+        $real_canal = tx_real_inst_canal_dashboard(
+            $conexion,
+            $canal,
+            $mes_actual,
+            $anio_query,
+            $cond_dia_fecha,
+            $scope_canal_sql
+        );
+        $meta_canal = tx_meta_canal_dashboard(
+            $conexion,
+            $canal,
+            $mes_actual,
+            $anio_query,
+            $rango_mode,
+            $dia_inicio_dashboard,
+            $dia_fin_dashboard,
+            $scope_canal_sql
+        );
+
+        if ($real_canal <= 0 && $meta_canal <= 0) continue;
+
+        $pct_canal = $meta_canal > 0 ? round(($real_canal / $meta_canal) * 100, 1) : 0;
+        $cumplimiento_canal_items[] = [
+            'nombre' => $canal,
+            'real' => $real_canal,
+            'meta' => $meta_canal,
+            'pct' => $pct_canal,
+            'visual_pct' => $pct_canal
+        ];
+    }
+
+    usort($cumplimiento_canal_items, function($a, $b) {
+        if ((float)$a['pct'] == (float)$b['pct']) {
+            return ((int)$b['real']) <=> ((int)$a['real']);
+        }
+        return ((float)$b['pct']) <=> ((float)$a['pct']);
+    });
+    $cumplimiento_canal_items = array_slice($cumplimiento_canal_items, 0, 10);
+}
+
+
 // ── MIX INSTALACIONES ────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
@@ -962,6 +1227,13 @@ usort($cumplimiento_inferior_items, function($a, $b) {
     }
     return ((float)$b['pct']) <=> ((float)$a['pct']);
 });
+
+// Layout dinámico del dashboard:
+ // En Admin / Regional / Director Distrital se muestra Cumplimiento por Canal y HC en el renglón superior.
+ // En Líder / Coach / Vendedor no aplica Cumplimiento por Canal; por legibilidad,
+ // HC regresa al renglón inferior junto a Cumplimiento del nivel inferior y Mix.
+$layout_hc_top = !empty($mostrar_cumplimiento_canal);
+$layout_hc_bottom = !$layout_hc_top;
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -1225,10 +1497,26 @@ $roles_labels = [
 
         .dashboard-analytics-grid{
             display:grid;
-            grid-template-columns:30% 30% 20% 20%;
             gap:18px;
             align-items:stretch;
             margin:0 0 22px;
+            width:100%;
+            max-width:100%;
+            overflow:hidden;
+        }
+        .dashboard-analytics-grid.with-channel{
+            /*
+             * Admin/Regional/Director Distrital:
+             * Cumplimiento inferior | Cumplimiento por canal | Mix ventas | Mix instalaciones
+             */
+            grid-template-columns:minmax(0, 3fr) minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr);
+        }
+        .dashboard-analytics-grid.with-hc-bottom{
+            /*
+             * Líder/Coach/Vendedor:
+             * Cumplimiento inferior | Headcount | Mix ventas | Mix instalaciones
+             */
+            grid-template-columns:minmax(0, 3fr) minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr);
         }
         .dashboard-analytics-grid > .evo-card,
         .dashboard-analytics-grid > .kpi-card,
@@ -1295,9 +1583,123 @@ $roles_labels = [
             font-size:.66rem;
             margin-left:6px;
         }
+
+        .kpi-grid-main{
+            display:grid;
+            gap:18px;
+            align-items:stretch;
+            margin:0 0 22px;
+            width:100%;
+            max-width:100%;
+            overflow:hidden;
+        }
+        .kpi-grid-main.with-hc{
+            /*
+             * Admin/Regional/Director Distrital:
+             * Avance vs Meta | Instalaciones | Ventas | Conversión | Headcount
+             * Usar fr evita el desbordamiento de 100% + gaps.
+             */
+            grid-template-columns:minmax(0, 28fr) minmax(0, 18fr) minmax(0, 18fr) minmax(0, 18fr) minmax(0, 18fr);
+        }
+        .kpi-grid-main.without-hc{
+            /*
+             * Líder/Coach/Vendedor:
+             * Headcount baja al segundo renglón para recuperar proporción visual.
+             */
+            grid-template-columns:minmax(0, 30fr) minmax(0, 23fr) minmax(0, 23fr) minmax(0, 24fr);
+        }
+        .kpi-grid-main > .kpi-card{
+            margin:0;
+            min-width:0;
+            height:100%;
+        }
+        .kpi-grid-main .kpi-speed-layout{
+            min-height:150px;
+            overflow:hidden;
+        }
+        .kpi-grid-main .speedometer-container{
+            transform:scale(.86);
+            transform-origin:center;
+        }
+        .kpi-grid-main .speed-numbers .speed-val{
+            font-size:1.85rem;
+        }
+        .kpi-grid-main .kpi-val{
+            font-size:1.9rem;
+        }
+        .cumplimiento-panel-canal{
+            padding:20px;
+        }
+
+        /* Contención general para evitar que tarjetas o gráficas rompan el ancho del dashboard */
+        .main{
+            max-width:100%;
+            overflow-x:hidden;
+        }
+        .kpi-card,
+        .chart-card,
+        .evo-card,
+        .hierarchy-performance-card{
+            min-width:0;
+            max-width:100%;
+            box-sizing:border-box;
+            overflow:hidden;
+        }
+        .chart-wrap,
+        .evo-wrap{
+            position:relative;
+            width:100%;
+            max-width:100%;
+            overflow:hidden;
+        }
+        .chart-wrap canvas,
+        .evo-wrap canvas{
+            max-width:100% !important;
+        }
+        .dashboard-analytics-grid .chart-wrap{
+            min-height:210px;
+        }
+        .dashboard-analytics-grid .kpi-speed-layout{
+            min-height:210px;
+            overflow:hidden;
+        }
+        .dashboard-analytics-grid .speedometer-container{
+            max-width:100%;
+            transform:scale(.82);
+            transform-origin:center;
+        }
+        .dashboard-analytics-grid .speed-numbers .speed-val{
+            font-size:1.65rem;
+        }
+        .dashboard-analytics-grid .speed-numbers{
+            min-width:96px;
+        }
+        .dashboard-analytics-grid .chart-title{
+            font-size:.88rem;
+            line-height:1.15;
+        }
+        .dashboard-analytics-grid .chart-card{
+            display:flex;
+            flex-direction:column;
+            justify-content:space-between;
+        }
+
+        @media(max-width:1200px){
+            .kpi-grid-main{
+                grid-template-columns:1fr 1fr;
+            }
+        }
+
         @media(max-width:1200px){
             .dashboard-analytics-grid{
-                grid-template-columns:1fr 1fr;
+                grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+            }
+        }
+
+        @media(max-width:760px){
+            .dashboard-analytics-grid,
+            .kpi-grid-main{
+                grid-template-columns:1fr;
             }
         }
 
@@ -1468,7 +1870,7 @@ include __DIR__ . '/includes/sidebar.php';
         </form>
     </section>
 
-    <div class="kpi-grid">
+    <div class="kpi-grid-main <?= $layout_hc_top ? 'with-hc' : 'without-hc' ?>">
 
         <?php if ($mostrar_meta): 
             $porcentaje_visual_aguja_meta = min((float)$kpi_meta_pct, 100); 
@@ -1544,10 +1946,58 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
         </div>
 
+
+        <?php if ($layout_hc_top): ?>
+        <?php 
+            $porcentaje_visual_aguja_hc = min((float)$kpi_hc_pct, 100); 
+            $angulo_aguja_hc = ($porcentaje_visual_aguja_hc / 100 * 180) - 90;
+            $color_porcentaje_hc = ($kpi_hc_pct >= 100) ? 'var(--green)' : (($kpi_hc_pct >= 80) ? '#f59e0b' : 'var(--red)');
+        ?>
+        <div class="kpi-card" style="padding-right: 15px;">
+             <div class="kpi-header" style="margin-bottom: 5px;">
+                <div class="kpi-icon kpi-purple" style="width: 32px; height: 32px;">👥</div>
+                <div class="kpi-label">Headcount — Semana <?= $semana_base ?> · <?= $anio_actual ?></div>
+            </div>
+
+             <div class="kpi-speed-layout">
+                <div class="speedometer-container">
+                    <div class="speedometer-arco-mascara">
+                        <div class="speedometer-gradiente"></div>
+                        <div class="speedometer-centro-blanco"></div>
+                    </div>
+                    <div class="needle-pivote"></div>
+                    <div class="needle" style="transform: rotate(<?= $angulo_aguja_hc ?>deg);"></div>
+                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje_hc ?>;">
+                        <?= $kpi_hc_pct ?>%
+                    </div>
+                </div>
+
+                <div class="speed-numbers" style="align-items: flex-start; margin-left: 20px;">
+                    <div style="display:flex; gap: 20px;">
+                        <div class="kpi-num">
+                            <span class="kpi-val purple" style="font-size: 1.8rem;"><?= number_format($kpi_hc_act) ?></span>
+                            <span class="kpi-sub">Activo</span>
+                        </div>
+                        <div class="kpi-num">
+                            <span class="kpi-val red" style="font-size: 1.8rem;"><?= number_format($kpi_hc_vac) ?></span>
+                            <span class="kpi-sub">Vacante</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <span class="kpi-val" style="color:var(--text); font-size: 1.2rem;"><?= number_format($kpi_hc_total) ?></span>
+                        <span class="kpi-sub">Total Plantilla</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <?php endif; ?>
+
+
     </div>
 
 
-    <div class="dashboard-analytics-grid">
+    <div class="dashboard-analytics-grid <?= $layout_hc_bottom ? 'with-hc-bottom' : 'with-channel' ?>">
 
     <?php if (!empty($cumplimiento_inferior_items)): ?>
     <div class="evo-card hierarchy-performance-card cumplimiento-panel">
@@ -1592,7 +2042,7 @@ include __DIR__ . '/includes/sidebar.php';
     </div>
     <?php endif; ?>
 
-        
+    <?php if ($layout_hc_bottom): ?>
         <?php 
             $porcentaje_visual_aguja_hc = min((float)$kpi_hc_pct, 100); 
             $angulo_aguja_hc = ($porcentaje_visual_aguja_hc / 100 * 180) - 90;
@@ -1635,6 +2085,46 @@ include __DIR__ . '/includes/sidebar.php';
                 </div>
             </div>
         </div>
+
+    <?php endif; ?>
+
+    <?php if ($mostrar_cumplimiento_canal && !empty($cumplimiento_canal_items)): ?>
+    <div class="evo-card hierarchy-performance-card cumplimiento-panel cumplimiento-panel-canal">
+        <div class="hierarchy-performance-head">
+            <div>
+                <div class="chart-title">Cumplimiento por canal de venta</div>
+                <div class="hierarchy-performance-sub">Canales · Venta instalada vs Meta</div>
+            </div>
+            <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
+        </div>
+
+        <div class="cumplimiento-list">
+            <?php foreach ($cumplimiento_canal_items as $item): ?>
+                <?php
+                    $pct_item = (float)($item['pct'] ?? 0);
+                    $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
+                    $real_item = (int)($item['real'] ?? 0);
+                    $meta_item = (int)($item['meta'] ?? 0);
+                    $bar_width = min($visual_pct_item, 180);
+                    $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
+                ?>
+                <div class="cumplimiento-row">
+                    <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
+                        <?= htmlspecialchars($item['nombre'] ?? '') ?>
+                    </div>
+                    <div class="cumplimiento-track">
+                        <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                    </div>
+                    <div class="cumplimiento-metric">
+                        <?= number_format($pct_item, 0) ?>%
+                        <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?></span>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php endif; ?>
+
 
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Ventas</div>

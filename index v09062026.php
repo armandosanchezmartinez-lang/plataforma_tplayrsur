@@ -346,6 +346,27 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
 }, $distritos_equivalentes)) . "'";
 
 $por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
+
+// Contexto jerárquico temprano para activar meta propia en tablero inicial o scope.
+// IMPORTANTE: debe calcularse antes de $mostrar_meta.
+$nivel_actual_dashboard_pre = $scope_activo
+    ? $scope_nivel
+    : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
+
+$root_dashboard_id_pre = $scope_activo
+    ? ($scope_registro['id_posicion'] ?? '')
+    : $id_posicion;
+
+$meta_propia_operativa_dashboard = 0;
+if (!empty($root_dashboard_id_pre) && in_array($nivel_actual_dashboard_pre, ['lider','coach','vendedor'], true)) {
+    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
+        $conexion,
+        $anio_operativo_dashboard,
+        $semana_operativa_dashboard,
+        $root_dashboard_id_pre
+    );
+}
+
 $mostrar_meta = $por_distrito || $scope_filtrar_por_distrito || (($meta_propia_operativa_dashboard ?? 0) > 0);
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
@@ -621,19 +642,6 @@ $cumplimiento_inferior_items = [];
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
 $root_dashboard_id = $scope_activo ? ($scope_registro['id_posicion'] ?? '') : $id_posicion;
 $root_dashboard_distrito = $scope_activo ? ($distrito_scope ?? $distrito_usuario) : $distrito_usuario;
-
-// Meta propia capturada en Ejecución Operativa para el tablero actual.
-// Aplica, por ejemplo, cuando el usuario está firmado como Líder o cuando admin consulta a un Líder.
-// Si existe, activa la tarjeta Avance vs Meta aunque el tablero no sea distrital.
-$meta_propia_operativa_dashboard = 0;
-if (!empty($root_dashboard_id) && in_array($nivel_actual_dashboard, ['lider','coach','vendedor'], true)) {
-    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
-        $conexion,
-        $anio_operativo_dashboard,
-        $semana_operativa_dashboard,
-        $root_dashboard_id
-    );
-}
 
 
 if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
@@ -1861,38 +1869,66 @@ const pluginTotalesArriba = {
 };
 
 // 2. OPCIONES DE LAS BARRAS
-const stackOpts = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { 
-        legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
-        datalabels: { 
-            display: (context) => context.dataset.data[context.dataIndex] > 0, 
-            color: '#ffffff',
-            font: { weight: 'bold', size: 11 },
-            textShadowColor: 'rgba(0, 0, 0, 0.5)',
-            textShadowBlur: 4,
-            formatter: Math.round
-        }
-    },
-    scales: {
-        y: { 
-            stacked: true, 
-            beginAtZero: true, 
-            grid: { color: '#e2e8f4' },
-            ticks: { font: { size: 11 } },
-            suggestedMax: (ctx) => {
-                const max = ctx.chart.scales.y?.max;
-                return max ? max * 1.25 : null;
+// FIX: ampliar el eje Y con un colchón de 10% sobre el valor mensual más alto.
+// Esto evita que la etiqueta superior del mes más alto quede recortada.
+function txStackTotals(matrix){
+    if (!matrix || !matrix.length) return [];
+    const len = Math.max(...matrix.map(row => row.length || 0));
+    const totals = Array(len).fill(0);
+    matrix.forEach(row => {
+        row.forEach((value, idx) => {
+            totals[idx] += Number(value || 0);
+        });
+    });
+    return totals;
+}
+
+function txRoundedAxisMax(maxValue){
+    const padded = Math.ceil((Number(maxValue || 0) * 1.10));
+    if (padded <= 100) return 100;
+    const step = padded <= 1000 ? 100 : 200;
+    return Math.ceil(padded / step) * step;
+}
+
+function makeStackOpts(matrix){
+    const totals = txStackTotals(matrix);
+    const maxTotal = totals.length ? Math.max(...totals) : 0;
+    const axisMax = txRoundedAxisMax(maxTotal);
+
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: {
+            padding: { top: 26 }
+        },
+        plugins: { 
+            legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+            datalabels: { 
+                display: (context) => context.dataset.data[context.dataIndex] > 0, 
+                color: '#ffffff',
+                font: { weight: 'bold', size: 11 },
+                textShadowColor: 'rgba(0, 0, 0, 0.5)',
+                textShadowBlur: 4,
+                formatter: Math.round
             }
         },
-        x: { 
-            stacked: true, 
-            grid: { display: false },
-            ticks: { font: { size: 11, weight: 'bold' } } 
+        scales: {
+            y: { 
+                stacked: true, 
+                beginAtZero: true,
+                max: axisMax,
+                grace: '10%',
+                grid: { color: '#e2e8f4' },
+                ticks: { font: { size: 11 } }
+            },
+            x: { 
+                stacked: true, 
+                grid: { display: false },
+                ticks: { font: { size: 11, weight: 'bold' } } 
+            }
         }
-    }
-};
+    };
+}
 
 new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
@@ -1905,7 +1941,7 @@ new Chart(document.getElementById('cInstEvo'), {
             borderRadius: i === instCanales.length - 1 ? 4 : 0,
         }))
     },
-    options: stackOpts,
+    options: makeStackOpts(instData),
     plugins: [pluginTotalesArriba]
 });
 
@@ -1920,7 +1956,7 @@ new Chart(document.getElementById('cVentEvo'), {
             borderRadius: i === ventCanales.length - 1 ? 4 : 0,
         }))
     },
-    options: stackOpts,
+    options: makeStackOpts(ventData),
     plugins: [pluginTotalesArriba]
 });
 </script>
