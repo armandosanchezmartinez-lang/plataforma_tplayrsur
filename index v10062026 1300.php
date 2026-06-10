@@ -692,6 +692,62 @@ function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_
     return (int)($row['total'] ?? 0);
 }
 
+function tx_arpu_instalaciones_dashboard($conexion, $mes, $anio, $cond_dia_fecha, $scope_sql = '', $folios = []) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - ARPU COMERCIAL
+    |--------------------------------------------------------------------------
+    |
+    | Fuente oficial:
+    |   instalaciones.precio_pronto_pago
+    |
+    | Regla de negocio:
+    |   ARPU = SUM(precio_pronto_pago) / instalaciones válidas
+    |
+    | Exclusiones:
+    |   - precio_pronto_pago <= 0
+    |   - origen_prospecto '-' o vacío
+    |   - registros sin estructura comercial: lider '-' o vacío
+    |
+    | Esto evita contaminar el ARPU comercial con instalaciones corporativas,
+    | Solución a la Medida o registros no asignados.
+    |
+    | La función respeta el mismo rango de días y scope jerárquico del dashboard.
+    |--------------------------------------------------------------------------
+    */
+    $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
+    $where_folios = "";
+
+    if (!empty($folios)) {
+        $folios_sql = tx_sql_in_escaped($conexion, $folios);
+        $where_folios = " AND folio_empleado IN ($folios_sql)";
+    }
+
+    $r = mysqli_query($conexion, "
+        SELECT 
+            COALESCE(SUM(precio_pronto_pago),0) AS ingreso,
+            COUNT(cuenta) AS instalaciones_validas
+        FROM instalaciones
+        WHERE MONTH(fecha)=".(int)$mes."
+          AND YEAR(fecha)=".(int)$anio."
+          $cond_dia_fecha
+          AND precio_pronto_pago > 0
+          AND origen_prospecto IS NOT NULL
+          AND TRIM(origen_prospecto) <> ''
+          AND origen_prospecto <> '-'
+          AND lider IS NOT NULL
+          AND TRIM(lider) <> ''
+          AND lider <> '-'
+          $where_scope
+          $where_folios
+    ");
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    $instalaciones = (int)($row['instalaciones_validas'] ?? 0);
+    $ingreso = (float)($row['ingreso'] ?? 0);
+
+    return $instalaciones > 0 ? round($ingreso / $instalaciones, 2) : 0;
+}
+
 function tx_meta_acum_distrito($conexion, $distrito, $mes, $anio, $dias) {
     $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
     $r = mysqli_query($conexion, "SELECT SUM(meta_diaria) AS meta FROM metas_instalacion WHERE mes_num=".(int)$mes." AND anio=".(int)$anio." AND dia=1 AND distrito IN ($dsql)");
@@ -1104,6 +1160,48 @@ $fecha_inicio_evolucion = date(
 for ($i = 5; $i >= 0; $i--) {
     $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
     $meses_labels[] = date('M Y', $ts);
+}
+
+
+// ── ARPU HISTÓRICO 6 MESES ──────────────────────────────────────────────────
+// Sustituye Mix 2P/3P Ventas porque aporta una lectura más ejecutiva.
+// Compara el mismo rango de días seleccionado en cada mes.
+// Ejemplo MTD vencido 01-09: calcula ARPU del día 01 al 09 de cada mes.
+$arpu_labels = $meses_labels;
+$arpu_data = array_fill(0, 6, 0);
+
+for ($i_arpu = 5; $i_arpu >= 0; $i_arpu--) {
+    $ts_arpu = mktime(0, 0, 0, $mes_actual - $i_arpu, 1, $anio_query);
+    $mes_arpu = (int)date('n', $ts_arpu);
+    $anio_arpu = (int)date('Y', $ts_arpu);
+    $idx_arpu = 5 - $i_arpu;
+
+    $ultimo_dia_mes_arpu = (int)date('t', $ts_arpu);
+    if ($rango_mode === 'completo') {
+        $cond_arpu_dia = '';
+    } else {
+        $dia_ini_arpu = min($dia_inicio_dashboard, $ultimo_dia_mes_arpu);
+        $dia_fin_arpu = min($dia_fin_dashboard, $ultimo_dia_mes_arpu);
+        $cond_arpu_dia = " AND DAY(fecha) BETWEEN $dia_ini_arpu AND $dia_fin_arpu";
+    }
+
+    if ($rol_consulta === 'admin') {
+        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
+            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia
+        );
+    } elseif ($scope_filtrar_por_distrito) {
+        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
+            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia, $scope_distritos_sql
+        );
+    } elseif ($por_distrito) {
+        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
+            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia, $distritos_sql
+        );
+    } else {
+        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
+            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia, '', $folio_ids
+        );
+    }
 }
 
 // 1. Datos Instalaciones por Origen
@@ -1534,6 +1632,10 @@ $roles_labels = [
         .dashboard-analytics-grid .chart-card{
             padding:18px;
         }
+        .arpu-card .chart-wrap{
+            min-height:230px;
+        }
+
         .cumplimiento-panel{
             padding:20px;
         }
@@ -2126,9 +2228,10 @@ include __DIR__ . '/includes/sidebar.php';
     <?php endif; ?>
 
 
-        <div class="chart-card">
-            <div class="chart-title">Mix 2P y 3P — Ventas</div>
-            <div class="chart-wrap"><canvas id="cVentMix"></canvas></div>
+        <div class="chart-card arpu-card">
+            <div class="chart-title">ARPU — Histórico 6 meses</div>
+            <div class="hierarchy-performance-sub" style="margin-top:2px;">Mismo rango seleccionado · precio pronto pago</div>
+            <div class="chart-wrap"><canvas id="cArpuHist"></canvas></div>
         </div>
 
         <div class="chart-card">
@@ -2293,10 +2396,56 @@ new Chart(document.getElementById('cInstMix'), {
     options: donutOpts(),
     plugins: [ChartDataLabels]
 });
-new Chart(document.getElementById('cVentMix'), {
-    type: 'doughnut',
-    data: { labels: ['2P','3P'], datasets: [{ data: [vent2p, vent3p], backgroundColor: [txBrandColors.magenta, txBrandColors.purpura], borderWidth: 0 }] },
-    options: donutOpts(),
+const arpuLabels = <?= json_encode($arpu_labels) ?>;
+const arpuData = <?= json_encode($arpu_data) ?>;
+
+new Chart(document.getElementById('cArpuHist'), {
+    type: 'bar',
+    data: {
+        labels: arpuLabels,
+        datasets: [{
+            label: 'ARPU',
+            data: arpuData,
+            backgroundColor: txBrandColors.magenta,
+            borderRadius: 10,
+            maxBarThickness: 42
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 22 } },
+        plugins: {
+            legend: { display: false },
+            datalabels: {
+                anchor: 'end',
+                align: 'top',
+                color: '#1a2540',
+                font: { weight: '900', size: 10 },
+                formatter: value => value > 0 ? '$' + Math.round(value).toLocaleString('es-MX') : ''
+            },
+            tooltip: {
+                callbacks: {
+                    label: ctx => ' ARPU: $' + Number(ctx.parsed.y || 0).toLocaleString('es-MX', {maximumFractionDigits: 0})
+                }
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                grace: '18%',
+                grid: { color: '#e2e8f4' },
+                ticks: {
+                    font: { size: 10 },
+                    callback: value => '$' + Number(value).toLocaleString('es-MX')
+                }
+            },
+            x: {
+                grid: { display: false },
+                ticks: { font: { size: 10, weight: 'bold' } }
+            }
+        }
+    },
     plugins: [ChartDataLabels]
 });
 

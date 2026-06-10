@@ -613,29 +613,41 @@ $total_sin_reai = 0;
 $total_riesgo = 0;
 foreach ($vendedores as $vend) {
     $tgs = $vend['numero_talento_gs'];
+    $nivel_tmp = $vend['nivel_reai'] ?? 'VENDEDOR';
+    $hc_activo_tmp = max(1, count($vend['child_talentos'] ?? []));
     $st = $stats[$tgs] ?? [];
     $inst_base = $st['inst_base'] ?? 0;
     $inst_actual = $st['inst_actual'] ?? 0;
     $reai_total = $st['reai_total'] ?? 0;
     if ($reai_total > 0) $total_con_reai++; else $total_sin_reai++;
-    $prod_actual_tmp = $dias_habiles_actual > 0 ? round($inst_actual / $dias_habiles_actual, 2) : 0;
+
+    // REAI v2.1: productividad alineada a Ranking.
+    // Vendedor: INS / días hábiles. Niveles jerárquicos: INS / HC activo / días hábiles.
+    $prod_actual_tmp = $dias_habiles_actual > 0
+        ? round($inst_actual / (($nivel_tmp === 'VENDEDOR') ? 1 : $hc_activo_tmp) / $dias_habiles_actual, 2)
+        : 0;
+
     $inst_3m_tmp = (int)($st['inst_3m'] ?? 0);
     $prod_3m_tmp = $dias_habiles_3m > 0 ? round($inst_3m_tmp / $dias_habiles_3m, 2) : 0;
     $dif_tmp = $inst_actual - $inst_base;
     $pct_tmp = $inst_base > 0 ? round(($dif_tmp / $inst_base) * 100, 0) : ($inst_actual > 0 ? 100 : 0);
     $pct_alcance_tmp = 0;
-    $meta_semanal_eo_tmp = (int)($st['meta_semanal_eo'] ?? 0);
-    if ($meta_semanal_eo_tmp > 0) {
-        $meta_diaria_tmp = $meta_semanal_eo_tmp / max(1, $dias_habiles_semana_meta);
-    } else {
-        $meta_mensual_std_tmp = meta_mensual_estandar($vend['distrito'] ?? '', $vend['canal_venta'] ?? '', $metal_reai_default, $metas_estandar);
-        $meta_diaria_tmp = $meta_mensual_std_tmp / max(1, $dias_habiles_mes_actual_total);
-    }
-    $meta_prorrateada_tmp = (int)round($meta_diaria_tmp * $dias_habiles_actual, 0);
+    $meta_prorrateada_tmp = (int)($st['meta_prorrateada'] ?? 0);
     if ($meta_prorrateada_tmp > 0) $pct_alcance_tmp = round(($inst_actual / $meta_prorrateada_tmp) * 100, 0);
 
     [$accion_tmp, $accion_cls_tmp] = accion_sugerida_reai($reai_total, $prod_3m_tmp, $prod_actual_tmp, $pct_alcance_tmp, $dif_tmp, $pct_tmp, $inst_actual);
     if ($accion_tmp !== 'OK' && $accion_tmp !== 'SEG') $total_riesgo++;
+}
+
+$niveles_filtro_reai = ['TODOS'];
+if ($rol === 'admin' || $rol === 'director_regional') {
+    $niveles_filtro_reai = ['TODOS','DIRECTOR DISTRITAL','LÍDER','COACH','VENDEDOR'];
+} elseif ($rol === 'director_distrital') {
+    $niveles_filtro_reai = ['TODOS','LÍDER','COACH','VENDEDOR'];
+} elseif ($rol === 'lider') {
+    $niveles_filtro_reai = ['TODOS','COACH','VENDEDOR'];
+} elseif ($rol === 'coach') {
+    $niveles_filtro_reai = ['TODOS','VENDEDOR'];
 }
 ?>
 <!DOCTYPE html>
@@ -643,7 +655,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI — TOTALXPEDIENT</title>
+    <title>REAI v2.1 — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
@@ -702,17 +714,18 @@ foreach ($vendedores as $vend) {
         body.page-reai .table-card th{padding:9px 10px;font-size:.68rem;line-height:1.05;white-space:nowrap;}
         body.page-reai .table-card td{padding:8px 10px;font-size:.76rem;line-height:1.12;vertical-align:middle;}
         body.page-reai .table-card tbody tr{height:46px;}
-        body.page-reai .table-card th:nth-child(1), body.page-reai .table-card td:nth-child(1){width:22%;}
-        body.page-reai .table-card th:nth-child(2), body.page-reai .table-card td:nth-child(2){width:6%;}
-        body.page-reai .table-card th:nth-child(3), body.page-reai .table-card td:nth-child(3){width:9%;}
-        body.page-reai .table-card th:nth-child(4), body.page-reai .table-card td:nth-child(4){width:6%;}
+        body.page-reai .table-card th:nth-child(1), body.page-reai .table-card td:nth-child(1){width:20%;}
+        body.page-reai .table-card th:nth-child(2), body.page-reai .table-card td:nth-child(2){width:5%;}
+        body.page-reai .table-card th:nth-child(3), body.page-reai .table-card td:nth-child(3){width:5%;}
+        body.page-reai .table-card th:nth-child(4), body.page-reai .table-card td:nth-child(4){width:9%;}
         body.page-reai .table-card th:nth-child(5), body.page-reai .table-card td:nth-child(5){width:6%;}
-        body.page-reai .table-card th:nth-child(6), body.page-reai .table-card td:nth-child(6){width:8%;}
-        body.page-reai .table-card th:nth-child(7), body.page-reai .table-card td:nth-child(7){width:7%;}
+        body.page-reai .table-card th:nth-child(6), body.page-reai .table-card td:nth-child(6){width:6%;}
+        body.page-reai .table-card th:nth-child(7), body.page-reai .table-card td:nth-child(7){width:8%;}
         body.page-reai .table-card th:nth-child(8), body.page-reai .table-card td:nth-child(8){width:7%;}
         body.page-reai .table-card th:nth-child(9), body.page-reai .table-card td:nth-child(9){width:7%;}
-        body.page-reai .table-card th:nth-child(10), body.page-reai .table-card td:nth-child(10){width:6%;}
-        body.page-reai .table-card th:nth-child(11), body.page-reai .table-card td:nth-child(11){width:16%;}
+        body.page-reai .table-card th:nth-child(10), body.page-reai .table-card td:nth-child(10){width:8%;}
+        body.page-reai .table-card th:nth-child(11), body.page-reai .table-card td:nth-child(11){width:6%;}
+        body.page-reai .table-card th:nth-child(12), body.page-reai .table-card td:nth-child(12){width:13%;}
         body.page-reai .table-card .sub-text{font-size:.62rem;line-height:1;margin-top:1px;}
         body.page-reai .reai-badge{min-width:24px;height:24px;padding:0 6px;margin:0 1px;font-size:.68rem;border-radius:8px;}
         body.page-reai .prod-pill{min-width:42px;padding:4px 7px;font-size:.7rem;}
@@ -722,6 +735,10 @@ foreach ($vendedores as $vend) {
         body.page-reai .alcance-bad{color:#DC2626;font-weight:900;}
         body.page-reai .status-pill{padding:5px 8px;font-size:.68rem;}
 
+        body.page-reai .nivel-filter-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:rgba(255,255,255,.65);border-radius:16px;padding:6px;border:1px solid rgba(122,43,255,.10);}
+        body.page-reai .nivel-filter-tabs button{border:none;background:transparent;padding:8px 13px;border-radius:12px;font-size:.78rem;font-weight:900;color:var(--text2);cursor:pointer;}
+        body.page-reai .nivel-filter-tabs button.active{background:var(--grad-main);color:white;}
+        body.page-reai .hc-pill{display:inline-flex;min-width:34px;justify-content:center;padding:4px 7px;border-radius:999px;font-weight:900;font-size:.7rem;background:#F1F5F9;color:#334155;}
         body.page-reai .group-row td{background:linear-gradient(90deg, rgba(122,43,255,.12), rgba(0,164,255,.08));color:#1F2A44;font-weight:900;text-transform:uppercase;letter-spacing:.5px;font-size:.72rem;padding:10px 12px;border-top:1px solid rgba(122,43,255,.14);border-bottom:1px solid rgba(122,43,255,.10);}
         body.page-reai .nivel-chip{display:inline-flex;align-items:center;padding:2px 7px;border-radius:999px;background:#EEF2FF;color:#3730A3;font-size:.58rem;font-weight:900;margin-left:6px;vertical-align:middle;}
         body.page-reai th.sortable{cursor:pointer;user-select:none;position:relative;}
@@ -763,6 +780,11 @@ include __DIR__ . '/../includes/sidebar.php';
         <div class="search-bar">
             <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador, nivel o distrito..." oninput="filtrarTabla()">
         </div>
+        <div class="nivel-filter-tabs" id="nivelTabs" aria-label="Filtro por nivel jerárquico">
+            <?php foreach ($niveles_filtro_reai as $nf): ?>
+                <button type="button" class="<?= $nf === 'TODOS' ? 'active' : '' ?>" data-nivel-filter="<?= h($nf) ?>" onclick="setFiltroNivel('<?= h($nf) ?>', this)"><?= h($nf === 'TODOS' ? 'Todos' : $nf) ?></button>
+            <?php endforeach; ?>
+        </div>
         <div class="period-tabs">
             <a class="<?= $periodo === 'semanal' ? 'active' : '' ?>" href="?periodo=semanal">Semanal</a>
             <a class="<?= $periodo === 'mensual' ? 'active' : '' ?>" href="?periodo=mensual">Mensual</a>
@@ -775,6 +797,7 @@ include __DIR__ . '/../includes/sidebar.php';
                 <tr>
                     <th class="left sortable" data-sort="text">Nombre / Nivel</th>
                     <th class="sortable" data-sort="num">Antig.</th>
+                    <th class="sortable" data-sort="num">HC</th>
                     <th class="sortable" data-sort="num">Meta Prorrateada</th>
                     <th class="sortable" data-sort="num"><?= h($label_base) ?></th>
                     <th class="sortable" data-sort="num"><?= h($label_actual) ?></th>
@@ -794,7 +817,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     $grupo_actual_reai = $nivel_reai;
                     $grupo_label = ($nivel_reai === 'DIRECTOR DISTRITAL') ? 'Línea Directa · Directores Distritales' : (($nivel_reai === 'LÍDER') ? 'Línea Indirecta · Líderes de Venta' : (($nivel_reai === 'COACH') ? 'Línea Indirecta · Coaches de Venta' : 'Línea Indirecta · Vendedores'));
             ?>
-            <tr class="group-row" data-group-row="1"><td colspan="11"><?= h($grupo_label) ?></td></tr>
+            <tr class="group-row" data-group-row="1"><td colspan="12"><?= h($grupo_label) ?></td></tr>
             <?php endif; ?>
             <?php
                 $tgs       = $vend['numero_talento_gs'];
@@ -805,7 +828,10 @@ include __DIR__ . '/../includes/sidebar.php';
                 $inst_act  = (int)($st['inst_actual'] ?? 0);
                 $dif       = $inst_act - $inst_base;
                 $pct       = $inst_base > 0 ? round(($dif / $inst_base) * 100, 0) : ($inst_act > 0 ? 100 : 0);
-                $prod      = $dias_habiles_actual > 0 ? round($inst_act / $dias_habiles_actual, 2) : 0;
+                $hc_activo = max(1, count($vend['child_talentos'] ?? []));
+                // REAI v2.1: productividad alineada a Ranking.
+                // Vendedor = INS / días hábiles; Coach/Líder/Director = INS / HC activo / días hábiles.
+                $prod      = $dias_habiles_actual > 0 ? round($inst_act / (($nivel_reai === 'VENDEDOR') ? 1 : $hc_activo) / $dias_habiles_actual, 2) : 0;
                 $prod_cls  = $prod >= .70 ? 'prod-good' : ($prod >= .40 ? 'prod-mid' : 'prod-bad');
                 $inst_3m   = (int)($st['inst_3m'] ?? 0);
                 $prod_3m   = $dias_habiles_3m > 0 ? round($inst_3m / $dias_habiles_3m, 2) : 0;
@@ -836,9 +862,10 @@ include __DIR__ . '/../includes/sidebar.php';
                         </a>
                         <span class="nivel-chip"><?= h($nivel_reai) ?></span>
                     </div>
-                    <div class="sub-text"><?= h($tgs) ?> · <?= h($vend['distrito'] ?? '') ?> · HC base: <?= fmt_num(count($vend['child_talentos'] ?? [])) ?></div>
+                    <div class="sub-text"><?= h($tgs) ?> · <?= h($vend['distrito'] ?? '') ?></div>
                 </td>
                 <td data-sort-value="<?= $antig ?>"><span style="font-weight:800;"><?= $antig ?></span> <span class="sub-text">m</span></td>
+                <td data-sort-value="<?= $hc_activo ?>"><span class="hc-pill" title="HC activo a cargo"><?= fmt_num($hc_activo) ?></span></td>
                 <td data-sort-value="<?= $meta_prorrateada ?>"><span class="meta-pill"><?= fmt_meta($meta_prorrateada) ?></span></td>
                 <td data-sort-value="<?= $inst_base ?>"><span style="font-weight:900;"><?= fmt_num($inst_base) ?></span></td>
                 <td data-sort-value="<?= $inst_act ?>"><span style="font-weight:900;"><?= fmt_num($inst_act) ?></span></td>
@@ -895,6 +922,7 @@ include __DIR__ . '/../includes/sidebar.php';
 
 <script>
 let currentTalento = '', currentNombre = '', currentAsunto = '';
+let filtroNivel = 'TODOS';
 const puedeCapturar = <?= $puede_capturar ? 'true' : 'false' ?>;
 const asuntoColors = {
     'Retroalimentación':'asunto-r','ECNUs':'asunto-e',
@@ -902,13 +930,23 @@ const asuntoColors = {
 };
 const endpointActual = window.location.pathname.split('/').pop() || '';
 
+function setFiltroNivel(nivel, btn) {
+    filtroNivel = nivel || 'TODOS';
+    document.querySelectorAll('#nivelTabs button').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    filtrarTabla();
+}
+
 function filtrarTabla() {
     const q = document.getElementById('buscador').value.toLowerCase();
     const rows = Array.from(document.querySelectorAll('#tablaBody tr'));
     rows.forEach(tr => {
         if (tr.dataset.groupRow === '1') return;
         const n = tr.dataset.nombre || '';
-        tr.classList.toggle('hidden', q !== '' && !n.includes(q));
+        const nivel = tr.dataset.nivel || '';
+        const matchTexto = q === '' || n.includes(q);
+        const matchNivel = filtroNivel === 'TODOS' || nivel === filtroNivel;
+        tr.classList.toggle('hidden', !(matchTexto && matchNivel));
     });
     // Oculta encabezados de grupo sin filas visibles debajo.
     rows.forEach((tr, idx) => {
@@ -970,7 +1008,7 @@ function ordenarTabla(colIndex, tipo, th) {
 }
 document.addEventListener('DOMContentLoaded', function() {
     inicializarOrdenamiento();
-    const colActual = 4; // columna actual: JUN / SEM actual, índice 0-based después de Meta Prorrateada
+    const colActual = 5; // columna actual: JUN / SEM actual; índice 0-based considerando nueva columna HC
     const thActual = document.querySelectorAll('th.sortable')[colActual];
     if (thActual) {
         thActual.dataset.order = 'asc'; // fuerza primer clic programático a descendente
