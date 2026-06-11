@@ -26,6 +26,27 @@ function table_exists($conexion, $table) {
     $res = mysqli_query($conexion, "SHOW TABLES LIKE '$table'");
     return $res && mysqli_num_rows($res) > 0;
 }
+function table_columns_reai($conexion, $table) {
+    $cols = [];
+    $table_esc = str_replace('`', '', (string)$table);
+    $res = mysqli_query($conexion, "SHOW COLUMNS FROM `$table_esc`");
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $cols[] = $row['Field'];
+    }
+    return $cols;
+}
+function pick_column_reai($cols, $candidates) {
+    $lookup = [];
+    foreach ($cols as $c) $lookup[strtolower($c)] = $c;
+    foreach ($candidates as $cand) {
+        $key = strtolower($cand);
+        if (isset($lookup[$key])) return $lookup[$key];
+    }
+    return null;
+}
+function bt_reai($identifier) {
+    return '`' . str_replace('`', '', (string)$identifier) . '`';
+}
 function contar_dias_habiles($conexion, $fecha_inicio, $fecha_fin) {
     if (!$fecha_inicio || !$fecha_fin) return 1;
     $inicio = new DateTime($fecha_inicio);
@@ -238,6 +259,26 @@ $dias_habiles_actual = contar_dias_habiles($conexion, $periodo_actual['inicio'],
 $fecha_3m_inicio = date('Y-m-01', strtotime($ultima_fecha . ' -3 months'));
 $fecha_3m_fin    = date('Y-m-t', strtotime($ultima_fecha . ' -1 month'));
 $dias_habiles_3m = contar_dias_habiles($conexion, $fecha_3m_inicio, $fecha_3m_fin);
+
+function semanas_iso_en_rango_reai($fecha_inicio, $fecha_fin) {
+    $inicio = new DateTime($fecha_inicio);
+    $fin = new DateTime($fecha_fin);
+    $semanas = [];
+    for ($d = clone $inicio; $d <= $fin; $d->modify('+1 day')) {
+        $key = $d->format('o') . '-' . $d->format('W');
+        $semanas[$key] = ['anio' => (int)$d->format('o'), 'semana' => (int)$d->format('W')];
+    }
+    return array_values($semanas);
+}
+function meses_en_rango_reai($fecha_inicio, $fecha_fin) {
+    $inicio = new DateTime(date('Y-m-01', strtotime($fecha_inicio)));
+    $fin = new DateTime(date('Y-m-01', strtotime($fecha_fin)));
+    $meses = [];
+    for ($d = clone $inicio; $d <= $fin; $d->modify('+1 month')) {
+        $meses[] = ['anio' => (int)$d->format('Y'), 'mes' => (int)$d->format('n')];
+    }
+    return $meses;
+}
 
 [$label_base, $label_actual] = periodo_label($periodo, $periodo_base, $periodo_actual);
 
@@ -497,8 +538,36 @@ $vendedores = array_values(array_filter($vendedores, function($row) use ($vista_
 }));
 
 $mostrar_hc_col = ($vista_nivel !== 'VENDEDOR');
-$mostrar_alcance_3m = in_array($vista_nivel, ['DIRECTOR DISTRITAL','LÍDER'], true);
+$mostrar_alcance_3m = ($vista_nivel === 'DIRECTOR DISTRITAL');
 $colspan_reai = $mostrar_hc_col ? 12 : 11;
+
+// Meta 3M oficial para Directores Distritales.
+// REAI v2.5: Fuente correcta = metas_instalacion (metas mensuales oficiales),
+// acumulando los últimos 3 meses completos del corte operativo.
+$meta_3m_director_por_distrito = [];
+if ($vista_nivel === 'DIRECTOR DISTRITAL' && table_exists($conexion, 'metas_instalacion')) {
+    $cols_mi = table_columns_reai($conexion, 'metas_instalacion');
+    $col_distrito = pick_column_reai($cols_mi, ['distrito','Distrito']);
+    $col_anio     = pick_column_reai($cols_mi, ['anio','año','year']);
+    $col_mes      = pick_column_reai($cols_mi, ['mes','month']);
+    $col_meta     = pick_column_reai($cols_mi, ['meta','meta_instalacion','meta_mensual','instalaciones','objetivo']);
+
+    $meses_3m = meses_en_rango_reai($fecha_3m_inicio, $fecha_3m_fin);
+    if ($col_distrito && $col_anio && $col_mes && $col_meta && !empty($meses_3m)) {
+        $conds = [];
+        foreach ($meses_3m as $mm) {
+            $conds[] = '(' . bt_reai($col_anio) . ' = ' . (int)$mm['anio'] . ' AND ' . bt_reai($col_mes) . ' = ' . (int)$mm['mes'] . ')';
+        }
+        $sql_meta_3m_dd = "SELECT " . bt_reai($col_distrito) . " AS distrito, SUM(" . bt_reai($col_meta) . ") AS meta_3m
+                           FROM metas_instalacion
+                           WHERE " . implode(' OR ', $conds) . "
+                           GROUP BY " . bt_reai($col_distrito);
+        $res_meta_3m_dd = mysqli_query($conexion, $sql_meta_3m_dd);
+        while ($res_meta_3m_dd && $rm3 = mysqli_fetch_assoc($res_meta_3m_dd)) {
+            $meta_3m_director_por_distrito[normaliza_key($rm3['distrito'] ?? '')] = (float)($rm3['meta_3m'] ?? 0);
+        }
+    }
+}
 
 // ── MÉTRICAS POR NIVEL / COLABORADOR ───────────────────────────────────────
 $stats = [];
@@ -623,14 +692,17 @@ if (!empty($vendedores)) {
             $stats[$tgs_row]['meta_semanal_eo'] += (int)($metas_eo_vendedor[$tv] ?? 0);
         }
 
-        // Meta 3M: para Director Distrital y Líder se utiliza como base el acumulado de metas mensuales estándar
-        // de los vendedores descendientes durante los últimos 3 meses completos. Esta métrica alimenta ALCANCE 3M.
+        // Meta 3M oficial sólo para Director Distrital:
+        // metas_instalacion acumulada de los últimos 3 meses completos.
+        // Para Líder/Coach/Vendedor no se usa meta 3M; conservan PROD 3M.
         $meta_mensual_sum = 0.0;
         foreach ($childs as $tv) {
             $hr = $by_talento[$tv] ?? [];
             $meta_mensual_sum += meta_mensual_estandar($hr['distrito'] ?? ($row['distrito'] ?? ''), $hr['posicion'] ?? '', $metal_reai_default, $metas_estandar);
         }
-        $stats[$tgs_row]['meta_3m'] = (int)round($meta_mensual_sum * 3, 0);
+        if (($row['nivel_reai'] ?? '') === 'DIRECTOR DISTRITAL') {
+            $stats[$tgs_row]['meta_3m'] = (float)($meta_3m_director_por_distrito[normaliza_key($row['distrito'] ?? '')] ?? 0);
+        }
 
         if ($stats[$tgs_row]['meta_semanal_eo'] > 0) {
             $meta_diaria_row = $stats[$tgs_row]['meta_semanal_eo'] / max(1, $dias_habiles_semana_meta);
@@ -664,7 +736,7 @@ foreach ($vendedores as $vend) {
         : 0;
 
     $inst_3m_tmp = (int)($st['inst_3m'] ?? 0);
-    $prod_3m_tmp = $dias_habiles_3m > 0 ? round($inst_3m_tmp / $dias_habiles_3m, 2) : 0;
+    $prod_3m_tmp = $dias_habiles_3m > 0 ? round($inst_3m_tmp / (($nivel_tmp === 'VENDEDOR') ? 1 : $hc_activo_tmp) / $dias_habiles_3m, 2) : 0;
     $dif_tmp = $inst_actual - $inst_base;
     $pct_tmp = $inst_base > 0 ? round(($dif_tmp / $inst_base) * 100, 0) : ($inst_actual > 0 ? 100 : 0);
     $pct_alcance_tmp = 0;
@@ -681,7 +753,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2.3 — TOTALXPEDIENT</title>
+    <title>REAI v2.5 — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
@@ -815,7 +887,7 @@ include __DIR__ . '/../includes/sidebar.php';
 
     <div class="toolbar-v2">
         <div class="search-bar">
-            <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador, nivel o distrito..." oninput="filtrarTabla()">
+            <input type="text" class="search-input" id="buscador" placeholder="Buscar colaborador o distrito..." oninput="filtrarTabla()">
         </div>
         <div class="nivel-filter-tabs" id="nivelTabs" aria-label="Vista por nivel jerárquico">
             <?php foreach ($niveles_filtro_reai as $nf): ?>
@@ -832,7 +904,7 @@ include __DIR__ . '/../includes/sidebar.php';
         <table>
             <thead>
                 <tr>
-                    <th class="left sortable" data-sort="text">Nombre / Nivel</th>
+                    <th class="left sortable" data-sort="text">Nombre</th>
                     <th class="sortable" data-sort="num">Antig.</th>
                     <?php if ($mostrar_hc_col): ?><th class="sortable" data-sort="num">HC</th><?php endif; ?>
                     <th class="sortable" data-sort="num">Meta Prorrateada</th>
@@ -872,7 +944,7 @@ include __DIR__ . '/../includes/sidebar.php';
                 $prod_cls  = $prod >= .70 ? 'prod-good' : ($prod >= .40 ? 'prod-mid' : 'prod-bad');
                 $inst_3m   = (int)($st['inst_3m'] ?? 0);
                 $meta_3m   = (int)($st['meta_3m'] ?? 0);
-                $prod_3m   = $dias_habiles_3m > 0 ? round($inst_3m / $dias_habiles_3m, 2) : 0;
+                $prod_3m   = $dias_habiles_3m > 0 ? round($inst_3m / (($nivel_reai === 'VENDEDOR') ? 1 : $hc_activo) / $dias_habiles_3m, 2) : 0;
                 $alcance_3m = $meta_3m > 0 ? round(($inst_3m / $meta_3m) * 100, 0) : 0;
                 $valor_3m = $mostrar_alcance_3m ? $alcance_3m : $prod_3m;
                 $prod_3m_cls = $mostrar_alcance_3m
@@ -902,7 +974,6 @@ include __DIR__ . '/../includes/sidebar.php';
                         <a href="detalle_vendedor.php?tgs=<?= urlencode($tgs) ?>&periodo=<?= urlencode($periodo) ?>" style="color:var(--blue);text-decoration:none;font-weight:700;" title="Ver detalle del vendedor">
                             <?= h($nombre) ?>
                         </a>
-                        <span class="nivel-chip"><?= h($nivel_reai) ?></span>
                     </div>
                     <div class="sub-text"><?= h($tgs) ?> · <?= h($vend['distrito'] ?? '') ?></div>
                 </td>
@@ -914,7 +985,7 @@ include __DIR__ . '/../includes/sidebar.php';
                 <td data-sort-value="<?= $pct ?>"><span class="<?= $pct_cls ?>"><?= $dif >= 0 ? '+' : '' ?><?= fmt_num($dif) ?> / <?= $pct >= 0 ? '+' : '' ?><?= fmt_num($pct) ?>%</span></td>
                 <td data-sort-value="<?= $prod ?>"><span class="prod-pill <?= $prod_cls ?>"><?= fmt_prod($prod) ?></span></td>
                 <td data-sort-value="<?= $pct_alcance ?>"><span class="<?= $alcance_cls ?>"><?= fmt_num($pct_alcance) ?>%</span></td>
-                <td data-sort-value="<?= $valor_3m ?>"><span class="prod-pill <?= $prod_3m_cls ?>" title="<?= date('d/m/Y', strtotime($fecha_3m_inicio)) ?> - <?= date('d/m/Y', strtotime($fecha_3m_fin)) ?> · Inst: <?= fmt_num($inst_3m) ?><?= $mostrar_alcance_3m ? ' · Meta 3M: '.fmt_num($meta_3m) : ' · DH: '.fmt_num($dias_habiles_3m) ?>"><?= $mostrar_alcance_3m ? fmt_num($alcance_3m).'%' : fmt_prod($prod_3m) ?></span></td>
+                <td data-sort-value="<?= $valor_3m ?>"><span class="prod-pill <?= $prod_3m_cls ?>" title="<?= date('d/m/Y', strtotime($fecha_3m_inicio)) ?> - <?= date('d/m/Y', strtotime($fecha_3m_fin)) ?> · Inst: <?= fmt_num($inst_3m) ?><?= $mostrar_alcance_3m ? ' · Meta 3M: '.fmt_num($meta_3m) : ' · HC: '.fmt_num(($nivel_reai === 'VENDEDOR') ? 1 : $hc_activo).' · DH: '.fmt_num($dias_habiles_3m) ?>"><?= $mostrar_alcance_3m ? fmt_num($alcance_3m).'%' : fmt_prod($prod_3m) ?></span></td>
                 <td data-sort-value="<?= h($estatus_txt) ?>"><span class="status-pill <?= $estatus_cls ?>"><?= h($estatus_txt) ?></span></td>
                 <td class="sep">
                     <?php

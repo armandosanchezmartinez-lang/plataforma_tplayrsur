@@ -1375,7 +1375,6 @@ function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puesto
             'vendedor' => $row['vendedor'] ?? '',
             'distrito' => $row['distrito'] ?? '',
             'coach' => $row['coach'] ?? '',
-            'director' => $row['director'] ?? '',
             'instalaciones' => 0,
             'arpu' => 0,
             'productividad' => 0,
@@ -1625,7 +1624,7 @@ $roles_labels = [
         }
         .dashboard-range-info{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
         .dashboard-range-label{
-            font-size:.72rem;
+            font-size:.68rem;
             text-transform:uppercase;
             letter-spacing:.7px;
             font-weight:900;
@@ -1885,13 +1884,13 @@ $roles_labels = [
         }
         .top-productividad-table{
             width:100%;
-            min-width:980px;
             border-collapse:collapse;
-            font-size:.72rem;
+            font-size:.68rem;
+            table-layout:fixed;
         }
         .top-productividad-table th{
             text-align:left;
-            padding:8px 8px;
+            padding:7px 6px;
             color:#6b7a99;
             text-transform:uppercase;
             letter-spacing:.05em;
@@ -1899,18 +1898,39 @@ $roles_labels = [
             border-bottom:1px solid #e2e8f4;
         }
         .top-productividad-table td{
-            padding:8px 8px;
+            padding:7px 6px;
             border-bottom:1px solid #edf2fb;
             color:#1a2540;
             font-weight:800;
             vertical-align:middle;
         }
-        .top-productividad-table tr:last-child td{
+        
+        .top-productividad-table-wrap{
+            width:100%;
+            max-width:100%;
+            overflow-x:hidden;
+        }
+        .top-productividad-table th:nth-child(1),
+        .top-productividad-table td:nth-child(1){width:34px;}
+        .top-productividad-table th:nth-child(2),
+        .top-productividad-table td:nth-child(2){width:31%;}
+        .top-productividad-table th:nth-child(3),
+        .top-productividad-table td:nth-child(3){width:14%;}
+        .top-productividad-table th:nth-child(4),
+        .top-productividad-table td:nth-child(4){width:23%;}
+        .top-productividad-table th:nth-child(5),
+        .top-productividad-table td:nth-child(5){width:12%;}
+        .top-productividad-table th:nth-child(6),
+        .top-productividad-table td:nth-child(6){width:13%;}
+        .top-productividad-table th:nth-child(7),
+        .top-productividad-table td:nth-child(7){width:7%;}
+
+.top-productividad-table tr:last-child td{
             border-bottom:0;
         }
         .seller-name{
             font-weight:950;
-            max-width:220px;
+            max-width:180px;
             white-space:nowrap;
             overflow:hidden;
             text-overflow:ellipsis;
@@ -1923,7 +1943,7 @@ $roles_labels = [
         .seller-small{
             color:#334155;
             font-weight:850;
-            max-width:170px;
+            max-width:145px;
             white-space:nowrap;
             overflow:hidden;
             text-overflow:ellipsis;
@@ -2647,7 +2667,7 @@ include __DIR__ . '/includes/sidebar.php';
             <!-- VENTAS -->
             <div>
                 <div class="evo-sub">Ventas por canal</div>
-                <div style="overflow-x:auto;">
+                <div class="top-productividad-table-wrap">
                 <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead>
                         <tr>
@@ -2689,7 +2709,7 @@ include __DIR__ . '/includes/sidebar.php';
             <!-- INSTALACIONES -->
             <div>
                 <div class="evo-sub">Instalaciones por origen</div>
-                <div style="overflow-x:auto;">
+                <div class="top-productividad-table-wrap">
                 <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead>
                         <tr>
@@ -2747,7 +2767,7 @@ include __DIR__ . '/includes/sidebar.php';
                 </div>
                 <div class="hierarchy-performance-note">TOP REGIONAL · <?= (int)$GLOBALS['dias_productividad_vendedor'] ?> días hábiles</div>
             </div>
-            <div style="overflow-x:auto;">
+            <div class="top-productividad-table-wrap">
                 <table class="top-productividad-table">
                     <thead>
                         <tr>
@@ -2755,7 +2775,6 @@ include __DIR__ . '/includes/sidebar.php';
                             <th>Nombre vendedor</th>
                             <th>Distrito</th>
                             <th>Coach</th>
-                            <th>Director</th>
                             <th style="text-align:right;">Ventas instaladas</th>
                             <th style="text-align:right;">Productividad</th>
                             <th style="text-align:right;">ARPU</th>
@@ -2772,7 +2791,6 @@ include __DIR__ . '/includes/sidebar.php';
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['vendedor'] ?? '') ?>"><?= htmlspecialchars($row['vendedor'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
                             <td><div class="seller-small" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
-                            <td><div class="seller-small" title="<?= htmlspecialchars($row['director'] ?? '') ?>"><?= htmlspecialchars($row['director'] ?? '') ?></div></td>
                             <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
                             <td class="seller-num">
                                 <div class="seller-prod">
@@ -2788,7 +2806,7 @@ include __DIR__ . '/includes/sidebar.php';
                         </tr>
                         <?php endforeach; ?>
                         <?php if (empty($items)): ?>
-                        <tr><td colspan="8" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
+                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -2797,7 +2815,7 @@ include __DIR__ . '/includes/sidebar.php';
         <?php }; ?>
 
         <?php $renderTopTable('Top regional productividad', 'Mejor productividad regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('Top regional offender', '0 ventas ordenado por productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
+        <?php $renderTopTable('Top Offender Regional', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
