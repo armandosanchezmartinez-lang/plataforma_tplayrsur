@@ -1307,52 +1307,83 @@ function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
 
 
 
-// ── TOP PRODUCTIVIDAD VENDEDORES ─────────────────────────────────────────────
-// Dos tablas ejecutivas: TOP 10 y TOP OFFENDER.
-// Respeta el scope jerárquico activo del dashboard.
-function tx_get_vendedores_scope_dashboard($conexion, $rol_consulta, $scope_filtrar_por_distrito, $scope_distritos_sql, $por_distrito, $distritos_sql, $folio_ids, $semana, $anio, $puestos_comerciales) {
-    $where = " WHERE h.semana=".(int)$semana."
-                AND h.anio=".(int)$anio."
-                AND h.numero_talento_gs NOT LIKE '%VACANTE%'
-                AND h.numero_talento_gs <> ''
-                AND h.posicion IN ($puestos_comerciales) ";
-
-    if ($rol_consulta === 'admin') {
-        // Toda la plantilla comercial activa.
-    } elseif ($scope_filtrar_por_distrito) {
-        $where .= " AND h.distrito IN ($scope_distritos_sql) ";
-    } elseif ($por_distrito) {
-        $where .= " AND h.distrito IN ($distritos_sql) ";
-    } else {
-        if (empty($folio_ids)) return [];
-        $folios_sql = tx_sql_in_escaped($conexion, $folio_ids);
-        $where .= " AND h.numero_talento_gs IN ($folios_sql) ";
-    }
+// ── TOP REGIONAL PRODUCTIVIDAD VENDEDORES ───────────────────────────────────
+// Estas tablas son regionales y se muestran a todos los niveles para incentivar
+// mejora y permanencia. No dependen del scope jerárquico del tablero actual.
+function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puestos_comerciales) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - TOP REGIONAL PRODUCTIVIDAD
+    |--------------------------------------------------------------------------
+    |
+    | Regla de visualización:
+    |   Este ranking se muestra a todos los niveles como referencia regional.
+    |
+    | Fuente HC:
+    |   Se toma la plantilla comercial activa de la última semana cargada en HC.
+    |
+    | Jerarquía:
+    |   Vendedor -> Coach -> Líder -> Director Distrital.
+    |
+    | Se resuelve con self-joins sobre hc usando:
+    |   vendedor.posicion_lr = coach.id_posicion
+    |   coach.posicion_lr    = lider.id_posicion
+    |   lider.posicion_lr    = director.id_posicion
+    |
+    | Fecha documentación: Junio 2026
+    | Proyecto: TotalXpedient Dashboard Ejecutivo
+    |--------------------------------------------------------------------------
+    */
 
     $sql = "
         SELECT DISTINCT
             h.numero_talento_gs AS folio,
             h.nombre_colaborador AS vendedor,
-            h.distrito
+            h.distrito,
+            COALESCE(c.nombre_colaborador, '') AS coach,
+            COALESCE(l.nombre_colaborador, '') AS lider,
+            COALESCE(d.nombre_colaborador, '') AS director
         FROM hc h
-        $where
+        LEFT JOIN hc c
+            ON c.id_posicion = h.posicion_lr
+           AND c.semana = h.semana
+           AND c.anio = h.anio
+        LEFT JOIN hc l
+            ON l.id_posicion = c.posicion_lr
+           AND l.semana = h.semana
+           AND l.anio = h.anio
+        LEFT JOIN hc d
+            ON d.id_posicion = l.posicion_lr
+           AND d.semana = h.semana
+           AND d.anio = h.anio
+        WHERE h.semana=".(int)$semana."
+          AND h.anio=".(int)$anio."
+          AND h.numero_talento_gs NOT LIKE '%VACANTE%'
+          AND h.numero_talento_gs <> ''
+          AND h.posicion IN ($puestos_comerciales)
         ORDER BY h.distrito, h.nombre_colaborador
     ";
+
     $res = mysqli_query($conexion, $sql);
     $out = [];
     while ($res && $row = mysqli_fetch_assoc($res)) {
         $folio = trim((string)($row['folio'] ?? ''));
         if ($folio === '') continue;
+
         $out[$folio] = [
             'folio' => $folio,
             'vendedor' => $row['vendedor'] ?? '',
             'distrito' => $row['distrito'] ?? '',
+            'coach' => $row['coach'] ?? '',
+            'director' => $row['director'] ?? '',
             'instalaciones' => 0,
             'arpu' => 0,
             'productividad' => 0,
+            'prod3m' => 0,
             'spark' => []
         ];
     }
+
     return $out;
 }
 
@@ -1377,7 +1408,7 @@ function tx_sparkline_vendedor_dashboard($conexion, $folio, $fecha_corte_timesta
     $keys = [];
     for ($i = 5; $i >= 0; $i--) {
         $ts = strtotime('-'.$i.' weeks', strtotime('monday this week', $fecha_corte_timestamp));
-        $keys[] = date('oW', $ts); // ISO year + week
+        $keys[] = date('oW', $ts);
     }
     $map = array_fill_keys($keys, 0);
 
@@ -1385,15 +1416,29 @@ function tx_sparkline_vendedor_dashboard($conexion, $folio, $fecha_corte_timesta
         $yw = (string)($row['yw'] ?? '');
         if (isset($map[$yw])) $map[$yw] = (int)($row['total'] ?? 0);
     }
+
     return array_values($map);
 }
 
-function tx_build_top_productividad_dashboard($conexion, $vendedores, $mes, $anio, $cond_dia_fecha, $dias_productividad, $fecha_corte_timestamp) {
+function tx_dias_habiles_ultimos_3_meses_dashboard($conexion, $fecha_corte_timestamp) {
+    $dias = 0;
+    for ($i = 3; $i >= 1; $i--) {
+        $ts = strtotime("first day of -$i month", $fecha_corte_timestamp);
+        $anio = (int)date('Y', $ts);
+        $mes = (int)date('n', $ts);
+        $ultimo = (int)date('t', $ts);
+        $dias += tx_dias_habiles_rango_mes($conexion, $anio, $mes, 1, $ultimo);
+    }
+    return max(1, (int)$dias);
+}
+
+function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $mes, $anio, $cond_dia_fecha, $dias_productividad, $fecha_corte_timestamp) {
     if (empty($vendedores)) return [[], []];
 
     $folios = array_keys($vendedores);
     $folios_sql = tx_sql_in_escaped($conexion, $folios);
 
+    // Desempeño del rango seleccionado.
     $sql = "
         SELECT
             folio_empleado AS folio,
@@ -1412,6 +1457,7 @@ function tx_build_top_productividad_dashboard($conexion, $vendedores, $mes, $ani
     while ($res && $row = mysqli_fetch_assoc($res)) {
         $folio = (string)($row['folio'] ?? '');
         if (!isset($vendedores[$folio])) continue;
+
         $inst = (int)($row['instalaciones'] ?? 0);
         $ingreso = (float)($row['ingreso'] ?? 0);
         $inst_arpu = (int)($row['inst_arpu'] ?? 0);
@@ -1419,6 +1465,30 @@ function tx_build_top_productividad_dashboard($conexion, $vendedores, $mes, $ani
         $vendedores[$folio]['instalaciones'] = $inst;
         $vendedores[$folio]['productividad'] = $dias_productividad > 0 ? round($inst / $dias_productividad, 2) : 0;
         $vendedores[$folio]['arpu'] = $inst_arpu > 0 ? round($ingreso / $inst_arpu, 2) : 0;
+    }
+
+    // Productividad 3M: instalaciones de los 3 meses completos anteriores / días hábiles de esos 3 meses.
+    $fecha_ini_3m = date('Y-m-01', strtotime('first day of -3 month', $fecha_corte_timestamp));
+    $fecha_fin_3m = date('Y-m-t', strtotime('last day of -1 month', $fecha_corte_timestamp));
+    $dias_3m = tx_dias_habiles_ultimos_3_meses_dashboard($conexion, $fecha_corte_timestamp);
+
+    $sql3 = "
+        SELECT
+            folio_empleado AS folio,
+            COUNT(cuenta) AS instalaciones_3m
+        FROM instalaciones
+        WHERE fecha BETWEEN '$fecha_ini_3m' AND '$fecha_fin_3m'
+          AND origen_prospecto <> '-'
+          AND folio_empleado IN ($folios_sql)
+        GROUP BY folio_empleado
+    ";
+    $res3 = mysqli_query($conexion, $sql3);
+    while ($res3 && $row = mysqli_fetch_assoc($res3)) {
+        $folio = (string)($row['folio'] ?? '');
+        if (!isset($vendedores[$folio])) continue;
+
+        $inst3m = (int)($row['instalaciones_3m'] ?? 0);
+        $vendedores[$folio]['prod3m'] = $dias_3m > 0 ? round($inst3m / $dias_3m, 2) : 0;
     }
 
     foreach ($vendedores as $folio => &$v) {
@@ -1435,12 +1505,33 @@ function tx_build_top_productividad_dashboard($conexion, $vendedores, $mes, $ani
     });
     $top = array_slice($top, 0, 10);
 
-    $off = $lista;
-    usort($off, function($a, $b) {
-        if ($a['productividad'] == $b['productividad']) return $a['instalaciones'] <=> $b['instalaciones'];
-        return $a['productividad'] <=> $b['productividad'];
+    // TOP OFFENDER:
+    // Prioridad: vendedores con 0 instalaciones en el rango seleccionado.
+    // Entre ellos, ordenar por productividad 3M más baja para evitar sesgo alfabético por distrito.
+    $off_zero = array_values(array_filter($lista, function($r) {
+        return (int)($r['instalaciones'] ?? 0) === 0;
+    }));
+    usort($off_zero, function($a, $b) {
+        if ($a['prod3m'] == $b['prod3m']) {
+            return strcmp((string)$a['vendedor'], (string)$b['vendedor']);
+        }
+        return $a['prod3m'] <=> $b['prod3m'];
     });
-    $off = array_slice($off, 0, 10);
+
+    $off = array_slice($off_zero, 0, 10);
+
+    // Si no hay suficientes ceros, completar con los de menor productividad actual.
+    if (count($off) < 10) {
+        $ya = array_column($off, 'folio');
+        $resto = array_values(array_filter($lista, function($r) use ($ya) {
+            return !in_array($r['folio'], $ya, true);
+        }));
+        usort($resto, function($a, $b) {
+            if ($a['productividad'] == $b['productividad']) return $a['prod3m'] <=> $b['prod3m'];
+            return $a['productividad'] <=> $b['productividad'];
+        });
+        $off = array_merge($off, array_slice($resto, 0, 10 - count($off)));
+    }
 
     return [$top, $off];
 }
@@ -1455,28 +1546,24 @@ $dias_productividad_vendedor = tx_dias_habiles_rango_mes(
 );
 if ($dias_productividad_vendedor <= 0) $dias_productividad_vendedor = $dias_rango_dashboard;
 
-$vendedores_scope_productividad = tx_get_vendedores_scope_dashboard(
+// TOP REGIONAL: se calcula con toda la plantilla comercial activa, sin importar el scope del tablero.
+$vendedores_regional_productividad = tx_get_vendedores_regional_dashboard(
     $conexion,
-    $rol_consulta,
-    $scope_filtrar_por_distrito,
-    $scope_distritos_sql,
-    $por_distrito,
-    $distritos_sql,
-    $folio_ids,
     $semana_actual,
     $anio_actual,
     $puestos_comerciales
 );
 
-list($top_productividad_vendedores, $top_offender_vendedores) = tx_build_top_productividad_dashboard(
+list($top_productividad_vendedores, $top_offender_vendedores) = tx_build_top_regional_productividad_dashboard(
     $conexion,
-    $vendedores_scope_productividad,
+    $vendedores_regional_productividad,
     $mes_actual,
     $anio_query,
     $cond_dia_fecha,
     $dias_productividad_vendedor,
     $fecha_corte_timestamp
 );
+
 
 // Preparar lista ejecutiva para Cumplimiento del nivel inferior.
 // Barra única por nivel: % cumplimiento + Real / Meta.
@@ -1798,8 +1885,9 @@ $roles_labels = [
         }
         .top-productividad-table{
             width:100%;
+            min-width:980px;
             border-collapse:collapse;
-            font-size:.74rem;
+            font-size:.72rem;
         }
         .top-productividad-table th{
             text-align:left;
@@ -1831,6 +1919,14 @@ $roles_labels = [
             color:#6b7a99;
             font-weight:850;
             white-space:nowrap;
+        }
+        .seller-small{
+            color:#334155;
+            font-weight:850;
+            max-width:170px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
         }
         .seller-num{
             text-align:right;
@@ -2543,70 +2639,6 @@ include __DIR__ . '/includes/sidebar.php';
     </div>
 
 
-    <!-- TOP PRODUCTIVIDAD VENDEDORES -->
-    <?php if (!empty($top_productividad_vendedores) || !empty($top_offender_vendedores)): ?>
-    <div class="top-productividad-grid">
-        <?php
-            $renderTopTable = function($titulo, $subtitulo, $items, $extraClass = '') {
-        ?>
-        <div class="evo-card top-productividad-card <?= $extraClass ?>">
-            <div class="top-productividad-head">
-                <div>
-                    <div class="top-productividad-title"><?= htmlspecialchars($titulo) ?></div>
-                    <div class="top-productividad-sub"><?= htmlspecialchars($subtitulo) ?></div>
-                </div>
-                <div class="hierarchy-performance-note">Prod. vendedor · <?= (int)$GLOBALS['dias_productividad_vendedor'] ?> días hábiles</div>
-            </div>
-            <div style="overflow-x:auto;">
-                <table class="top-productividad-table">
-                    <thead>
-                        <tr>
-                            <th style="width:34px;">#</th>
-                            <th>Nombre vendedor</th>
-                            <th>Distrito</th>
-                            <th style="text-align:right;">Ventas instaladas</th>
-                            <th style="text-align:right;">Productividad</th>
-                            <th style="text-align:right;">ARPU</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($items as $i => $row): ?>
-                        <?php
-                            $spark = $row['spark'] ?? [];
-                            $sparkMax = max(1, !empty($spark) ? max($spark) : 1);
-                        ?>
-                        <tr>
-                            <td><span class="rank-badge"><?= $i + 1 ?></span></td>
-                            <td><div class="seller-name" title="<?= htmlspecialchars($row['vendedor'] ?? '') ?>"><?= htmlspecialchars($row['vendedor'] ?? '') ?></div></td>
-                            <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
-                            <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
-                            <td class="seller-num">
-                                <div class="seller-prod">
-                                    <strong><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
-                                    <div class="sparkline" title="Tendencia últimas 6 semanas">
-                                        <?php foreach ($spark as $sv): ?>
-                                            <span style="height:<?= max(3, round(((int)$sv / $sparkMax) * 16)) ?>px;"></span>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </div>
-                            </td>
-                            <td class="seller-num">$<?= number_format((float)($row['arpu'] ?? 0), 0) ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                        <?php if (empty($items)): ?>
-                        <tr><td colspan="6" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        <?php }; ?>
-
-        <?php $renderTopTable('Top 10 vendedores en productividad', 'Mejor desempeño del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('Top offender productividad', 'Menor productividad del rango seleccionado', $top_offender_vendedores, 'top-offender'); ?>
-    </div>
-    <?php endif; ?>
-
     <!-- TABLA DE PARTICIPACIÓN POR CANAL -->
     <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked)): ?>
     <div class="evo-card" style="margin-top:20px;">
@@ -2699,6 +2731,76 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
     </div>
     <?php endif; ?>
+
+
+    <!-- TOP REGIONAL PRODUCTIVIDAD VENDEDORES -->
+    <?php if (!empty($top_productividad_vendedores) || !empty($top_offender_vendedores)): ?>
+    <div class="top-productividad-grid">
+        <?php
+            $renderTopTable = function($titulo, $subtitulo, $items, $extraClass = '') {
+        ?>
+        <div class="evo-card top-productividad-card <?= $extraClass ?>">
+            <div class="top-productividad-head">
+                <div>
+                    <div class="top-productividad-title"><?= htmlspecialchars($titulo) ?></div>
+                    <div class="top-productividad-sub"><?= htmlspecialchars($subtitulo) ?></div>
+                </div>
+                <div class="hierarchy-performance-note">TOP REGIONAL · <?= (int)$GLOBALS['dias_productividad_vendedor'] ?> días hábiles</div>
+            </div>
+            <div style="overflow-x:auto;">
+                <table class="top-productividad-table">
+                    <thead>
+                        <tr>
+                            <th style="width:34px;">#</th>
+                            <th>Nombre vendedor</th>
+                            <th>Distrito</th>
+                            <th>Coach</th>
+                            <th>Director</th>
+                            <th style="text-align:right;">Ventas instaladas</th>
+                            <th style="text-align:right;">Productividad</th>
+                            <th style="text-align:right;">ARPU</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($items as $i => $row): ?>
+                        <?php
+                            $spark = $row['spark'] ?? [];
+                            $sparkMax = max(1, !empty($spark) ? max($spark) : 1);
+                        ?>
+                        <tr>
+                            <td><span class="rank-badge"><?= $i + 1 ?></span></td>
+                            <td><div class="seller-name" title="<?= htmlspecialchars($row['vendedor'] ?? '') ?>"><?= htmlspecialchars($row['vendedor'] ?? '') ?></div></td>
+                            <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
+                            <td><div class="seller-small" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
+                            <td><div class="seller-small" title="<?= htmlspecialchars($row['director'] ?? '') ?>"><?= htmlspecialchars($row['director'] ?? '') ?></div></td>
+                            <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
+                            <td class="seller-num">
+                                <div class="seller-prod">
+                                    <strong><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
+                                    <div class="sparkline" title="Tendencia últimas 6 semanas">
+                                        <?php foreach ($spark as $sv): ?>
+                                            <span style="height:<?= max(3, round(((int)$sv / $sparkMax) * 16)) ?>px;"></span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="seller-num">$<?= number_format((float)($row['arpu'] ?? 0), 0) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                        <?php if (empty($items)): ?>
+                        <tr><td colspan="8" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <?php }; ?>
+
+        <?php $renderTopTable('Top regional productividad', 'Mejor productividad regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('Top regional offender', '0 ventas ordenado por productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
+    </div>
+    <?php endif; ?>
+
 
 </main>
 
