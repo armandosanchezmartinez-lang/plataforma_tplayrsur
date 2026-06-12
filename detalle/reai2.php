@@ -89,6 +89,41 @@ function normaliza_key($v) {
     $v = preg_replace('/[^A-Z0-9]+/', ' ', $v);
     return trim(preg_replace('/\s+/', ' ', $v));
 }
+
+function tx_distrito_equivalentes_reai($distrito) {
+    $d = trim((string)$distrito);
+    $arr = [$d];
+    if ($d === 'COATZA MINA') $arr[] = 'COATZA / MINA';
+    if ($d === 'COATZA / MINA') $arr[] = 'COATZA MINA';
+    return array_values(array_unique(array_filter($arr, function($v) {
+        return trim((string)$v) !== '';
+    })));
+}
+
+function tx_sql_in_escaped_reai($conexion, $vals) {
+    $vals = array_values(array_unique(array_filter($vals, function($v) {
+        return trim((string)$v) !== '';
+    })));
+    if (empty($vals)) return "''";
+    return "'" . implode("','", array_map(function($v) use ($conexion) {
+        return mysqli_real_escape_string($conexion, (string)$v);
+    }, $vals)) . "'";
+}
+
+function contar_instalaciones_distrito_periodo_reai($conexion, $distrito, $fecha_inicio, $fecha_fin) {
+    $dsql = tx_sql_in_escaped_reai($conexion, tx_distrito_equivalentes_reai($distrito));
+    $fi = mysqli_real_escape_string($conexion, $fecha_inicio);
+    $ff = mysqli_real_escape_string($conexion, $fecha_fin);
+    $sql = "SELECT COUNT(cuenta) AS total
+            FROM instalaciones
+            WHERE fecha BETWEEN '$fi' AND '$ff'
+              AND origen_prospecto IS NOT NULL
+              AND origen_prospecto <> '-'
+              AND distrito IN ($dsql)";
+    $r = mysqli_query($conexion, $sql);
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    return (int)($row['total'] ?? 0);
+}
 function meta_mensual_estandar($distrito, $canal, $metal = 'ORO', $metas_estandar = []) {
     $d = normaliza_key($distrito);
     $c = normaliza_key($canal);
@@ -379,35 +414,66 @@ function cargar_meta_diaria_mensual_director_reai($conexion, $meses) {
 }
 
 function sumar_meta_diaria_director_periodo_reai($conexion, $fecha_inicio, $fecha_fin) {
-    // Calcula meta del periodo como SUM(meta_diaria mensual * días hábiles del periodo dentro de cada mes).
+    /*
+    |--------------------------------------------------------------------------
+    | REAI DIRECTOR DISTRITAL - META OFICIAL DEL PERIODO
+    |--------------------------------------------------------------------------
+    | Se alinea con index.php / Dashboard:
+    |
+    |   META PERIODO = SUM(metas_instalacion.meta_diaria)
+    |
+    | usando el rango exacto seleccionado:
+    | - Vista semanal: días reales del corte semanal.
+    | - Vista mensual: días reales del corte mensual.
+    | - % Alcance 3M: días de los últimos 3 meses completos.
+    |
+    | NO se multiplica una meta mensual por días hábiles; la tabla ya trae la
+    | meta diaria por día/distrito/canal.
+    |--------------------------------------------------------------------------
+    */
     $out = [];
-    if (!$fecha_inicio || !$fecha_fin) return $out;
+    if (!$fecha_inicio || !$fecha_fin || !table_exists($conexion, 'metas_instalacion')) return $out;
 
     $inicio = new DateTime($fecha_inicio);
     $fin = new DateTime($fecha_fin);
     if ($inicio > $fin) { $tmp = $inicio; $inicio = $fin; $fin = $tmp; }
 
-    $meses = meses_en_rango_reai($inicio->format('Y-m-d'), $fin->format('Y-m-d'));
-    $meta_diaria = cargar_meta_diaria_mensual_director_reai($conexion, $meses);
-    if (empty($meta_diaria)) return $out;
+    $cols_mi = table_columns_reai($conexion, 'metas_instalacion');
+    $col_distrito = pick_column_reai($cols_mi, ['distrito','Distrito','nombre_distrito']);
+    $col_anio     = pick_column_reai($cols_mi, ['anio','año','year']);
+    $col_mes      = pick_column_reai($cols_mi, ['mes_num','mes','month','periodo_mes']);
+    $col_dia      = pick_column_reai($cols_mi, ['dia','día','day','dia_mes']);
+    $col_diaria   = pick_column_reai($cols_mi, ['meta_diaria','meta_dia','meta_diaria_instalacion','meta_diaria_instalaciones']);
 
+    if (!$col_distrito || !$col_anio || !$col_mes || !$col_dia || !$col_diaria) return $out;
+
+    $meses = meses_en_rango_reai($inicio->format('Y-m-d'), $fin->format('Y-m-d'));
+    $conds = [];
     foreach ($meses as $mm) {
         $anio = (int)$mm['anio'];
-        $mes = (int)$mm['mes'];
+        $mes  = (int)$mm['mes'];
         $mes_ini = new DateTime(sprintf('%04d-%02d-01', $anio, $mes));
         $mes_fin = new DateTime($mes_ini->format('Y-m-t'));
-
         $r_ini = $mes_ini < $inicio ? clone $inicio : $mes_ini;
         $r_fin = $mes_fin > $fin ? clone $fin : $mes_fin;
-        $dias_habiles = contar_dias_habiles($conexion, $r_ini->format('Y-m-d'), $r_fin->format('Y-m-d'));
-        $key = sprintf('%04d-%02d', $anio, $mes);
+        $dia_ini = (int)$r_ini->format('j');
+        $dia_fin = (int)$r_fin->format('j');
 
-        foreach ($meta_diaria as $dist => $metas_mes) {
-            $md = (float)($metas_mes[$key] ?? 0);
-            if ($md > 0) {
-                $out[$dist] = ($out[$dist] ?? 0) + ($md * $dias_habiles);
-            }
-        }
+        $conds[] = '(' . bt_reai($col_anio) . ' = ' . $anio .
+                   ' AND CAST(' . bt_reai($col_mes) . ' AS UNSIGNED) = ' . $mes .
+                   ' AND CAST(' . bt_reai($col_dia) . ' AS UNSIGNED) BETWEEN ' . $dia_ini . ' AND ' . $dia_fin . ')';
+    }
+    if (empty($conds)) return $out;
+
+    $sql = "SELECT " . bt_reai($col_distrito) . " AS distrito,
+                   SUM(CAST(" . bt_reai($col_diaria) . " AS DECIMAL(12,4))) AS meta_total
+            FROM metas_instalacion
+            WHERE " . implode(' OR ', $conds) . "
+            GROUP BY " . bt_reai($col_distrito);
+    $res = mysqli_query($conexion, $sql);
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $dist = normaliza_key($row['distrito'] ?? '');
+        if ($dist !== '') $out[$dist] = ($out[$dist] ?? 0) + (float)($row['meta_total'] ?? 0);
     }
     return $out;
 }
@@ -704,11 +770,11 @@ $mostrar_alcance_3m = ($vista_nivel === 'DIRECTOR DISTRITAL');
 $colspan_reai = $mostrar_hc_col ? 12 : 11;
 
 // Metas oficiales para Directores Distritales.
-// REAI v2.7: foco DIRECTOR DISTRITAL.
+// REAI v2.8: foco DIRECTOR DISTRITAL alineado a index.php.
 // - Vista semanal: %Alcance puede validarse contra meta semanal oficial si existe;
-//   para consistencia con cortes parciales se usa meta_diaria * días hábiles del periodo seleccionado.
-// - Vista mensual: %Alcance = instalaciones del periodo / (meta_diaria * días hábiles del periodo).
-// - %Alcance 3M = instalaciones 3 meses completos / SUM(meta_diaria * días hábiles de marzo+abril+mayo, según corte).
+//   se usa SUM(meta_diaria) del rango exacto seleccionado.
+// - Vista mensual: %Alcance = instalaciones del periodo / SUM(meta_diaria) del rango.
+// - %Alcance 3M = instalaciones 3 meses completos / SUM(meta_diaria) de marzo+abril+mayo.
 $meta_periodo_director_por_distrito = [];
 $meta_3m_director_por_distrito = [];
 $meta_semanal_director_por_distrito = [];
@@ -861,6 +927,14 @@ if (!empty($vendedores)) {
             $stats[$tgs_row]['meta_semanal_eo'] += (int)($metas_eo_vendedor[$tv] ?? 0);
         }
 
+        if (($row['nivel_reai'] ?? '') === 'DIRECTOR DISTRITAL') {
+            // Alineado a index.php: Director Distrital se mide por distrito,
+            // no por folios de HC, para no perder instalaciones con distrito correcto.
+            $stats[$tgs_row]['inst_base'] = contar_instalaciones_distrito_periodo_reai($conexion, $row['distrito'] ?? '', $periodo_base['inicio'], $periodo_base['fin']);
+            $stats[$tgs_row]['inst_actual'] = contar_instalaciones_distrito_periodo_reai($conexion, $row['distrito'] ?? '', $periodo_actual['inicio'], $periodo_actual['fin']);
+            $stats[$tgs_row]['inst_3m'] = contar_instalaciones_distrito_periodo_reai($conexion, $row['distrito'] ?? '', $fecha_3m_inicio, $fecha_3m_fin);
+        }
+
         // Meta 3M oficial sólo para Director Distrital:
         // metas_instalacion acumulada de los últimos 3 meses completos.
         // Para Líder/Coach/Vendedor no se usa meta 3M; conservan PROD 3M.
@@ -928,7 +1002,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2.7 — TOTALXPEDIENT</title>
+    <title>REAI v2.8 — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
