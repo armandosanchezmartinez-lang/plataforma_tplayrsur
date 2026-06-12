@@ -300,6 +300,8 @@ function condiciones_meses_metas_reai($col_anio, $col_mes, $meses) {
 }
 
 function cargar_metas_instalacion_director_reai($conexion, $meses) {
+    // Fallback: carga meta mensual oficial acumulada por distrito.
+    // Se conserva sólo como respaldo cuando no exista meta_diaria.
     $out = [];
     if (empty($meses) || !table_exists($conexion, 'metas_instalacion')) return $out;
 
@@ -327,6 +329,118 @@ function cargar_metas_instalacion_director_reai($conexion, $meses) {
     }
     return $out;
 }
+
+function cargar_meta_diaria_mensual_director_reai($conexion, $meses) {
+    // Fuente oficial para REAI Director Distrital:
+    // metas_instalacion.meta_diaria por distrito y mes.
+    // Devuelve: $out[DISTRITO_NORMALIZADO][YYYY-MM] = meta_diaria
+    $out = [];
+    if (empty($meses) || !table_exists($conexion, 'metas_instalacion')) return $out;
+
+    $cols_mi = table_columns_reai($conexion, 'metas_instalacion');
+    $col_distrito = pick_column_reai($cols_mi, ['distrito','Distrito','nombre_distrito']);
+    $col_anio     = pick_column_reai($cols_mi, ['anio','año','year']);
+    $col_mes      = pick_column_reai($cols_mi, ['mes','month','periodo_mes']);
+    $col_diaria   = pick_column_reai($cols_mi, ['meta_diaria','meta_dia','meta_diaria_instalacion','meta_diaria_instalaciones']);
+
+    if (!$col_distrito || !$col_anio || !$col_mes || !$col_diaria) return $out;
+
+    $conds = condiciones_meses_metas_reai($col_anio, $col_mes, $meses);
+    if (empty($conds)) return $out;
+
+    $sql = "SELECT " . bt_reai($col_distrito) . " AS distrito,
+                   " . bt_reai($col_anio) . " AS anio,
+                   " . bt_reai($col_mes) . " AS mes,
+                   SUM(CAST(" . bt_reai($col_diaria) . " AS DECIMAL(12,4))) AS meta_diaria
+            FROM metas_instalacion
+            WHERE " . implode(' OR ', $conds) . "
+            GROUP BY " . bt_reai($col_distrito) . ", " . bt_reai($col_anio) . ", " . bt_reai($col_mes);
+    $res = mysqli_query($conexion, $sql);
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $dist = normaliza_key($row['distrito'] ?? '');
+        $anio = (int)($row['anio'] ?? 0);
+        $mes_raw = $row['mes'] ?? '';
+        $mes = (int)$mes_raw;
+        if ($mes <= 0) {
+            $mes_key = normaliza_key($mes_raw);
+            $map = [
+                'ENERO'=>1,'ENE'=>1,'FEBRERO'=>2,'FEB'=>2,'MARZO'=>3,'MAR'=>3,
+                'ABRIL'=>4,'ABR'=>4,'MAYO'=>5,'MAY'=>5,'JUNIO'=>6,'JUN'=>6,
+                'JULIO'=>7,'JUL'=>7,'AGOSTO'=>8,'AGO'=>8,'SEPTIEMBRE'=>9,'SEP'=>9,'SETIEMBRE'=>9,'SET'=>9,
+                'OCTUBRE'=>10,'OCT'=>10,'NOVIEMBRE'=>11,'NOV'=>11,'DICIEMBRE'=>12,'DIC'=>12
+            ];
+            $mes = $map[$mes_key] ?? 0;
+        }
+        if ($dist !== '' && $anio > 0 && $mes > 0) {
+            $out[$dist][sprintf('%04d-%02d', $anio, $mes)] = (float)($row['meta_diaria'] ?? 0);
+        }
+    }
+    return $out;
+}
+
+function sumar_meta_diaria_director_periodo_reai($conexion, $fecha_inicio, $fecha_fin) {
+    // Calcula meta del periodo como SUM(meta_diaria mensual * días hábiles del periodo dentro de cada mes).
+    $out = [];
+    if (!$fecha_inicio || !$fecha_fin) return $out;
+
+    $inicio = new DateTime($fecha_inicio);
+    $fin = new DateTime($fecha_fin);
+    if ($inicio > $fin) { $tmp = $inicio; $inicio = $fin; $fin = $tmp; }
+
+    $meses = meses_en_rango_reai($inicio->format('Y-m-d'), $fin->format('Y-m-d'));
+    $meta_diaria = cargar_meta_diaria_mensual_director_reai($conexion, $meses);
+    if (empty($meta_diaria)) return $out;
+
+    foreach ($meses as $mm) {
+        $anio = (int)$mm['anio'];
+        $mes = (int)$mm['mes'];
+        $mes_ini = new DateTime(sprintf('%04d-%02d-01', $anio, $mes));
+        $mes_fin = new DateTime($mes_ini->format('Y-m-t'));
+
+        $r_ini = $mes_ini < $inicio ? clone $inicio : $mes_ini;
+        $r_fin = $mes_fin > $fin ? clone $fin : $mes_fin;
+        $dias_habiles = contar_dias_habiles($conexion, $r_ini->format('Y-m-d'), $r_fin->format('Y-m-d'));
+        $key = sprintf('%04d-%02d', $anio, $mes);
+
+        foreach ($meta_diaria as $dist => $metas_mes) {
+            $md = (float)($metas_mes[$key] ?? 0);
+            if ($md > 0) {
+                $out[$dist] = ($out[$dist] ?? 0) + ($md * $dias_habiles);
+            }
+        }
+    }
+    return $out;
+}
+
+function cargar_meta_semanal_director_reai($conexion, $anio, $semana) {
+    // Si existe tabla semanal oficial, permite validar/usar meta semanal por distrito.
+    // Soporta metas_instalacion_semana y metas_instalacion_semanal.
+    $out = [];
+    $tabla = null;
+    if (table_exists($conexion, 'metas_instalacion_semana')) $tabla = 'metas_instalacion_semana';
+    elseif (table_exists($conexion, 'metas_instalacion_semanal')) $tabla = 'metas_instalacion_semanal';
+    if (!$tabla) return $out;
+
+    $cols = table_columns_reai($conexion, $tabla);
+    $col_distrito = pick_column_reai($cols, ['distrito','Distrito','nombre_distrito']);
+    $col_anio     = pick_column_reai($cols, ['anio','año','year']);
+    $col_semana   = pick_column_reai($cols, ['semana','week']);
+    $col_meta     = pick_column_reai($cols, ['meta','meta_instalacion','meta_instalaciones','meta_semanal','objetivo']);
+    if (!$col_distrito || !$col_anio || !$col_semana || !$col_meta) return $out;
+
+    $sql = "SELECT " . bt_reai($col_distrito) . " AS distrito,
+                   SUM(CAST(" . bt_reai($col_meta) . " AS DECIMAL(12,2))) AS meta_total
+            FROM " . bt_reai($tabla) . "
+            WHERE " . bt_reai($col_anio) . " = " . (int)$anio . "
+              AND " . bt_reai($col_semana) . " = " . (int)$semana . "
+            GROUP BY " . bt_reai($col_distrito);
+    $res = mysqli_query($conexion, $sql);
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $out[normaliza_key($row['distrito'] ?? '')] = (float)($row['meta_total'] ?? 0);
+    }
+    return $out;
+}
+
 
 [$label_base, $label_actual] = periodo_label($periodo, $periodo_base, $periodo_actual);
 
@@ -590,21 +704,39 @@ $mostrar_alcance_3m = ($vista_nivel === 'DIRECTOR DISTRITAL');
 $colspan_reai = $mostrar_hc_col ? 12 : 11;
 
 // Metas oficiales para Directores Distritales.
-// REAI v2.6: Fuente correcta = metas_instalacion (metas mensuales oficiales).
-// - %Alcance actual: meta mensual oficial del mes actual prorrateada a días hábiles del corte.
-// - %Alcance 3M: metas mensuales oficiales acumuladas de los últimos 3 meses completos.
-$meta_mes_director_por_distrito = [];
+// REAI v2.7: foco DIRECTOR DISTRITAL.
+// - Vista semanal: %Alcance puede validarse contra meta semanal oficial si existe;
+//   para consistencia con cortes parciales se usa meta_diaria * días hábiles del periodo seleccionado.
+// - Vista mensual: %Alcance = instalaciones del periodo / (meta_diaria * días hábiles del periodo).
+// - %Alcance 3M = instalaciones 3 meses completos / SUM(meta_diaria * días hábiles de marzo+abril+mayo, según corte).
+$meta_periodo_director_por_distrito = [];
 $meta_3m_director_por_distrito = [];
+$meta_semanal_director_por_distrito = [];
 if ($vista_nivel === 'DIRECTOR DISTRITAL') {
-    $meta_mes_director_por_distrito = cargar_metas_instalacion_director_reai(
-        $conexion,
-        [['anio' => (int)date('Y', strtotime($periodo_actual['inicio'])), 'mes' => (int)date('n', strtotime($periodo_actual['inicio']))]]
-    );
-    $meta_3m_director_por_distrito = cargar_metas_instalacion_director_reai(
-        $conexion,
-        meses_en_rango_reai($fecha_3m_inicio, $fecha_3m_fin)
-    );
+    $meta_periodo_director_por_distrito = sumar_meta_diaria_director_periodo_reai($conexion, $periodo_actual['inicio'], $periodo_actual['fin']);
+    $meta_3m_director_por_distrito = sumar_meta_diaria_director_periodo_reai($conexion, $fecha_3m_inicio, $fecha_3m_fin);
+
+    if ($periodo === 'semanal') {
+        $meta_semanal_director_por_distrito = cargar_meta_semanal_director_reai(
+            $conexion,
+            (int)($periodo_actual['anio'] ?? date('o', strtotime($periodo_actual['inicio']))),
+            (int)($periodo_actual['semana'] ?? date('W', strtotime($periodo_actual['inicio'])))
+        );
+        // Si no existe meta_diaria mensual, usar meta semanal oficial como respaldo.
+        if (empty($meta_periodo_director_por_distrito) && !empty($meta_semanal_director_por_distrito)) {
+            $meta_periodo_director_por_distrito = $meta_semanal_director_por_distrito;
+        }
+    }
+
+    // Respaldo final: si no existe meta_diaria, usar meta mensual acumulada sin prorratear.
+    if (empty($meta_3m_director_por_distrito)) {
+        $meta_3m_director_por_distrito = cargar_metas_instalacion_director_reai(
+            $conexion,
+            meses_en_rango_reai($fecha_3m_inicio, $fecha_3m_fin)
+        );
+    }
 }
+
 
 // ── MÉTRICAS POR NIVEL / COLABORADOR ───────────────────────────────────────
 $stats = [];
@@ -738,18 +870,15 @@ if (!empty($vendedores)) {
             $meta_mensual_sum += meta_mensual_estandar($hr['distrito'] ?? ($row['distrito'] ?? ''), $hr['posicion'] ?? '', $metal_reai_default, $metas_estandar);
         }
         if (($row['nivel_reai'] ?? '') === 'DIRECTOR DISTRITAL') {
-            $stats[$tgs_row]['meta_3m'] = (float)($meta_3m_director_por_distrito[normaliza_key($row['distrito'] ?? '')] ?? 0);
-        }
+            $dist_key = normaliza_key($row['distrito'] ?? '');
 
-        if (($row['nivel_reai'] ?? '') === 'DIRECTOR DISTRITAL') {
-            // Director Distrital: usar meta mensual oficial de metas_instalacion para %Alcance del periodo.
-            $meta_mes_oficial = (float)($meta_mes_director_por_distrito[normaliza_key($row['distrito'] ?? '')] ?? 0);
-            if ($meta_mes_oficial > 0) {
-                $meta_diaria_row = $meta_mes_oficial / max(1, $dias_habiles_mes_actual_total);
-                $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
-            } else {
-                $stats[$tgs_row]['meta_prorrateada'] = 0;
-            }
+            // %Alcance 3M: meta diaria oficial acumulada por días hábiles de los 3 meses completos.
+            $stats[$tgs_row]['meta_3m'] = (float)($meta_3m_director_por_distrito[$dist_key] ?? 0);
+
+            // %Alcance actual: meta del periodo seleccionado.
+            // En semanal y mensual se usa la misma mecánica operativa:
+            // meta_diaria oficial del mes * días hábiles del periodo visible.
+            $stats[$tgs_row]['meta_prorrateada'] = (int)round((float)($meta_periodo_director_por_distrito[$dist_key] ?? 0), 0);
         } elseif ($stats[$tgs_row]['meta_semanal_eo'] > 0) {
             $meta_diaria_row = $stats[$tgs_row]['meta_semanal_eo'] / max(1, $dias_habiles_semana_meta);
             $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
@@ -799,7 +928,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2.6 — TOTALXPEDIENT</title>
+    <title>REAI v2.7 — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
