@@ -280,6 +280,54 @@ function meses_en_rango_reai($fecha_inicio, $fecha_fin) {
     return $meses;
 }
 
+function condiciones_meses_metas_reai($col_anio, $col_mes, $meses) {
+    $nombres = [
+        1 => ['ENERO','ENE'], 2 => ['FEBRERO','FEB'], 3 => ['MARZO','MAR'],
+        4 => ['ABRIL','ABR'], 5 => ['MAYO','MAY'], 6 => ['JUNIO','JUN'],
+        7 => ['JULIO','JUL'], 8 => ['AGOSTO','AGO'], 9 => ['SEPTIEMBRE','SEP','SETIEMBRE','SET'],
+        10 => ['OCTUBRE','OCT'], 11 => ['NOVIEMBRE','NOV'], 12 => ['DICIEMBRE','DIC']
+    ];
+    $conds = [];
+    foreach ($meses as $mm) {
+        $m = (int)$mm['mes'];
+        $tokens = ["'$m'", "'" . str_pad((string)$m, 2, '0', STR_PAD_LEFT) . "'"];
+        foreach ($nombres[$m] ?? [] as $nom) $tokens[] = "'" . $nom . "'";
+        $conds[] = '(' . bt_reai($col_anio) . ' = ' . (int)$mm['anio'] .
+                   ' AND (CAST(' . bt_reai($col_mes) . ' AS UNSIGNED) = ' . $m .
+                   ' OR UPPER(TRIM(' . bt_reai($col_mes) . ')) IN (' . implode(',', array_unique($tokens)) . ')))';
+    }
+    return $conds;
+}
+
+function cargar_metas_instalacion_director_reai($conexion, $meses) {
+    $out = [];
+    if (empty($meses) || !table_exists($conexion, 'metas_instalacion')) return $out;
+
+    $cols_mi = table_columns_reai($conexion, 'metas_instalacion');
+    $col_distrito = pick_column_reai($cols_mi, ['distrito','Distrito','nombre_distrito']);
+    $col_anio     = pick_column_reai($cols_mi, ['anio','año','year']);
+    $col_mes      = pick_column_reai($cols_mi, ['mes','month','periodo_mes']);
+    $col_meta     = pick_column_reai($cols_mi, [
+        'meta','meta_instalacion','meta_instalaciones','meta_mensual','meta_instalacion_mensual',
+        'instalaciones','objetivo','objetivo_mensual','meta_total'
+    ]);
+
+    if (!$col_distrito || !$col_anio || !$col_mes || !$col_meta) return $out;
+
+    $conds = condiciones_meses_metas_reai($col_anio, $col_mes, $meses);
+    if (empty($conds)) return $out;
+
+    $sql = "SELECT " . bt_reai($col_distrito) . " AS distrito, SUM(CAST(" . bt_reai($col_meta) . " AS DECIMAL(12,2))) AS meta_total
+            FROM metas_instalacion
+            WHERE " . implode(' OR ', $conds) . "
+            GROUP BY " . bt_reai($col_distrito);
+    $res = mysqli_query($conexion, $sql);
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $out[normaliza_key($row['distrito'] ?? '')] = (float)($row['meta_total'] ?? 0);
+    }
+    return $out;
+}
+
 [$label_base, $label_actual] = periodo_label($periodo, $periodo_base, $periodo_actual);
 
 // Semana de referencia para buscar meta semanal capturada en ejecución operativa.
@@ -541,32 +589,21 @@ $mostrar_hc_col = ($vista_nivel !== 'VENDEDOR');
 $mostrar_alcance_3m = ($vista_nivel === 'DIRECTOR DISTRITAL');
 $colspan_reai = $mostrar_hc_col ? 12 : 11;
 
-// Meta 3M oficial para Directores Distritales.
-// REAI v2.5: Fuente correcta = metas_instalacion (metas mensuales oficiales),
-// acumulando los últimos 3 meses completos del corte operativo.
+// Metas oficiales para Directores Distritales.
+// REAI v2.6: Fuente correcta = metas_instalacion (metas mensuales oficiales).
+// - %Alcance actual: meta mensual oficial del mes actual prorrateada a días hábiles del corte.
+// - %Alcance 3M: metas mensuales oficiales acumuladas de los últimos 3 meses completos.
+$meta_mes_director_por_distrito = [];
 $meta_3m_director_por_distrito = [];
-if ($vista_nivel === 'DIRECTOR DISTRITAL' && table_exists($conexion, 'metas_instalacion')) {
-    $cols_mi = table_columns_reai($conexion, 'metas_instalacion');
-    $col_distrito = pick_column_reai($cols_mi, ['distrito','Distrito']);
-    $col_anio     = pick_column_reai($cols_mi, ['anio','año','year']);
-    $col_mes      = pick_column_reai($cols_mi, ['mes','month']);
-    $col_meta     = pick_column_reai($cols_mi, ['meta','meta_instalacion','meta_mensual','instalaciones','objetivo']);
-
-    $meses_3m = meses_en_rango_reai($fecha_3m_inicio, $fecha_3m_fin);
-    if ($col_distrito && $col_anio && $col_mes && $col_meta && !empty($meses_3m)) {
-        $conds = [];
-        foreach ($meses_3m as $mm) {
-            $conds[] = '(' . bt_reai($col_anio) . ' = ' . (int)$mm['anio'] . ' AND ' . bt_reai($col_mes) . ' = ' . (int)$mm['mes'] . ')';
-        }
-        $sql_meta_3m_dd = "SELECT " . bt_reai($col_distrito) . " AS distrito, SUM(" . bt_reai($col_meta) . ") AS meta_3m
-                           FROM metas_instalacion
-                           WHERE " . implode(' OR ', $conds) . "
-                           GROUP BY " . bt_reai($col_distrito);
-        $res_meta_3m_dd = mysqli_query($conexion, $sql_meta_3m_dd);
-        while ($res_meta_3m_dd && $rm3 = mysqli_fetch_assoc($res_meta_3m_dd)) {
-            $meta_3m_director_por_distrito[normaliza_key($rm3['distrito'] ?? '')] = (float)($rm3['meta_3m'] ?? 0);
-        }
-    }
+if ($vista_nivel === 'DIRECTOR DISTRITAL') {
+    $meta_mes_director_por_distrito = cargar_metas_instalacion_director_reai(
+        $conexion,
+        [['anio' => (int)date('Y', strtotime($periodo_actual['inicio'])), 'mes' => (int)date('n', strtotime($periodo_actual['inicio']))]]
+    );
+    $meta_3m_director_por_distrito = cargar_metas_instalacion_director_reai(
+        $conexion,
+        meses_en_rango_reai($fecha_3m_inicio, $fecha_3m_fin)
+    );
 }
 
 // ── MÉTRICAS POR NIVEL / COLABORADOR ───────────────────────────────────────
@@ -704,7 +741,16 @@ if (!empty($vendedores)) {
             $stats[$tgs_row]['meta_3m'] = (float)($meta_3m_director_por_distrito[normaliza_key($row['distrito'] ?? '')] ?? 0);
         }
 
-        if ($stats[$tgs_row]['meta_semanal_eo'] > 0) {
+        if (($row['nivel_reai'] ?? '') === 'DIRECTOR DISTRITAL') {
+            // Director Distrital: usar meta mensual oficial de metas_instalacion para %Alcance del periodo.
+            $meta_mes_oficial = (float)($meta_mes_director_por_distrito[normaliza_key($row['distrito'] ?? '')] ?? 0);
+            if ($meta_mes_oficial > 0) {
+                $meta_diaria_row = $meta_mes_oficial / max(1, $dias_habiles_mes_actual_total);
+                $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
+            } else {
+                $stats[$tgs_row]['meta_prorrateada'] = 0;
+            }
+        } elseif ($stats[$tgs_row]['meta_semanal_eo'] > 0) {
             $meta_diaria_row = $stats[$tgs_row]['meta_semanal_eo'] / max(1, $dias_habiles_semana_meta);
             $stats[$tgs_row]['meta_prorrateada'] = (int)round($meta_diaria_row * $dias_habiles_actual, 0);
         } else {
@@ -753,7 +799,7 @@ foreach ($vendedores as $vend) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REAI v2.5 — TOTALXPEDIENT</title>
+    <title>REAI v2.6 — TOTALXPEDIENT</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=161">
     <style>
         body.page-reai .modal-overlay.active{display:flex !important;}
@@ -913,7 +959,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <th class="sortable" data-sort="num">Dif %</th>
                     <th class="sortable" data-sort="num">Prod Día</th>
                     <th class="sortable" data-sort="num">% Alcance</th>
-                    <th class="sortable" data-sort="num"><?= $mostrar_alcance_3m ? 'Alcance 3M' : 'Prod. 3M' ?></th>
+                    <th class="sortable" data-sort="num"><?= $mostrar_alcance_3m ? '% Alcance 3M' : 'Prod. 3M' ?></th>
                     <th class="sortable" data-sort="text">Acción</th>
                     <th class="sep">REAI</th>
                 </tr>

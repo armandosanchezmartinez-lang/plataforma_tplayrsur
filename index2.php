@@ -1921,9 +1921,9 @@ $roles_labels = [
         .top-productividad-table th:nth-child(5),
         .top-productividad-table td:nth-child(5){width:12%;}
         .top-productividad-table th:nth-child(6),
-        .top-productividad-table td:nth-child(6){width:13%;}
+        .top-productividad-table td:nth-child(6){width:12%;}
         .top-productividad-table th:nth-child(7),
-        .top-productividad-table td:nth-child(7){width:7%;}
+        .top-productividad-table td:nth-child(7){width:8%;}
 
 .top-productividad-table tr:last-child td{
             border-bottom:0;
@@ -2008,9 +2008,10 @@ $roles_labels = [
         .dashboard-analytics-grid.with-channel{
             /*
              * Admin/Regional/Director Distrital:
-             * Cumplimiento inferior | Cumplimiento por canal | Mix ventas | Mix instalaciones
+             * Cumplimiento inferior 30% | Cumplimiento por canal 30% | ARPU 30% | Mix instalaciones 10%.
+             * ARPU necesita más ancho para mostrar completo el último mes.
              */
-            grid-template-columns:minmax(0, 3fr) minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr);
+            grid-template-columns:minmax(0, 3fr) minmax(0, 3fr) minmax(0, 3fr) minmax(0, 1fr);
         }
         .dashboard-analytics-grid.with-hc-bottom{
             /*
@@ -2037,6 +2038,19 @@ $roles_labels = [
         }
         .arpu-card .chart-wrap{
             min-height:230px;
+        }
+        .dashboard-analytics-grid.with-channel .arpu-card .chart-wrap{
+            min-height:245px;
+        }
+        .dashboard-analytics-grid.with-channel .chart-card:last-child{
+            padding:14px 10px;
+        }
+        .dashboard-analytics-grid.with-channel .chart-card:last-child .chart-title{
+            font-size:.78rem;
+            line-height:1.15;
+        }
+        .dashboard-analytics-grid.with-channel .chart-card:last-child .chart-wrap{
+            min-height:245px;
         }
 
         .cumplimiento-panel{
@@ -2102,9 +2116,10 @@ $roles_labels = [
             /*
              * Admin/Regional/Director Distrital:
              * Avance vs Meta | Instalaciones | Ventas | Conversión | Headcount
-             * Usar fr evita el desbordamiento de 100% + gaps.
+             * Avance vs Meta y Headcount conservan el mismo ancho porque contienen velocímetro.
+             * Las 3 tarjetas centrales son más compactas porque sólo muestran KPI numérico.
              */
-            grid-template-columns:minmax(0, 28fr) minmax(0, 18fr) minmax(0, 18fr) minmax(0, 18fr) minmax(0, 18fr);
+            grid-template-columns:minmax(0, 28fr) minmax(0, 14fr) minmax(0, 14fr) minmax(0, 14fr) minmax(0, 28fr);
         }
         .kpi-grid-main.without-hc{
             /*
@@ -2814,7 +2829,7 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('Top regional productividad', 'Mejor productividad regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('Top regional PROD.', 'Mejor PROD. regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
         <?php $renderTopTable('Top Offender Regional', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
