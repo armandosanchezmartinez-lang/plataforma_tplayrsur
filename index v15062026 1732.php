@@ -545,115 +545,76 @@ function tx_canales_cumplimiento_dashboard() {
     | TOTALXPEDIENT - HOMOLOGACIÓN DE CANALES PARA CUMPLIMIENTO
     |--------------------------------------------------------------------------
     |
-    | REGLA VIGENTE JUNIO 2026:
+    | Vista: Cumplimiento por canal de venta.
     |
-    |   CALL CENTER:
-    |       Meta = Call Center BTL + Call Center Web
-    |       Real = origen_prospecto Call Center, excluyendo subcanal Venta Técnico.
+    | Las tablas no usan exactamente los mismos nombres:
     |
-    |   CAMBACEO:
+    | metas_instalacion.canal:
+    |   Cambaceo, Punto de Venta, Call Center BTL, Call Center Web,
+    |   Autoempresarios, Venta Técnico, Ecommerce.
+    |
+    | instalaciones.origen_prospecto:
+    |   Cambaceo, Punto de Venta, Call Center, Autoempresarios Autorizados,
+    |   eCommerce, Venta Digital, Winback, Desarrollos, Distribuidor, Otro.
+    |
+    | Regla vigente de consolidación:
+    |
+    |   Cambaceo:
     |       Meta = Cambaceo
     |       Real = Cambaceo
     |
-    |   PUNTO DE VENTA:
+    |   Punto de Venta:
     |       Meta = Punto de Venta
     |       Real = Punto de Venta
     |
-    |   ECOMMERCE:
+    |   Call Center:
+    |       Meta = Call Center BTL + Call Center Web
+    |       Real = Call Center
+    |
+    |   Autoempresarios Autorizados:
+    |       Meta = Autoempresarios + Venta Técnico
+    |       Real = Autoempresarios Autorizados
+    |
+    |   eCommerce:
     |       Meta = Ecommerce
     |       Real = eCommerce
     |
-    |   AUTOEMPRESARIOS AUTORIZADOS:
-    |       Meta = Autoempresarios
-    |       Real = Autoempresarios Autorizados
+    |   Otros:
+    |       Meta = 0, salvo que en el futuro se cargue una meta específica.
+    |       Real = Venta Digital + Winback + Desarrollos + Distribuidor + Otro.
     |
-    |   VENTA TÉCNICO:
-    |       Meta = Venta Técnico
-    |       Real = registros de Call Center con subcanal Venta Técnico.
+    | Si cambia el importador o los nombres de canales, actualizar este mapa.
     |
-    |   OTROS - Sin meta:
-    |       Meta = 0
-    |       Real = Venta Digital + Winback + Desarrollos + Distribuidor + Otro
-    |
-    | IMPORTANTE:
-    | Antes se sumaba Autoempresarios + Venta Técnico dentro de
-    | Autoempresarios Autorizados. Esa lógica queda separada por el hallazgo
-    | del subcanal Venta Técnico.
+    | Fecha documentación: Junio 2026
+    | Proyecto: TotalXpedient Dashboard Ejecutivo
     |--------------------------------------------------------------------------
     */
     return [
-        'CALL CENTER' => [
-            'meta' => ['Call Center BTL', 'Call Center Web'],
-            'real' => ['Call Center'],
-            'exclude_subcanal' => ['Venta Técnico', 'Venta Tecnico']
-        ],
-        'CAMBACEO' => [
+        'Cambaceo' => [
             'meta' => ['Cambaceo'],
             'real' => ['Cambaceo']
         ],
-        'PUNTO DE VENTA' => [
+        'Punto de Venta' => [
             'meta' => ['Punto de Venta'],
             'real' => ['Punto de Venta']
         ],
-        'ECOMMERCE' => [
+        'Call Center' => [
+            'meta' => ['Call Center BTL', 'Call Center Web'],
+            'real' => ['Call Center']
+        ],
+        'Autoempresarios Autorizados' => [
+            'meta' => ['Autoempresarios', 'Venta Técnico'],
+            'real' => ['Autoempresarios Autorizados']
+        ],
+        'eCommerce' => [
             'meta' => ['Ecommerce'],
             'real' => ['eCommerce']
         ],
-        'AUTOEMPRESARIOS AUTORIZADOS' => [
-            'meta' => ['Autoempresarios'],
-            'real' => ['Autoempresarios Autorizados']
-        ],
-        'VENTA TÉCNICO' => [
-            'meta' => ['Venta Técnico'],
-            'real' => ['Call Center'],
-            'only_subcanal' => ['Venta Técnico', 'Venta Tecnico']
-        ],
-        'OTROS - Sin meta' => [
+        'Otros' => [
             'meta' => [],
             'real' => ['Venta Digital', 'Winback', 'Desarrollos', 'Distribuidor', 'Otro']
         ],
     ];
-}
-
-function tx_subcanal_column_instalaciones($conexion) {
-    /*
-     * Campo esperado: instalaciones.subcanal.
-     * Se valida de forma defensiva para no romper el dashboard si en algún
-     * ambiente el campo aún no existe. Si no existe, no aplica filtro.
-     */
-    static $col = null;
-    if ($col !== null) return $col;
-
-    $candidatos = ['subcanal', 'sub_canal', 'subcanal_venta'];
-    foreach ($candidatos as $cand) {
-        $cand_esc = mysqli_real_escape_string($conexion, $cand);
-        $r = mysqli_query($conexion, "SHOW COLUMNS FROM instalaciones LIKE '$cand_esc'");
-        if ($r && mysqli_num_rows($r) > 0) {
-            $col = $cand;
-            return $col;
-        }
-    }
-
-    $col = '';
-    return $col;
-}
-
-function tx_sql_subcanal_filter_dashboard($conexion, $canales, $mode = 'only') {
-    $col = tx_subcanal_column_instalaciones($conexion);
-    if ($col === '' || empty($canales)) return '';
-
-    $col_sql = "`" . str_replace("`", "", $col) . "`";
-    $canales_sql = tx_sql_in_upper_trim($conexion, $canales);
-
-    if ($mode === 'exclude') {
-        return " AND (
-            $col_sql IS NULL
-            OR TRIM($col_sql) = ''
-            OR UPPER(TRIM($col_sql)) NOT IN ($canales_sql)
-        )";
-    }
-
-    return " AND UPPER(TRIM(COALESCE($col_sql,''))) IN ($canales_sql)";
 }
 
 function tx_sql_in_upper_trim($conexion, $vals) {
@@ -710,19 +671,11 @@ function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $d
 function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_fecha, $scope_sql = '') {
     $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
     $mapa = tx_canales_cumplimiento_dashboard();
-    $regla = $mapa[$canal] ?? [];
-    $canales_real = $regla['real'] ?? [];
+    $canales_real = $mapa[$canal]['real'] ?? [];
 
     if (empty($canales_real)) return 0;
 
     $canales_sql = tx_sql_in_upper_trim($conexion, $canales_real);
-    $where_subcanal = '';
-
-    if (!empty($regla['only_subcanal'])) {
-        $where_subcanal = tx_sql_subcanal_filter_dashboard($conexion, $regla['only_subcanal'], 'only');
-    } elseif (!empty($regla['exclude_subcanal'])) {
-        $where_subcanal = tx_sql_subcanal_filter_dashboard($conexion, $regla['exclude_subcanal'], 'exclude');
-    }
 
     $r = mysqli_query($conexion, "
         SELECT COUNT(cuenta) AS total
@@ -733,7 +686,6 @@ function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_
           AND origen_prospecto IS NOT NULL
           AND origen_prospecto <> '-'
           AND UPPER(TRIM(origen_prospecto)) IN ($canales_sql)
-          $where_subcanal
           $where_scope
     ");
     $row = $r ? mysqli_fetch_assoc($r) : null;
@@ -1078,7 +1030,7 @@ foreach ($tmp as $r) {
 // ── CUMPLIMIENTO POR CANAL DE VENTA ──────────────────────────────────────────
 // Visible únicamente para Administrador, Director Regional y Director Distrital.
 // Compara Venta instalada (instalaciones.origen_prospecto) vs meta por canal en metas_instalacion.
-// Usa mapa consolidado para homologar nombres y separar Venta Técnico del Call Center.
+// Usa mapa consolidado para homologar nombres entre metas_instalacion e instalaciones.
 $cumplimiento_canal_items = [];
 $mostrar_cumplimiento_canal = false;
 $scope_canal_sql = '';
