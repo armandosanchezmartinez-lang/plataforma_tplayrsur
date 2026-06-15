@@ -2229,7 +2229,7 @@ include __DIR__ . '/includes/sidebar.php';
 
 
         <div class="chart-card arpu-card">
-            <div class="chart-title">ARPU — Histórico 6 meses</div>
+            <div class="chart-title">ARPU — Tendencia 6 meses</div>
             <div class="hierarchy-performance-sub" style="margin-top:2px;">Mismo rango seleccionado · precio pronto pago</div>
             <div class="chart-wrap"><canvas id="cArpuHist"></canvas></div>
         </div>
@@ -2399,27 +2399,44 @@ new Chart(document.getElementById('cInstMix'), {
 const arpuLabels = <?= json_encode($arpu_labels) ?>;
 const arpuData = <?= json_encode($arpu_data) ?>;
 
+// ARPU: gráfica de línea para visualizar tendencia.
+// El eje Y NO inicia en cero; se ajusta alrededor de los valores reales:
+// límite inferior = 30% abajo del mínimo, límite superior = 30% arriba del máximo.
+const arpuValores = arpuData.map(v => Number(v || 0)).filter(v => v > 0);
+const arpuMinReal = arpuValores.length ? Math.min(...arpuValores) : 0;
+const arpuMaxReal = arpuValores.length ? Math.max(...arpuValores) : 0;
+const arpuYMin = arpuMinReal > 0 ? Math.floor((arpuMinReal * 0.70) / 10) * 10 : 0;
+const arpuYMax = arpuMaxReal > 0 ? Math.ceil((arpuMaxReal * 1.30) / 10) * 10 : 100;
+
 new Chart(document.getElementById('cArpuHist'), {
-    type: 'bar',
+    type: 'line',
     data: {
         labels: arpuLabels,
         datasets: [{
             label: 'ARPU',
             data: arpuData,
-            backgroundColor: txBrandColors.magenta,
-            borderRadius: 10,
-            maxBarThickness: 42
+            borderColor: txBrandColors.magenta,
+            backgroundColor: 'rgba(255, 0, 108, 0.10)',
+            pointBackgroundColor: txBrandColors.magenta,
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            borderWidth: 3,
+            tension: 0.35,
+            fill: true
         }]
     },
     options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 22 } },
+        layout: { padding: { top: 24, right: 8, left: 4 } },
         plugins: {
             legend: { display: false },
             datalabels: {
                 anchor: 'end',
                 align: 'top',
+                offset: 4,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
                 formatter: value => value > 0 ? '$' + Math.round(value).toLocaleString('es-MX') : ''
@@ -2432,8 +2449,8 @@ new Chart(document.getElementById('cArpuHist'), {
         },
         scales: {
             y: {
-                beginAtZero: true,
-                grace: '18%',
+                min: arpuYMin,
+                max: arpuYMax,
                 grid: { color: '#e2e8f4' },
                 ticks: {
                     font: { size: 10 },
