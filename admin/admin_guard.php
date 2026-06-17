@@ -1,12 +1,19 @@
 <?php
-if (session_status() === PHP_SESSION_NONE) { session_start(); }
-if (!isset($_SESSION['username']) || !isset($_SESSION['rol'])) {
-    header("Location: ../login.php");
-    exit;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
-if (strtolower(trim($_SESSION['rol'])) !== 'admin') {
-    http_response_code(403);
-    echo "<h2>Acceso restringido</h2><p>Este módulo es exclusivo para perfil ADMIN.</p>";
+
+$rolSesion = $_SESSION['rol']
+    ?? $_SESSION['user_rol']
+    ?? $_SESSION['usuario_rol']
+    ?? $_SESSION['perfil']
+    ?? $_SESSION['role']
+    ?? '';
+
+$rolSesion = strtolower(trim($rolSesion));
+
+if ($rolSesion !== 'admin') {
+    header("Location: ../login.php");
     exit;
 }
 ?>
