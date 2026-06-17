@@ -320,8 +320,9 @@ if ($rango_mode === 'completo') {
 
 $dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
 
-// Fechas absolutas del rango seleccionado. Se usan para prorratear metas semanales
-// de Ejecución Operativa cuando el dashboard cubre más de una semana.
+// Fechas absolutas del rango seleccionado.
+// Se usan para prorratear metas semanales de Ejecución Operativa
+// cuando el dashboard analiza periodos que cruzan más de una semana.
 $fecha_inicio_dashboard = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_inicio_dashboard);
 $fecha_fin_dashboard    = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_fin_dashboard);
 
@@ -549,17 +550,31 @@ function tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin
 
 function tx_dias_habiles_rango_fechas($conexion, $fecha_inicio, $fecha_fin) {
     /*
-     * TOTALXPEDIENT - DÍAS HÁBILES POR RANGO DE FECHAS
-     * Se usa para prorratear metas semanales capturadas en ejecucion_operativa_metas.
-     * Excluye domingos y fechas registradas en dias_inhabiles.
-     */
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - DÍAS HÁBILES POR RANGO DE FECHAS
+    |--------------------------------------------------------------------------
+    |
+    | Uso:
+    |   Prorratear metas semanales capturadas en ejecucion_operativa_metas
+    |   cuando el dashboard analiza un periodo mayor o menor a una semana.
+    |
+    | Regla:
+    |   - Excluye domingos.
+    |   - Excluye fechas registradas en dias_inhabiles.
+    |--------------------------------------------------------------------------
+    */
     $fecha_inicio = date('Y-m-d', strtotime($fecha_inicio));
     $fecha_fin    = date('Y-m-d', strtotime($fecha_fin));
+
     if ($fecha_inicio > $fecha_fin) {
-        $tmp = $fecha_inicio; $fecha_inicio = $fecha_fin; $fecha_fin = $tmp;
+        $tmp = $fecha_inicio;
+        $fecha_inicio = $fecha_fin;
+        $fecha_fin = $tmp;
     }
+
     $inicio_sql = mysqli_real_escape_string($conexion, $fecha_inicio);
     $fin_sql    = mysqli_real_escape_string($conexion, $fecha_fin);
+
     $sql = "
         SELECT COUNT(*) AS total
         FROM (
@@ -574,12 +589,23 @@ function tx_dias_habiles_rango_fechas($conexion, $fecha_inicio, $fecha_fin) {
             WHERE DATE_ADD('$inicio_sql', INTERVAL n DAY) <= '$fin_sql'
         ) calendario
         WHERE DAYOFWEEK(fecha) <> 1
-          AND NOT EXISTS (SELECT 1 FROM dias_inhabiles di WHERE di.fecha = calendario.fecha)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM dias_inhabiles di
+              WHERE di.fecha = calendario.fecha
+          )
     ";
+
     $r = mysqli_query($conexion, $sql);
-    if ($r && $row = mysqli_fetch_assoc($r)) return (int)($row['total'] ?? 0);
+    if ($r && $row = mysqli_fetch_assoc($r)) {
+        return (int)($row['total'] ?? 0);
+    }
+
+    // Fallback defensivo.
     $count = 0;
-    for ($ts = strtotime($fecha_inicio); $ts <= strtotime($fecha_fin); $ts += 86400) {
+    $ts_ini = strtotime($fecha_inicio);
+    $ts_fin = strtotime($fecha_fin);
+    for ($ts = $ts_ini; $ts <= $ts_fin; $ts += 86400) {
         if ((int)date('w', $ts) !== 0) $count++;
     }
     return $count;
@@ -963,57 +989,121 @@ function tx_meta_operativa_asignada($conexion, $anio, $semana, $id_superior, $id
 
 function tx_meta_operativa_asignada_periodo($conexion, $fecha_inicio, $fecha_fin, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado) {
     /*
-     * TOTALXPEDIENT - META OPERATIVA PRORRATEADA AL PERIODO
-     * Antes se comparaba el real del rango seleccionado contra una sola meta semanal.
-     * Ahora se suma proporcionalmente cada semana incluida en el rango:
-     * meta_periodo = SUM(meta_semanal * dias_habiles_overlap / dias_habiles_semana)
-     */
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - META OPERATIVA PRORRATEADA AL PERIODO
+    |--------------------------------------------------------------------------
+    |
+    | Corrige la tarjeta "Cumplimiento del nivel inferior vs meta".
+    |
+    | Antes:
+    |   Se comparaba el real acumulado del rango seleccionado contra una sola
+    |   meta semanal de ejecucion_operativa_metas.
+    |
+    | Ahora:
+    |   Si existe meta_asignada > 0, se suma la parte proporcional de cada
+    |   semana involucrada en el rango:
+    |
+    |   meta_periodo = SUM(meta_semanal * dias_habiles_overlap / dias_habiles_semana)
+    |
+    | Ejemplo:
+    |   Rango 01-16 junio:
+    |   suma proporcionalmente semana 23 + semana 24 + parte de semana 25.
+    |--------------------------------------------------------------------------
+    */
     $inicio_ts = strtotime($fecha_inicio);
     $fin_ts    = strtotime($fecha_fin);
     if (!$inicio_ts || !$fin_ts) return 0;
-    if ($inicio_ts > $fin_ts) { $tmp=$inicio_ts; $inicio_ts=$fin_ts; $fin_ts=$tmp; }
-    $meta_total = 0.0; $encontro_meta = false;
+
+    if ($inicio_ts > $fin_ts) {
+        $tmp = $inicio_ts;
+        $inicio_ts = $fin_ts;
+        $fin_ts = $tmp;
+    }
+
+    $meta_total = 0.0;
+    $encontro_meta = false;
     $cursor = strtotime('monday this week', $inicio_ts);
+
     while ($cursor <= $fin_ts) {
         $semana_inicio_ts = $cursor;
-        $semana_fin_ts = strtotime('+6 days', $semana_inicio_ts);
+        $semana_fin_ts    = strtotime('+6 days', $semana_inicio_ts);
+
         $overlap_inicio_ts = max($inicio_ts, $semana_inicio_ts);
-        $overlap_fin_ts = min($fin_ts, $semana_fin_ts);
+        $overlap_fin_ts    = min($fin_ts, $semana_fin_ts);
+
         if ($overlap_inicio_ts <= $overlap_fin_ts) {
             $anio_semana = (int)date('o', $semana_inicio_ts);
-            $semana_iso = (int)date('W', $semana_inicio_ts);
-            $meta_semana = tx_meta_operativa_asignada($conexion, $anio_semana, $semana_iso, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado);
+            $semana_iso  = (int)date('W', $semana_inicio_ts);
+
+            $meta_semana = tx_meta_operativa_asignada(
+                $conexion,
+                $anio_semana,
+                $semana_iso,
+                $id_superior,
+                $id_subordinado,
+                $nivel_superior,
+                $nivel_subordinado
+            );
+
             if ($meta_semana > 0) {
                 $encontro_meta = true;
-                $dias_semana = tx_dias_habiles_rango_fechas($conexion, date('Y-m-d', $semana_inicio_ts), date('Y-m-d', $semana_fin_ts));
-                $dias_overlap = tx_dias_habiles_rango_fechas($conexion, date('Y-m-d', $overlap_inicio_ts), date('Y-m-d', $overlap_fin_ts));
+
+                $dias_semana = tx_dias_habiles_rango_fechas(
+                    $conexion,
+                    date('Y-m-d', $semana_inicio_ts),
+                    date('Y-m-d', $semana_fin_ts)
+                );
+
+                $dias_overlap = tx_dias_habiles_rango_fechas(
+                    $conexion,
+                    date('Y-m-d', $overlap_inicio_ts),
+                    date('Y-m-d', $overlap_fin_ts)
+                );
+
                 if ($dias_semana > 0 && $dias_overlap > 0) {
                     $meta_total += ((float)$meta_semana / (float)$dias_semana) * (float)$dias_overlap;
                 }
             }
         }
+
         $cursor = strtotime('+1 week', $cursor);
     }
+
     return $encontro_meta ? (int)round($meta_total) : 0;
 }
 
 function tx_meta_propia_operativa_periodo_dashboard($conexion, $fecha_inicio, $fecha_fin, $id_posicion) {
-    /* Meta propia de Líder/Coach/Vendedor prorrateada al rango seleccionado. */
+    /*
+     * Meta propia del tablero actual cuando se visualiza Líder, Coach o Vendedor.
+     * Busca metas capturadas como id_subordinado en ejecucion_operativa_metas
+     * y las prorratea contra el rango seleccionado.
+     */
     $inicio_ts = strtotime($fecha_inicio);
-    $fin_ts = strtotime($fecha_fin);
+    $fin_ts    = strtotime($fecha_fin);
     if (!$inicio_ts || !$fin_ts || empty($id_posicion)) return 0;
-    if ($inicio_ts > $fin_ts) { $tmp=$inicio_ts; $inicio_ts=$fin_ts; $fin_ts=$tmp; }
+
+    if ($inicio_ts > $fin_ts) {
+        $tmp = $inicio_ts;
+        $inicio_ts = $fin_ts;
+        $fin_ts = $tmp;
+    }
+
     $id_posicion_esc = mysqli_real_escape_string($conexion, (string)$id_posicion);
-    $meta_total = 0.0; $encontro_meta = false;
+    $meta_total = 0.0;
+    $encontro_meta = false;
     $cursor = strtotime('monday this week', $inicio_ts);
+
     while ($cursor <= $fin_ts) {
         $semana_inicio_ts = $cursor;
-        $semana_fin_ts = strtotime('+6 days', $semana_inicio_ts);
+        $semana_fin_ts    = strtotime('+6 days', $semana_inicio_ts);
+
         $overlap_inicio_ts = max($inicio_ts, $semana_inicio_ts);
-        $overlap_fin_ts = min($fin_ts, $semana_fin_ts);
+        $overlap_fin_ts    = min($fin_ts, $semana_fin_ts);
+
         if ($overlap_inicio_ts <= $overlap_fin_ts) {
             $anio_semana = (int)date('o', $semana_inicio_ts);
-            $semana_iso = (int)date('W', $semana_inicio_ts);
+            $semana_iso  = (int)date('W', $semana_inicio_ts);
+
             $r = mysqli_query($conexion, "
                 SELECT meta_asignada
                 FROM ejecucion_operativa_metas
@@ -1026,17 +1116,31 @@ function tx_meta_propia_operativa_periodo_dashboard($conexion, $fecha_inicio, $f
             ");
             $row = $r ? mysqli_fetch_assoc($r) : null;
             $meta_semana = (int)($row['meta_asignada'] ?? 0);
+
             if ($meta_semana > 0) {
                 $encontro_meta = true;
-                $dias_semana = tx_dias_habiles_rango_fechas($conexion, date('Y-m-d', $semana_inicio_ts), date('Y-m-d', $semana_fin_ts));
-                $dias_overlap = tx_dias_habiles_rango_fechas($conexion, date('Y-m-d', $overlap_inicio_ts), date('Y-m-d', $overlap_fin_ts));
+
+                $dias_semana = tx_dias_habiles_rango_fechas(
+                    $conexion,
+                    date('Y-m-d', $semana_inicio_ts),
+                    date('Y-m-d', $semana_fin_ts)
+                );
+
+                $dias_overlap = tx_dias_habiles_rango_fechas(
+                    $conexion,
+                    date('Y-m-d', $overlap_inicio_ts),
+                    date('Y-m-d', $overlap_fin_ts)
+                );
+
                 if ($dias_semana > 0 && $dias_overlap > 0) {
                     $meta_total += ((float)$meta_semana / (float)$dias_semana) * (float)$dias_overlap;
                 }
             }
         }
+
         $cursor = strtotime('+1 week', $cursor);
     }
+
     return $encontro_meta ? (int)round($meta_total) : 0;
 }
 
@@ -1130,7 +1234,8 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $real = tx_real_inst_folios($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
 
             // Meta oficial de Ejecución Operativa:
-            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se prorratea y suma por el rango seleccionado.
+            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se prorratea
+            // y suma por el rango seleccionado del dashboard.
             // Si no existe o es 0, se conserva el cálculo automático por proporción de HC.
             $nivel_superior_meta = tx_nivel_operativo_meta($nivel_actual_dashboard);
             $nivel_subordinado_meta = tx_nivel_operativo_subordinado($target_nivel_inferior);
