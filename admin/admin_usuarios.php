@@ -1,6 +1,20 @@
 <?php
 require_once __DIR__ . '/admin_guard.php';
+
 require_once __DIR__ . '/../conexion.php';
+
+if (!isset($conn)) {
+    if (isset($conexion)) {
+        $conn = $conexion;
+    } elseif (isset($mysqli)) {
+        $conn = $mysqli;
+    } elseif (isset($link)) {
+        $conn = $link;
+    } else {
+        die("Error: no se encontró variable de conexión MySQL.");
+    }
+}
+
 require_once __DIR__ . '/admin_helpers.php';
 $mensaje = '';
 $error = '';

@@ -1,5 +1,20 @@
 <?php
-require_once __DIR__ . '/admin_guard.php'; require_once __DIR__ . '/../conexion.php'; require_once __DIR__ . '/admin_helpers.php';
+require_once __DIR__ . '/admin_guard.php';
+require_once __DIR__ . '/../conexion.php';
+
+if (!isset($conn)) {
+    if (isset($conexion)) {
+        $conn = $conexion;
+    } elseif (isset($mysqli)) {
+        $conn = $mysqli;
+    } elseif (isset($link)) {
+        $conn = $link;
+    } else {
+        die("Error: no se encontró variable de conexión MySQL.");
+    }
+}
+
+require_once __DIR__ . '/admin_helpers.php';
 $mensaje=''; $error=''; $temp_password='';
 if ($_SERVER['REQUEST_METHOD']==='POST') { $id=(int)($_POST['id']??0); if($id<=0){$error='Selecciona un usuario válido.';}else{$temp_password=admin_generate_temp_password(10);$hash=password_hash($temp_password,PASSWORD_DEFAULT);$stmt=$conn->prepare("UPDATE usuarios SET password=? WHERE id=?");$stmt->bind_param("si",$hash,$id);$mensaje=$stmt->execute()?'Password temporal generado correctamente.':'No se pudo generar password temporal.';}}
 $usuarios=$conn->query("SELECT id, username, rol, numero_talento_gs, id_posicion FROM usuarios ORDER BY username ASC");

@@ -1,5 +1,17 @@
 <?php
-require_once __DIR__ . '/admin_guard.php'; require_once __DIR__ . '/../conexion.php'; require_once __DIR__ . '/admin_helpers.php';
+require_once __DIR__ . '/../conexion.php';
+
+if (!isset($conn)) {
+    if (isset($conexion)) {
+        $conn = $conexion;
+    } elseif (isset($mysqli)) {
+        $conn = $mysqli;
+    } elseif (isset($link)) {
+        $conn = $link;
+    } else {
+        die("Error: no se encontró variable de conexión MySQL.");
+    }
+}
 $total_usuarios=0; $usuarios_por_rol=[];
 $res=$conn->query("SELECT COUNT(*) AS total FROM usuarios"); if($res&&$row=$res->fetch_assoc()){$total_usuarios=(int)$row['total'];}
 $res=$conn->query("SELECT rol, COUNT(*) AS total FROM usuarios GROUP BY rol ORDER BY total DESC"); if($res){while($row=$res->fetch_assoc()){$usuarios_por_rol[]=$row;}}

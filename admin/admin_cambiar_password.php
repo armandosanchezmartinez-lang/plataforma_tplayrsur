@@ -1,5 +1,19 @@
 <?php
-require_once __DIR__ . '/admin_guard.php'; require_once __DIR__ . '/../conexion.php'; require_once __DIR__ . '/admin_helpers.php';
+require_once __DIR__ . '/admin_guard.php'; 
+require_once __DIR__ . '/../conexion.php';
+
+if (!isset($conn)) {
+    if (isset($conexion)) {
+        $conn = $conexion;
+    } elseif (isset($mysqli)) {
+        $conn = $mysqli;
+    } elseif (isset($link)) {
+        $conn = $link;
+    } else {
+        die("Error: no se encontró variable de conexión MySQL.");
+    }
+}
+require_once __DIR__ . '/admin_helpers.php';
 $mensaje=''; $error='';
 if ($_SERVER['REQUEST_METHOD']==='POST') { $id=(int)($_POST['id']??0); $password=trim($_POST['password']??''); if($id<=0||strlen($password)<6){$error='Selecciona usuario y usa una contraseña mínima de 6 caracteres.';}else{$hash=password_hash($password,PASSWORD_DEFAULT);$stmt=$conn->prepare("UPDATE usuarios SET password=? WHERE id=?");$stmt->bind_param("si",$hash,$id);$mensaje=$stmt->execute()?'Contraseña actualizada correctamente.':'No se pudo actualizar la contraseña.';}}
 $usuarios=$conn->query("SELECT id, username, rol, numero_talento_gs, id_posicion FROM usuarios ORDER BY username ASC");

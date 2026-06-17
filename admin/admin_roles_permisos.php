@@ -1,5 +1,19 @@
 <?php
-require_once __DIR__ . '/admin_guard.php'; require_once __DIR__ . '/../conexion.php'; require_once __DIR__ . '/admin_helpers.php';
+require_once __DIR__ . '/admin_guard.php';
+require_once __DIR__ . '/../conexion.php';
+
+if (!isset($conn)) {
+    if (isset($conexion)) {
+        $conn = $conexion;
+    } elseif (isset($mysqli)) {
+        $conn = $mysqli;
+    } elseif (isset($link)) {
+        $conn = $link;
+    } else {
+        die("Error: no se encontró variable de conexión MySQL.");
+    }
+}
+require_once __DIR__ . '/admin_helpers.php';
 $permisos=['admin'=>['ADMIN TotalXpedient','Alta, baja y modificación de usuarios','Cambio y reset de passwords','Configuración de roles y permisos','Acceso total a módulos'],'director_regional'=>['INDEX Regional','Ranking Productividad Regional','REAI Regional','METAS-FCST Regional','Ejecución Operativa Regional'],'director_distrital'=>['INDEX Distrital','Ranking Productividad de su distrito','REAI hacia estructura inferior','METAS-FCST de su distrito','Ejecución Operativa de su distrito'],'lider'=>['INDEX de su equipo','Ranking Productividad de su equipo','REAI hacia coaches/vendedores','Ejecución Operativa de su equipo'],'coach'=>['INDEX de sus vendedores','Ranking Productividad de sus vendedores','REAI hacia vendedores','Ejecución Operativa de sus vendedores'],'vendedor'=>['Vista individual','Evidencias asignadas','Consulta de productividad individual']];
 ?>
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>ADMIN TotalXpedient | Roles y Permisos</title><link rel="stylesheet" href="../xpedient-v2.css"><style>body{font-family:Arial,sans-serif;padding:24px;background:#f5f7fa}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.card{background:#fff;padding:20px;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.08)}h2{margin-top:0}li{margin-bottom:8px}</style></head><body><h1>ADMIN TotalXpedient - Roles y Permisos</h1><div class="grid"><?php foreach($permisos as $rol=>$items):?><div class="card"><h2><?=admin_role_label($rol)?></h2><ul><?php foreach($items as $item):?><li><?=admin_escape($item)?></li><?php endforeach;?></ul></div><?php endforeach;?></div></body></html>
