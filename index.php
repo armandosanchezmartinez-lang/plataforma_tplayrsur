@@ -320,6 +320,12 @@ if ($rango_mode === 'completo') {
 
 $dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
 
+// Fechas absolutas del rango seleccionado.
+// Se usan para prorratear metas semanales de Ejecución Operativa
+// cuando el dashboard analiza periodos que cruzan más de una semana.
+$fecha_inicio_dashboard = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_inicio_dashboard);
+$fecha_fin_dashboard    = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_fin_dashboard);
+
 $dashboard_fecha_label = ($rango_mode === 'completo')
     ? 'Mes completo · ' . ($meses_es[$mes_actual] ?? '') . ' ' . $anio_query
     : (
@@ -359,10 +365,12 @@ $root_dashboard_id_pre = $scope_activo
 
 $meta_propia_operativa_dashboard = 0;
 if (!empty($root_dashboard_id_pre) && in_array($nivel_actual_dashboard_pre, ['lider','coach','vendedor'], true)) {
-    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
+    // Meta propia de Ejecución Operativa prorrateada contra el rango seleccionado.
+    // Evita comparar instalaciones acumuladas de varias semanas contra una sola meta semanal.
+    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_periodo_dashboard(
         $conexion,
-        $anio_operativo_dashboard,
-        $semana_operativa_dashboard,
+        $fecha_inicio_dashboard,
+        $fecha_fin_dashboard,
         $root_dashboard_id_pre
     );
 }
@@ -538,6 +546,70 @@ function tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin
     return $count;
 }
 
+
+
+function tx_dias_habiles_rango_fechas($conexion, $fecha_inicio, $fecha_fin) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - DÍAS HÁBILES POR RANGO DE FECHAS
+    |--------------------------------------------------------------------------
+    |
+    | Uso:
+    |   Prorratear metas semanales capturadas en ejecucion_operativa_metas
+    |   cuando el dashboard analiza un periodo mayor o menor a una semana.
+    |
+    | Regla:
+    |   - Excluye domingos.
+    |   - Excluye fechas registradas en dias_inhabiles.
+    |--------------------------------------------------------------------------
+    */
+    $fecha_inicio = date('Y-m-d', strtotime($fecha_inicio));
+    $fecha_fin    = date('Y-m-d', strtotime($fecha_fin));
+
+    if ($fecha_inicio > $fecha_fin) {
+        $tmp = $fecha_inicio;
+        $fecha_inicio = $fecha_fin;
+        $fecha_fin = $tmp;
+    }
+
+    $inicio_sql = mysqli_real_escape_string($conexion, $fecha_inicio);
+    $fin_sql    = mysqli_real_escape_string($conexion, $fecha_fin);
+
+    $sql = "
+        SELECT COUNT(*) AS total
+        FROM (
+            SELECT DATE_ADD('$inicio_sql', INTERVAL n DAY) AS fecha
+            FROM (
+                SELECT a.N + b.N * 10 + c.N * 100 AS n
+                FROM
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a,
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b,
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) c
+            ) nums
+            WHERE DATE_ADD('$inicio_sql', INTERVAL n DAY) <= '$fin_sql'
+        ) calendario
+        WHERE DAYOFWEEK(fecha) <> 1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM dias_inhabiles di
+              WHERE di.fecha = calendario.fecha
+          )
+    ";
+
+    $r = mysqli_query($conexion, $sql);
+    if ($r && $row = mysqli_fetch_assoc($r)) {
+        return (int)($row['total'] ?? 0);
+    }
+
+    // Fallback defensivo.
+    $count = 0;
+    $ts_ini = strtotime($fecha_inicio);
+    $ts_fin = strtotime($fecha_fin);
+    for ($ts = $ts_ini; $ts <= $ts_fin; $ts += 86400) {
+        if ((int)date('w', $ts) !== 0) $count++;
+    }
+    return $count;
+}
 
 function tx_canales_cumplimiento_dashboard() {
     /*
@@ -914,6 +986,164 @@ function tx_meta_operativa_asignada($conexion, $anio, $semana, $id_superior, $id
     return (int)($row['meta'] ?? 0);
 }
 
+
+function tx_meta_operativa_asignada_periodo($conexion, $fecha_inicio, $fecha_fin, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - META OPERATIVA VIGENTE PRORRATEADA AL PERIODO
+    |--------------------------------------------------------------------------
+    |
+    | Corrige la tarjeta "Cumplimiento del nivel inferior vs meta".
+    |
+    | Regla vigente:
+    |   Si existe meta_asignada > 0 en ejecucion_operativa_metas, se toma la
+    |   meta semanal vigente del subordinado y se prorratea contra el rango
+    |   seleccionado del dashboard.
+    |
+    | Formula:
+    |   meta_periodo = (meta_semanal_vigente / 6) * dias_habiles_del_periodo
+    |
+    | Ejemplo:
+    |   Maria Jose:
+    |       meta semanal vigente = 170
+    |       rango 01-16 junio = 14 dias habiles
+    |       meta_periodo = 170 / 6 * 14 = 396.67 ~= 397
+    |
+    | IMPORTANTE:
+    |   Antes se sumaban solo las semanas que tenian registro capturado. Eso
+    |   provocaba que, si una semana del periodo no tenia captura, la meta
+    |   quedara subestimada. Ahora se toma la meta vigente y se proyecta al
+    |   periodo completo.
+    |--------------------------------------------------------------------------
+    */
+
+    $inicio_ts = strtotime($fecha_inicio);
+    $fin_ts    = strtotime($fecha_fin);
+    if (!$inicio_ts || !$fin_ts) return 0;
+
+    if ($inicio_ts > $fin_ts) {
+        $tmp = $inicio_ts;
+        $inicio_ts = $fin_ts;
+        $fin_ts = $tmp;
+    }
+
+    $anio_fin = (int)date('o', $fin_ts);
+    $semana_fin = (int)date('W', $fin_ts);
+
+    $id_superior_esc = mysqli_real_escape_string($conexion, (string)$id_superior);
+    $id_subordinado_esc = mysqli_real_escape_string($conexion, (string)$id_subordinado);
+    $nivel_superior_esc = mysqli_real_escape_string($conexion, (string)$nivel_superior);
+    $nivel_subordinado_esc = mysqli_real_escape_string($conexion, (string)$nivel_subordinado);
+
+    // 1) Busqueda preferente: misma linea superior -> subordinado.
+    $sql = "
+        SELECT meta_asignada
+        FROM ejecucion_operativa_metas
+        WHERE id_superior = '$id_superior_esc'
+          AND id_subordinado = '$id_subordinado_esc'
+          AND nivel_superior = '$nivel_superior_esc'
+          AND nivel_subordinado = '$nivel_subordinado_esc'
+          AND meta_asignada > 0
+          AND (
+                anio < $anio_fin
+                OR (anio = $anio_fin AND semana <= $semana_fin)
+          )
+        ORDER BY anio DESC, semana DESC, updated_at DESC, id DESC
+        LIMIT 1
+    ";
+    $r = mysqli_query($conexion, $sql);
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    $meta_semanal = (int)($row['meta_asignada'] ?? 0);
+
+    // 2) Respaldo: si el dashboard esta en scope/admin y no coincide id_superior,
+    // toma la ultima meta positiva vigente para ese subordinado.
+    if ($meta_semanal <= 0) {
+        $sql = "
+            SELECT meta_asignada
+            FROM ejecucion_operativa_metas
+            WHERE id_subordinado = '$id_subordinado_esc'
+              AND nivel_superior = '$nivel_superior_esc'
+              AND nivel_subordinado = '$nivel_subordinado_esc'
+              AND meta_asignada > 0
+              AND (
+                    anio < $anio_fin
+                    OR (anio = $anio_fin AND semana <= $semana_fin)
+              )
+            ORDER BY anio DESC, semana DESC, updated_at DESC, id DESC
+            LIMIT 1
+        ";
+        $r = mysqli_query($conexion, $sql);
+        $row = $r ? mysqli_fetch_assoc($r) : null;
+        $meta_semanal = (int)($row['meta_asignada'] ?? 0);
+    }
+
+    if ($meta_semanal <= 0) return 0;
+
+    $dias_periodo = tx_dias_habiles_rango_fechas(
+        $conexion,
+        date('Y-m-d', $inicio_ts),
+        date('Y-m-d', $fin_ts)
+    );
+
+    if ($dias_periodo <= 0) return 0;
+
+    // Meta semanal operativa estandar: 6 dias habiles por semana.
+    return (int)round(((float)$meta_semanal / 6.0) * (float)$dias_periodo);
+}
+
+function tx_meta_propia_operativa_periodo_dashboard($conexion, $fecha_inicio, $fecha_fin, $id_posicion) {
+    /*
+     * Meta propia del tablero actual para Lider, Coach o Vendedor.
+     *
+     * Toma la meta semanal vigente capturada para el id_subordinado y la
+     * prorratea al rango seleccionado:
+     *
+     *   meta_periodo = (meta_semanal_vigente / 6) * dias_habiles_del_periodo
+     */
+    $inicio_ts = strtotime($fecha_inicio);
+    $fin_ts    = strtotime($fecha_fin);
+    if (!$inicio_ts || !$fin_ts || empty($id_posicion)) return 0;
+
+    if ($inicio_ts > $fin_ts) {
+        $tmp = $inicio_ts;
+        $inicio_ts = $fin_ts;
+        $fin_ts = $tmp;
+    }
+
+    $anio_fin = (int)date('o', $fin_ts);
+    $semana_fin = (int)date('W', $fin_ts);
+    $id_posicion_esc = mysqli_real_escape_string($conexion, (string)$id_posicion);
+
+    $sql = "
+        SELECT meta_asignada
+        FROM ejecucion_operativa_metas
+        WHERE id_subordinado = '$id_posicion_esc'
+          AND meta_asignada > 0
+          AND (
+                anio < $anio_fin
+                OR (anio = $anio_fin AND semana <= $semana_fin)
+          )
+        ORDER BY anio DESC, semana DESC, updated_at DESC, id DESC
+        LIMIT 1
+    ";
+    $r = mysqli_query($conexion, $sql);
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    $meta_semanal = (int)($row['meta_asignada'] ?? 0);
+
+    if ($meta_semanal <= 0) return 0;
+
+    $dias_periodo = tx_dias_habiles_rango_fechas(
+        $conexion,
+        date('Y-m-d', $inicio_ts),
+        date('Y-m-d', $fin_ts)
+    );
+
+    if ($dias_periodo <= 0) return 0;
+
+    // Meta semanal operativa estandar: 6 dias habiles por semana.
+    return (int)round(((float)$meta_semanal / 6.0) * (float)$dias_periodo);
+}
+
 function tx_nivel_operativo_meta($nivel_dashboard) {
     if ($nivel_dashboard === 'director_distrital') return 'DIRECTOR_DISTRITAL';
     if ($nivel_dashboard === 'lider') return 'LIDER_VENTAS';
@@ -1004,16 +1234,17 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $real = tx_real_inst_folios($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
 
             // Meta oficial de Ejecución Operativa:
-            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se usa esa meta.
+            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se calcula con la meta semanal vigente
+            // prorrateada contra los dias habiles del rango seleccionado.
             // Si no existe o es 0, se conserva el cálculo automático por proporción de HC.
             $nivel_superior_meta = tx_nivel_operativo_meta($nivel_actual_dashboard);
             $nivel_subordinado_meta = tx_nivel_operativo_subordinado($target_nivel_inferior);
             $meta_oficial = 0;
             if ($nivel_superior_meta !== '' && $nivel_subordinado_meta !== '' && !empty($child['id_posicion'])) {
-                $meta_oficial = tx_meta_operativa_asignada(
+                $meta_oficial = tx_meta_operativa_asignada_periodo(
                     $conexion,
-                    $anio_operativo_dashboard,
-                    $semana_operativa_dashboard,
+                    $fecha_inicio_dashboard,
+                    $fecha_fin_dashboard,
                     $root_dashboard_id,
                     $child['id_posicion'],
                     $nivel_superior_meta,
