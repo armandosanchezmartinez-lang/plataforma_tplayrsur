@@ -1824,17 +1824,22 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
     | TOTALXPEDIENT - TOP/BOTTOM COACHES DE VENTA
     |--------------------------------------------------------------------------
     |
-    | Esta lista debe coincidir con el Ranking Coach de ranking_productividad.php.
+    | Esta lista debe coincidir con el universo del Ranking Coach en
+    | ranking_productividad.php.
     |
-    | IMPORTANTE:
-    | No tomar todos los registros donde posicion LIKE '%COACH%', porque ahí caen
-    | perfiles que no necesariamente corresponden a Coaches de Venta.
+    | Regla:
+    |   Coach de Venta = colaborador/vacante que reporta a un Líder de Venta
+    |   y que además tiene vendedores asignados debajo en HC.
     |
-    | Regla homologada con Ranking Coach:
-    |   - Coach = colaborador HC que reporta a un Líder de Venta.
-    |   - Se identifica con nombre_linea_reporte = nombre del líder.
-    |   - h.puesto_lr LIKE '%LIDER%'.
-    |   - El líder debe ser posición LIDER VENTAS.
+    | Importante:
+    |   No basta con buscar posicion LIKE '%COACH%'. Eso puede incluir perfiles
+    |   de acompañamiento/operación que no aparecen en Ranking Coach.
+    |
+    | Homologación tomada del Ranking Coach:
+    |   - Coach reporta al líder: c.nombre_linea_reporte = líder.
+    |   - Vendedor reporta al coach: v.nombre_linea_reporte = coach.
+    |   - Si el coach es VACANTE, se amarra por v.posicion_lr = c.id_posicion.
+    |   - v.puesto_lr LIKE '%COACH%'.
     |--------------------------------------------------------------------------
     */
     $sql = "
@@ -1857,20 +1862,66 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
           AND c.puesto_lr LIKE '%LIDER%'
           AND c.id_posicion IS NOT NULL
           AND c.id_posicion <> ''
+          AND EXISTS (
+              SELECT 1
+              FROM hc v
+              WHERE v.semana = c.semana
+                AND v.anio = c.anio
+                AND v.distrito = c.distrito
+                AND v.puesto_lr LIKE '%COACH%'
+                AND (
+                    (c.nombre_colaborador <> 'VACANTE' AND v.nombre_linea_reporte = c.nombre_colaborador)
+                    OR
+                    (c.nombre_colaborador = 'VACANTE' AND v.posicion_lr = c.id_posicion)
+                )
+          )
         ORDER BY c.distrito, c.nombre_colaborador
     ";
 
     $res = mysqli_query($conexion, $sql);
     $out = [];
+
     while ($res && $row = mysqli_fetch_assoc($res)) {
         $id_pos = trim((string)($row['id_posicion'] ?? ''));
-        if ($id_pos === '') continue;
+        $coach_nombre = trim((string)($row['coach'] ?? ''));
+        $distrito = trim((string)($row['distrito'] ?? ''));
 
-        $ids_linea = getTodosSubordinados($conexion, $id_pos, 6, $semana, $anio);
-        $ids_linea[] = $id_pos;
-        $ids_linea = array_unique(array_values($ids_linea));
-        $folios = getFoliosPorPosiciones($conexion, $ids_linea);
-        $hc_activo = tx_hc_activo_posiciones($conexion, $ids_linea, $semana, $anio, $puestos_comerciales);
+        if ($id_pos === '' || $coach_nombre === '' || $distrito === '') continue;
+
+        $id_pos_esc = mysqli_real_escape_string($conexion, $id_pos);
+        $coach_esc = mysqli_real_escape_string($conexion, $coach_nombre);
+        $distrito_esc = mysqli_real_escape_string($conexion, $distrito);
+
+        /*
+         * Folios y HC activo del coach con la misma lógica del Ranking Coach.
+         * Evita tomar líneas que no son de venta y evita que entren coaches
+         * operativos que no aparecen en el ranking_productividad.php.
+         */
+        $sql_vendedores = "
+            SELECT DISTINCT
+                v.numero_talento_gs AS folio_empleado
+            FROM hc v
+            WHERE v.semana = ".(int)$semana."
+              AND v.anio = ".(int)$anio."
+              AND v.distrito = '$distrito_esc'
+              AND v.puesto_lr LIKE '%COACH%'
+              AND (
+                    ('$coach_esc' <> 'VACANTE' AND v.nombre_linea_reporte = '$coach_esc')
+                    OR
+                    ('$coach_esc' = 'VACANTE' AND v.posicion_lr = '$id_pos_esc')
+              )
+              AND v.numero_talento_gs <> ''
+              AND v.numero_talento_gs NOT LIKE '%VACANTE%'
+              AND v.nombre_colaborador <> 'VACANTE'
+        ";
+
+        $folios = [];
+        $res_v = mysqli_query($conexion, $sql_vendedores);
+        while ($res_v && $vrow = mysqli_fetch_assoc($res_v)) {
+            $folio = trim((string)($vrow['folio_empleado'] ?? ''));
+            if ($folio !== '') $folios[] = $folio;
+        }
+        $folios = array_unique(array_values($folios));
 
         $out[$id_pos] = [
             'id_posicion' => $id_pos,
@@ -1878,7 +1929,7 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
             'distrito' => $row['distrito'] ?? '',
             'lider' => $row['lider'] ?? '',
             'folios' => $folios,
-            'hc_activo' => $hc_activo,
+            'hc_activo' => count($folios),
             'instalaciones' => 0,
             'arpu' => 0,
             'productividad' => 0,
