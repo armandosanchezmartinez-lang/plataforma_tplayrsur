@@ -770,7 +770,7 @@ ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 } elseif ($view === 'ranking_coach') {
 $sql = "
 WITH {$lideres_cte},
-coaches_base AS (
+coaches_raw AS (
     SELECT DISTINCT
         la.distrito_reporte AS distrito,
         la.distrito_hc,
@@ -790,6 +790,17 @@ coaches_base AS (
        )
        AND h.puesto_lr LIKE '%LIDER%'
 ),
+coaches_base AS (
+    SELECT
+        distrito,
+        distrito_hc,
+        lider,
+        coach,
+        coach_pos,
+        coach_key
+    FROM coaches_raw
+    GROUP BY distrito, distrito_hc, lider, coach, coach_pos, coach_key
+),
 vendedores AS (
     SELECT DISTINCT
         c.distrito,
@@ -804,7 +815,7 @@ vendedores AS (
         h.posicion_lr,
         h.semana,
         h.anio
-    FROM coaches_base c
+    FROM coaches_raw c
     INNER JOIN hc h
         ON (
             (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
@@ -816,7 +827,35 @@ vendedores AS (
        AND h.anio = c.anio
        AND h.puesto_lr LIKE '%COACH%'
 ),
-resumen AS (
+ventas_base AS (
+    SELECT
+        v.coach_key,
+        COUNT(DISTINCT i.cuenta) AS ins_sem_base
+    FROM vendedores v
+    INNER JOIN instalaciones i
+        ON i.folio_empleado = v.folio_empleado
+       AND {$cond_i_base}
+    WHERE v.anio = {$hc_anio_base}
+      AND v.semana = {$hc_semana_base}
+      AND v.folio_empleado <> 'VACANTE'
+      AND v.nombre_colaborador <> 'VACANTE'
+    GROUP BY v.coach_key
+),
+ventas_actual AS (
+    SELECT
+        v.coach_key,
+        COUNT(DISTINCT i.cuenta) AS ins_sem_actual
+    FROM vendedores v
+    INNER JOIN instalaciones i
+        ON i.folio_empleado = v.folio_empleado
+       AND {$cond_i_actual}
+    WHERE v.anio = {$hc_anio_actual}
+      AND v.semana = {$hc_semana_actual}
+      AND v.folio_empleado <> 'VACANTE'
+      AND v.nombre_colaborador <> 'VACANTE'
+    GROUP BY v.coach_key
+),
+hc_resumen AS (
     SELECT
         c.distrito,
         c.lider,
@@ -829,11 +868,10 @@ resumen AS (
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
-        COUNT(DISTINCT ibase.cuenta) AS ins_sem_base,
-        COUNT(DISTINCT iactual.cuenta) AS ins_sem_actual
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual
     FROM coaches_base c
-    LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
+    LEFT JOIN vendedores v
+        ON c.coach_key = v.coach_key
     LEFT JOIN instalaciones ibase
         ON v.folio_empleado = ibase.folio_empleado
        AND {$cond_ibase}
@@ -847,38 +885,40 @@ resumen AS (
     GROUP BY c.distrito, c.lider, c.coach, c.coach_pos, c.coach_key
 )
 SELECT
-    distrito,
-    entidad,
-    lider,
-    coach,
-    coach_pos,
+    h.distrito,
+    h.entidad,
+    h.lider,
+    h.coach,
+    h.coach_pos,
     '' AS folio_empleado,
-    ins_sem_base,
-    ins_sem_actual,
-    ins_sem_actual - ins_sem_base AS dif,
-    ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
-    hc_activo_base,
-    hc_activo_actual,
-    hc_con_ins_base,
-    hc_con_ins_actual,
-    hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
-    hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
-    ROUND(((hc_activo_base - hc_con_ins_base) / NULLIF(hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
-    ROUND(((hc_activo_actual - hc_con_ins_actual) / NULLIF(hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
-    ROUND(ins_sem_base / NULLIF(hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
-    ROUND(ins_sem_actual / NULLIF(hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
-    hc_activo_base AS activo_base,
-    vacante_base,
-    hc_activo_base + vacante_base AS hc_total_base,
-    hc_activo_actual AS activo_actual,
-    vacante_actual,
-    hc_activo_actual + vacante_actual AS hc_total_actual
-FROM resumen
+    COALESCE(vb.ins_sem_base,0) AS ins_sem_base,
+    COALESCE(va.ins_sem_actual,0) AS ins_sem_actual,
+    COALESCE(va.ins_sem_actual,0) - COALESCE(vb.ins_sem_base,0) AS dif,
+    ROUND(((COALESCE(va.ins_sem_actual,0) - COALESCE(vb.ins_sem_base,0)) / NULLIF(vb.ins_sem_base,0)) * 100,0) AS pct_dif,
+    h.hc_activo_base,
+    h.hc_activo_actual,
+    h.hc_con_ins_base,
+    h.hc_con_ins_actual,
+    h.hc_activo_base - h.hc_con_ins_base AS hc_sin_venta_base,
+    h.hc_activo_actual - h.hc_con_ins_actual AS hc_sin_venta_actual,
+    ROUND(((h.hc_activo_base - h.hc_con_ins_base) / NULLIF(h.hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
+    ROUND(((h.hc_activo_actual - h.hc_con_ins_actual) / NULLIF(h.hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
+    ROUND(COALESCE(vb.ins_sem_base,0) / NULLIF(h.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
+    ROUND(COALESCE(va.ins_sem_actual,0) / NULLIF(h.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
+    h.hc_activo_base AS activo_base,
+    h.vacante_base,
+    h.hc_activo_base + h.vacante_base AS hc_total_base,
+    h.hc_activo_actual AS activo_actual,
+    h.vacante_actual,
+    h.hc_activo_actual + h.vacante_actual AS hc_total_actual
+FROM hc_resumen h
+LEFT JOIN ventas_base vb ON h.coach_key = vb.coach_key
+LEFT JOIN ventas_actual va ON h.coach_key = va.coach_key
 WHERE
-       COALESCE(ins_sem_base,0) > 0
-    OR COALESCE(ins_sem_actual,0) > 0
-    OR COALESCE(hc_total_base,0) > 0
-    OR COALESCE(hc_total_actual,0) > 0
+       COALESCE(vb.ins_sem_base,0) > 0
+    OR COALESCE(va.ins_sem_actual,0) > 0
+    OR COALESCE(h.hc_activo_base + h.vacante_base,0) > 0
+    OR COALESCE(h.hc_activo_actual + h.vacante_actual,0) > 0
 ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'coaches') {
