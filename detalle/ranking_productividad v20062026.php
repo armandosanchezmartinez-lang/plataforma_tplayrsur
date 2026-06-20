@@ -284,7 +284,7 @@ $has_next = (
 );
 
 $view = $_GET['view'] ?? 'lideres';
-if (!in_array($view, ['lideres','ranking_coach','coaches','vendedores','ventas'], true)) $view = 'lideres';
+if (!in_array($view, ['lideres','coaches','vendedores','ventas'], true)) $view = 'lideres';
 
 $periodo = $_GET['periodo'] ?? 'semanal';
 if (!in_array($periodo, ['semanal','mensual'], true)) $periodo = 'semanal';
@@ -767,120 +767,6 @@ FROM ventas_lider vl
 LEFT JOIN hc_resumen h ON vl.distrito = h.distrito AND vl.lider = h.lider
 ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
-} elseif ($view === 'ranking_coach') {
-$sql = "
-WITH {$lideres_cte},
-coaches_base AS (
-    SELECT DISTINCT
-        la.distrito_reporte AS distrito,
-        la.distrito_hc,
-        la.lider_hc AS lider,
-        h.nombre_colaborador AS coach,
-        h.id_posicion AS coach_pos,
-        CONCAT(la.distrito_reporte, '|', la.lider_hc, '|', h.nombre_colaborador, '|', h.id_posicion) AS coach_key,
-        h.semana,
-        h.anio
-    FROM lideres_activos la
-    INNER JOIN hc h
-        ON h.nombre_linea_reporte = la.lider_hc
-       AND h.distrito = la.distrito_hc
-       AND (
-            (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
-         OR (h.anio = {$hc_anio_actual} AND h.semana = {$hc_semana_actual})
-       )
-       AND h.puesto_lr LIKE '%LIDER%'
-),
-vendedores AS (
-    SELECT DISTINCT
-        c.distrito,
-        c.distrito_hc,
-        c.lider,
-        c.coach,
-        c.coach_pos,
-        c.coach_key,
-        h.numero_talento_gs AS folio_empleado,
-        h.nombre_colaborador,
-        h.id_posicion,
-        h.posicion_lr,
-        h.semana,
-        h.anio
-    FROM coaches_base c
-    INNER JOIN hc h
-        ON (
-            (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
-            OR
-            (c.coach = 'VACANTE' AND h.posicion_lr = c.coach_pos)
-        )
-       AND h.distrito = c.distrito_hc
-       AND h.semana = c.semana
-       AND h.anio = c.anio
-       AND h.puesto_lr LIKE '%COACH%'
-),
-resumen AS (
-    SELECT
-        c.distrito,
-        c.lider,
-        c.coach AS entidad,
-        c.coach,
-        c.coach_pos,
-        c.coach_key,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
-        COUNT(DISTINCT ibase.cuenta) AS ins_sem_base,
-        COUNT(DISTINCT iactual.cuenta) AS ins_sem_actual
-    FROM coaches_base c
-    LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
-    LEFT JOIN instalaciones ibase
-        ON v.folio_empleado = ibase.folio_empleado
-       AND {$cond_ibase}
-       AND v.anio={$hc_anio_base}
-       AND v.semana={$hc_semana_base}
-    LEFT JOIN instalaciones iactual
-        ON v.folio_empleado = iactual.folio_empleado
-       AND {$cond_iactual}
-       AND v.anio={$hc_anio_actual}
-       AND v.semana={$hc_semana_actual}
-    GROUP BY c.distrito, c.lider, c.coach, c.coach_pos, c.coach_key
-)
-SELECT
-    distrito,
-    entidad,
-    lider,
-    coach,
-    coach_pos,
-    '' AS folio_empleado,
-    ins_sem_base,
-    ins_sem_actual,
-    ins_sem_actual - ins_sem_base AS dif,
-    ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
-    hc_activo_base,
-    hc_activo_actual,
-    hc_con_ins_base,
-    hc_con_ins_actual,
-    hc_activo_base - hc_con_ins_base AS hc_sin_venta_base,
-    hc_activo_actual - hc_con_ins_actual AS hc_sin_venta_actual,
-    ROUND(((hc_activo_base - hc_con_ins_base) / NULLIF(hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
-    ROUND(((hc_activo_actual - hc_con_ins_actual) / NULLIF(hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
-    ROUND(ins_sem_base / NULLIF(hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
-    ROUND(ins_sem_actual / NULLIF(hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
-    hc_activo_base AS activo_base,
-    vacante_base,
-    hc_activo_base + vacante_base AS hc_total_base,
-    hc_activo_actual AS activo_actual,
-    vacante_actual,
-    hc_activo_actual + vacante_actual AS hc_total_actual
-FROM resumen
-WHERE
-       COALESCE(ins_sem_base,0) > 0
-    OR COALESCE(ins_sem_actual,0) > 0
-    OR COALESCE(hc_total_base,0) > 0
-    OR COALESCE(hc_total_actual,0) > 0
-ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
-";
 } elseif ($view === 'coaches') {
 $sql = "
 WITH {$lideres_cte},
@@ -1246,30 +1132,28 @@ if (!$res) {
 
 $tot = base_metrics_totals($rows, $dias_habiles_base, $dias_habiles_actual);
 $districts = [];
-if (in_array($view, ['lideres','ranking_coach'], true)) {
+if ($view === 'lideres') {
     foreach ($rows as $r) if (!in_array($r['distrito'], $districts, true)) $districts[] = $r['distrito'];
     sort($districts);
 }
 
 $fecha_label = date('d/m/Y');
-$entity_label = $view === 'lideres' ? 'Líder' : (in_array($view, ['coaches','ranking_coach'], true) ? 'Coach' : 'Semana');
+$entity_label = $view === 'lideres' ? 'Líder' : ($view === 'coaches' ? 'Coach' : 'Semana');
 $title_label = [
-    'lideres'        => 'Ranking de Productividad',
-    'ranking_coach'  => 'Ranking Coach',
-    'coaches'        => 'Ranking por Coach',
+    'lideres'    => 'Ranking de Productividad',
+    'coaches'    => 'Ranking por Coach',
     'vendedores' => 'Ventas Semanales del Coach',
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
-$base_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'lideres']);
-$ranking_coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'ranking_coach']);
+$base_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados)]);
 $lider_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]);
 $coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]);
 
 $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
 if ($periodo === 'semanal') $subtitle .= " · Días: {$dias_semana_label}";
 if (!empty($hc_actual_fallback)) $subtitle .= " · HC actual usando SEM{$hc_semana_actual}";
-if (in_array($view, ['coaches','vendedores','ventas'], true)) $subtitle .= " · Líder: {$lider_param}";
+if ($view !== 'lideres') $subtitle .= " · Líder: {$lider_param}";
 if ($view === 'vendedores' || $view === 'ventas') $subtitle .= " · Coach: {$coach_param}";
 if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
 
@@ -1462,14 +1346,9 @@ include __DIR__ . '/../includes/sidebar.php';
             <div class="breadcrumb-title">Nivel de análisis</div>
             <div class="breadcrumb-path">
                 <?php if ($view === 'lideres'): ?>
-                    <span class="breadcrumb-current">🏆 Ranking Líder</span>
-                    <a class="breadcrumb-link" href="<?= h($ranking_coach_link) ?>">👥 Ranking Coach</a>
-                <?php elseif ($view === 'ranking_coach'): ?>
-                    <a class="breadcrumb-link" href="<?= h($base_link) ?>">🏆 Ranking Líder</a>
-                    <span class="breadcrumb-current">👥 Ranking Coach</span>
+                    <span class="breadcrumb-current">🏆 Ranking General</span>
                 <?php else: ?>
-                    <a class="breadcrumb-link" href="<?= h($base_link) ?>">🏆 Ranking Líder</a>
-                    <a class="breadcrumb-link" href="<?= h($ranking_coach_link) ?>">👥 Ranking Coach</a>
+                    <a class="breadcrumb-link" href="<?= h($base_link) ?>">🏆 Ranking General</a>
                     <span class="breadcrumb-sep">›</span>
                     <?php if ($view === 'coaches'): ?>
                         <span class="breadcrumb-current">👤 <?= h($lider_param) ?></span>
@@ -1486,10 +1365,10 @@ include __DIR__ . '/../includes/sidebar.php';
                     <?php endif; ?>
                 <?php endif; ?>
             </div>
-            <?php if (!in_array($view, ['lideres','ranking_coach'], true)): ?><div class="context-chip">Distrito: <?= h($distrito_param) ?></div><?php endif; ?>
+            <?php if ($view !== 'lideres'): ?><div class="context-chip">Distrito: <?= h($distrito_param) ?></div><?php endif; ?>
         </div>
         <div class="level-actions">
-            <?php if (!in_array($view, ['lideres','ranking_coach'], true)): ?><a class="level-action" href="<?= h($base_link) ?>">← Ver líderes</a><?php endif; ?>
+            <?php if ($view !== 'lideres'): ?><a class="level-action" href="<?= h($base_link) ?>">← Ver líderes</a><?php endif; ?>
             <?php if ($view === 'vendedores' || $view === 'ventas'): ?><a class="level-action primary" href="<?= h($lider_link) ?>">← Ver coaches</a><?php endif; ?>
             <?php if ($view === 'ventas'): ?><a class="level-action primary" href="<?= h($coach_link) ?>">← Ver vendedores</a><?php endif; ?>
         </div>
@@ -1507,7 +1386,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 
 <section class="filters">
-    <?php if (in_array($view, ['lideres','ranking_coach'], true) && count($districts) > 1): ?>
+    <?php if ($view === 'lideres' && count($districts) > 1): ?>
         <span class="filter-label">Distrito:</span>
         <button class="filter-btn active" data-district="ALL">Todos</button>
         <?php foreach ($districts as $d): ?><button class="filter-btn" data-district="<?= h($d) ?>"><?= h($d) ?></button><?php endforeach; ?>
@@ -1521,7 +1400,7 @@ include __DIR__ . '/../includes/sidebar.php';
 <section class="table-card">
     <div class="table-head">
         <strong><?= h($title_label) ?></strong>
-        <span><?= $view === 'lideres' ? 'Click en líder para ver coaches' : (in_array($view, ['coaches','ranking_coach'], true) ? 'Click en coach para ver vendedores' : 'Click en vendedor para ver historial semanal') ?></span>
+        <span><?= $view === 'lideres' ? 'Click en líder para ver coaches' : ($view === 'coaches' ? 'Click en coach para ver vendedores' : 'Click en vendedor para ver historial semanal') ?></span>
     </div>
     <div class="table-wrap">
         <table id="rankingTable">
@@ -1555,7 +1434,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     $href = '';
                     if ($view === 'lideres') {
                         $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
-                    } elseif (in_array($view, ['coaches','ranking_coach'], true)) {
+                    } elseif ($view === 'coaches') {
                         $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
                     } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
                         $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]);
