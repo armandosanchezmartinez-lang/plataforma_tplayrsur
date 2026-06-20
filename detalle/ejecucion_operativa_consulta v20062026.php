@@ -232,18 +232,6 @@ function cargar_ejecucion_existente($conexion, $anio, $semana, $id_posicion) {
     return $row ?: null;
 }
 
-function responsable_desde_ejecucion($ejecucion) {
-    if (!$ejecucion) return null;
-    return [
-        'id_posicion' => $ejecucion['id_posicion'] ?? '',
-        'posicion_lr' => $ejecucion['posicion_lr'] ?? null,
-        'numero_talento_gs' => $ejecucion['numero_talento_gs'] ?? '',
-        'nombre_colaborador' => $ejecucion['nombre_responsable'] ?? '',
-        'puesto_responsable' => $ejecucion['puesto_responsable'] ?? '',
-        'distrito' => $ejecucion['distrito'] ?? ''
-    ];
-}
-
 function cargar_plan($conexion, $id_ejecucion) {
     $sql = "SELECT * FROM ejecucion_operativa_plan WHERE id_ejecucion = ? LIMIT 1";
     $stmt = mysqli_prepare($conexion, $sql);
@@ -368,7 +356,7 @@ function accion_estatus_label($estatus) {
     $map = [
         'PENDIENTE' => 'Pendiente',
         'EN_PROCESO' => 'En proceso',
-        'COMPLETADA' => 'Concluida',
+        'COMPLETADA' => 'Completada',
         'CANCELADA' => 'Cancelada'
     ];
     return $map[$estatus] ?? $estatus;
@@ -451,33 +439,6 @@ function cargar_metas_asignadas_por_superior($conexion, $anio, $semana, $id_supe
     while ($row = mysqli_fetch_assoc($res)) $map[$row['id_subordinado']] = $row;
     mysqli_stmt_close($stmt);
     return $map;
-}
-
-function cargar_subordinados_desde_metas($conexion, $anio, $semana, $id_superior) {
-    $rows = [];
-    $stmt = mysqli_prepare(
-        $conexion,
-        "SELECT
-            id_subordinado AS id_posicion,
-            id_superior AS posicion_lr,
-            '' AS numero_talento_gs,
-            nombre_subordinado AS nombre_colaborador,
-            nivel_subordinado,
-            distrito
-         FROM ejecucion_operativa_metas
-         WHERE anio = ? AND semana = ? AND id_superior = ?
-         ORDER BY nombre_subordinado ASC"
-    );
-    if (!$stmt) return $rows;
-    mysqli_stmt_bind_param($stmt, "iis", $anio, $semana, $id_superior);
-    mysqli_stmt_execute($stmt);
-    $res = mysqli_stmt_get_result($stmt);
-    while ($row = mysqli_fetch_assoc($res)) {
-        $row['posicion'] = etiqueta_nivel($row['nivel_subordinado'] ?? '');
-        $rows[] = $row;
-    }
-    mysqli_stmt_close($stmt);
-    return $rows;
 }
 
 function obtener_meta_responsable($conexion, $anio, $semana, $id_posicion, $nivel, $distrito) {
@@ -575,23 +536,7 @@ $es_semana_actual = ($anio_actual === $anio_hoy && $semana_actual === $semana_ho
 $es_semana_futura = ($anio_actual > $anio_hoy || ($anio_actual === $anio_hoy && $semana_actual > $semana_hoy));
 
 $id_posicion_consulta = isset($_GET['id_posicion']) ? trim((string)$_GET['id_posicion']) : $id_posicion_sesion;
-
-/*
- * Consulta histórica:
- * Si viene id_posicion por URL, primero busca el plan en ejecucion_operativa
- * de la semana seleccionada. Esa tabla es la fuente histórica del plan.
- */
-$ejecucion_previa = null;
-if ($id_posicion_consulta !== '') {
-    $ejecucion_previa = cargar_ejecucion_existente($conexion, $anio_actual, $semana_actual, $id_posicion_consulta);
-}
-
-if ($ejecucion_previa) {
-    $responsable = responsable_desde_ejecucion($ejecucion_previa);
-} else {
-    $responsable = buscar_responsable_sesion($conexion, $anio_hc, $semana_hc, $id_posicion_consulta, '', $usuario, $rol);
-}
-
+$responsable = buscar_responsable_sesion($conexion, $anio_hc, $semana_hc, $id_posicion_consulta, '', $usuario, $rol);
 $id_posicion = (string)($responsable['id_posicion'] ?? $id_posicion_consulta);
 $posicion_lr = $responsable['posicion_lr'] ?? null;
 $numero_talento_gs = $responsable['numero_talento_gs'] ?? '';
@@ -605,7 +550,7 @@ if (!in_array($nivel_ejecucion, ['DIRECTOR_DISTRITAL','LIDER_VENTAS','COACH_VENT
     die('No se encontró un responsable válido para consultar Ejecución Operativa.');
 }
 
-$ejecucion = $ejecucion_previa ?: cargar_ejecucion_existente($conexion, $anio_actual, $semana_actual, $id_posicion);
+$ejecucion = cargar_ejecucion_existente($conexion, $anio_actual, $semana_actual, $id_posicion);
 $id_ejecucion = $ejecucion ? (int)$ejecucion['id'] : 0;
 $estatus_ejecucion = $ejecucion['estatus'] ?? 'SIN PLAN';
 $bloqueado = true;
@@ -638,14 +583,8 @@ $palancas_seleccionadas = cargar_palancas_seleccionadas($conexion, $id_ejecucion
 $acciones_guardadas = cargar_acciones($conexion, $id_ejecucion);
 $acompanamientos_por_accion = cargar_acompanamientos_por_accion($conexion, $id_ejecucion);
 $acciones_calendario = acciones_por_dia_semana($acciones_guardadas, $anio_actual, $semana_actual);
+$subordinados = $nivel_subordinado ? cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado) : [];
 $metas_asignadas = cargar_metas_asignadas_por_superior($conexion, $anio_actual, $semana_actual, $id_posicion);
-$subordinados = [];
-if (!empty($metas_asignadas)) {
-    $subordinados = cargar_subordinados_desde_metas($conexion, $anio_actual, $semana_actual, $id_posicion);
-}
-if (empty($subordinados) && $nivel_subordinado) {
-    $subordinados = cargar_subordinados_directos($conexion, $anio_hc, $semana_hc, $id_posicion, $nivel_subordinado);
-}
 
 $meta_distribuida = 0;
 foreach ($subordinados as $sub) {
@@ -667,15 +606,13 @@ if ($semana_nav_next > 53) {
 }
 $mostrar_next = !($anio_nav_next > $max_anio_nav || ($anio_nav_next === $max_anio_nav && $semana_nav_next > $max_semana_nav));
 $modo_semana = 'SOLO LECTURA';
-
-$qs_id_posicion = $id_posicion !== '' ? '&id_posicion=' . urlencode($id_posicion) : '';
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <title>Consulta Ejecución Operativa - TOTALXPEDIENT</title>
-    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=177">
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=174">
     <style>
         :root{--tx-purple:#7A2BFF;--tx-pink:#FF0AC8;--tx-cyan:#00D8FF;--tx-card:rgba(255,255,255,.90);--tx-border:#e2e8f0;--tx-text:#1a2540;--tx-muted:#6b7a99;--tx-green:#10b981;--tx-red:#ef4444;--tx-orange:#f59e0b;}
         *{box-sizing:border-box}
@@ -761,10 +698,10 @@ include __DIR__ . '/../includes/sidebar.php';
                 <span class="pill">SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></span><span class="pill">HC SEM <?= h($semana_hc) ?> · <?= h($anio_hc) ?></span>
             </div>
             <div class="week-nav">
-                <a href="?anio=<?= h($anio_nav_prev) ?>&semana=<?= h($semana_nav_prev) ?><?= h($qs_id_posicion) ?>">← SEM <?= h($semana_nav_prev) ?></a>
+                <a href="?anio=<?= h($anio_nav_prev) ?>&semana=<?= h($semana_nav_prev) ?>">← SEM <?= h($semana_nav_prev) ?></a>
                 <span class="current">SEM <?= h($semana_actual) ?></span>
                 <?php if ($mostrar_next): ?>
-                    <a href="?anio=<?= h($anio_nav_next) ?>&semana=<?= h($semana_nav_next) ?><?= h($qs_id_posicion) ?>">SEM <?= h($semana_nav_next) ?> →</a>
+                    <a href="?anio=<?= h($anio_nav_next) ?>&semana=<?= h($semana_nav_next) ?>">SEM <?= h($semana_nav_next) ?> →</a>
                 <?php else: ?>
                     <span class="disabled">SEM <?= h($semana_nav_next) ?> →</span>
                 <?php endif; ?>
@@ -814,7 +751,7 @@ include __DIR__ . '/../includes/sidebar.php';
                                     $meta_sub = (int)($metas_asignadas[$sid]['meta_asignada'] ?? 0);
                                 ?>
                                     <tr>
-                                        <td><div class="sub-name"><?= h($sub['nombre_colaborador']) ?></div><div class="mini">ID posición: <?= h($sid) ?><?= !empty($sub['numero_talento_gs']) ? ' · Talento: '.h($sub['numero_talento_gs']) : '' ?></div></td>
+                                        <td><div class="sub-name"><?= h($sub['nombre_colaborador']) ?></div><div class="mini">ID posición: <?= h($sid) ?> · Talento: <?= h($sub['numero_talento_gs']) ?></div></td>
                                         <td><?= h($sub['posicion']) ?></td>
                                         <td><?= h(normalizar_distrito_eo($sub['distrito'] ?? '')) ?></td>
                                         <td class="num"><input class="sub-meta-input" type="number" min="0" step="1" name="meta_sub[<?= h($sid) ?>]" value="<?= h($meta_sub) ?>" <?= $disabled ?>></td>
