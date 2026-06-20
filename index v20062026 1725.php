@@ -1819,44 +1819,22 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
 // Se muestra antes del Top de vendedores y es regional para todos los niveles.
 // Productividad Coach = instalaciones / HC activo a cargo / días hábiles del rango seleccionado.
 function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_comerciales) {
-    /*
-    |--------------------------------------------------------------------------
-    | TOTALXPEDIENT - TOP/BOTTOM COACHES DE VENTA
-    |--------------------------------------------------------------------------
-    |
-    | Esta lista debe coincidir con el Ranking Coach de ranking_productividad.php.
-    |
-    | IMPORTANTE:
-    | No tomar todos los registros donde posicion LIKE '%COACH%', porque ahí caen
-    | perfiles que no necesariamente corresponden a Coaches de Venta.
-    |
-    | Regla homologada con Ranking Coach:
-    |   - Coach = colaborador HC que reporta a un Líder de Venta.
-    |   - Se identifica con nombre_linea_reporte = nombre del líder.
-    |   - h.puesto_lr LIKE '%LIDER%'.
-    |   - El líder debe ser posición LIDER VENTAS.
-    |--------------------------------------------------------------------------
-    */
     $sql = "
         SELECT DISTINCT
             c.id_posicion AS id_posicion,
             c.nombre_colaborador AS coach,
             c.distrito,
-            COALESCE(l.nombre_colaborador, c.nombre_linea_reporte, '') AS lider
+            COALESCE(l.nombre_colaborador, '') AS lider
         FROM hc c
-        INNER JOIN hc l
-            ON l.nombre_colaborador = c.nombre_linea_reporte
-           AND l.distrito = c.distrito
+        LEFT JOIN hc l
+            ON l.id_posicion = c.posicion_lr
            AND l.semana = c.semana
            AND l.anio = c.anio
-           AND UPPER(l.posicion) LIKE '%LIDER VENTAS%'
-           AND l.numero_talento_gs NOT LIKE '%VACANTE%'
-           AND l.nombre_colaborador <> 'VACANTE'
         WHERE c.semana=".(int)$semana."
           AND c.anio=".(int)$anio."
-          AND c.puesto_lr LIKE '%LIDER%'
-          AND c.id_posicion IS NOT NULL
-          AND c.id_posicion <> ''
+          AND c.numero_talento_gs NOT LIKE '%VACANTE%'
+          AND c.nombre_colaborador <> 'VACANTE'
+          AND UPPER(c.posicion) LIKE '%COACH%'
         ORDER BY c.distrito, c.nombre_colaborador
     ";
 
@@ -1995,22 +1973,26 @@ function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $mes, $ani
     });
     $top = array_slice($top, 0, 5);
 
-    // BOTTOM Five Coaches:
-    // Debe salir del mismo universo de Coaches de Venta que Ranking Coach,
-    // no de todos los puestos que contengan la palabra COACH.
-    // Equivale a tomar los últimos 5 del Ranking Coach regional:
-    // menor productividad del rango seleccionado; en empate, menos instalaciones.
-    $off = $lista;
-    usort($off, function($a, $b) {
-        if ($a['productividad'] == $b['productividad']) {
-            if ((int)$a['instalaciones'] === (int)$b['instalaciones']) {
-                return strcmp((string)$a['coach'], (string)$b['coach']);
-            }
-            return ((int)$a['instalaciones']) <=> ((int)$b['instalaciones']);
-        }
-        return $a['productividad'] <=> $b['productividad'];
+    $off_zero = array_values(array_filter($lista, function($r) {
+        return (int)($r['instalaciones'] ?? 0) === 0;
+    }));
+    usort($off_zero, function($a, $b) {
+        if ($a['prod3m'] == $b['prod3m']) return strcmp((string)$a['coach'], (string)$b['coach']);
+        return $a['prod3m'] <=> $b['prod3m'];
     });
-    $off = array_slice($off, 0, 5);
+    $off = array_slice($off_zero, 0, 5);
+
+    if (count($off) < 5) {
+        $ya = array_column($off, 'id_posicion');
+        $resto = array_values(array_filter($lista, function($r) use ($ya) {
+            return !in_array($r['id_posicion'], $ya, true);
+        }));
+        usort($resto, function($a, $b) {
+            if ($a['productividad'] == $b['productividad']) return $a['prod3m'] <=> $b['prod3m'];
+            return $a['productividad'] <=> $b['productividad'];
+        });
+        $off = array_merge($off, array_slice($resto, 0, 5 - count($off)));
+    }
 
     return [$top, $off];
 }
