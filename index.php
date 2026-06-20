@@ -3309,8 +3309,8 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopCoachTable('Top Five Coaches PROD.', 'Mejor PROD. regional de coaches del rango seleccionado', $top_productividad_coaches, 'top-productividad'); ?>
-        <?php $renderTopCoachTable('Top Five Offender Coaches', 'Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender'); ?>
+        <?php $renderTopCoachTable('TOP Five Coaches', 'Mejor PROD. regional de coaches del rango seleccionado', $top_productividad_coaches, 'top-productividad'); ?>
+        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
@@ -3376,8 +3376,8 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('Top regional PROD.', 'Mejor PROD. regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('Top Offender Regional', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mejor PROD. regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('BOTTOM Regional Vendedor', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
