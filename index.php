@@ -1639,6 +1639,7 @@ function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puesto
           AND h.anio=".(int)$anio."
           AND h.numero_talento_gs NOT LIKE '%VACANTE%'
           AND h.numero_talento_gs <> ''
+          AND UPPER(TRIM(COALESCE(h.nombre_colaborador,''))) <> 'VACANTE'
           AND h.posicion IN ($puestos_comerciales)
         ORDER BY h.distrito, h.nombre_colaborador
     ";
@@ -1774,7 +1775,9 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
     }
     unset($v);
 
-    $lista = array_values($vendedores);
+    $lista = array_values(array_filter($vendedores, function($r) {
+        return strtoupper(trim((string)($r['vendedor'] ?? ''))) !== 'VACANTE';
+    }));
 
     $top = $lista;
     usort($top, function($a, $b) {
@@ -1862,6 +1865,8 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
           AND c.puesto_lr LIKE '%LIDER%'
           AND c.id_posicion IS NOT NULL
           AND c.id_posicion <> ''
+          AND c.numero_talento_gs NOT LIKE '%VACANTE%'
+          AND UPPER(TRIM(COALESCE(c.nombre_colaborador,''))) <> 'VACANTE'
           AND EXISTS (
               SELECT 1
               FROM hc v
@@ -1869,6 +1874,8 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
                 AND v.anio = c.anio
                 AND v.distrito = c.distrito
                 AND v.puesto_lr LIKE '%COACH%'
+                AND v.numero_talento_gs NOT LIKE '%VACANTE%'
+                AND UPPER(TRIM(COALESCE(v.nombre_colaborador,''))) <> 'VACANTE'
                 AND (
                     (c.nombre_colaborador <> 'VACANTE' AND v.nombre_linea_reporte = c.nombre_colaborador)
                     OR
@@ -2037,7 +2044,9 @@ function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $mes, $ani
     }
     unset($coach);
 
-    $lista = array_values($coaches);
+    $lista = array_values(array_filter($coaches, function($r) {
+        return strtoupper(trim((string)($r['coach'] ?? ''))) !== 'VACANTE';
+    }));
 
     $top = $lista;
     usort($top, function($a, $b) {

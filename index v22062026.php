@@ -320,6 +320,12 @@ if ($rango_mode === 'completo') {
 
 $dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
 
+// Fechas absolutas del rango seleccionado.
+// Se usan para prorratear metas semanales de Ejecución Operativa
+// cuando el dashboard analiza periodos que cruzan más de una semana.
+$fecha_inicio_dashboard = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_inicio_dashboard);
+$fecha_fin_dashboard    = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_fin_dashboard);
+
 $dashboard_fecha_label = ($rango_mode === 'completo')
     ? 'Mes completo · ' . ($meses_es[$mes_actual] ?? '') . ' ' . $anio_query
     : (
@@ -359,10 +365,12 @@ $root_dashboard_id_pre = $scope_activo
 
 $meta_propia_operativa_dashboard = 0;
 if (!empty($root_dashboard_id_pre) && in_array($nivel_actual_dashboard_pre, ['lider','coach','vendedor'], true)) {
-    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_dashboard(
+    // Meta propia de Ejecución Operativa prorrateada contra el rango seleccionado.
+    // Evita comparar instalaciones acumuladas de varias semanas contra una sola meta semanal.
+    $meta_propia_operativa_dashboard = tx_meta_propia_operativa_periodo_dashboard(
         $conexion,
-        $anio_operativo_dashboard,
-        $semana_operativa_dashboard,
+        $fecha_inicio_dashboard,
+        $fecha_fin_dashboard,
         $root_dashboard_id_pre
     );
 }
@@ -538,6 +546,70 @@ function tx_dias_habiles_rango_mes($conexion, $anio, $mes, $dia_inicio, $dia_fin
     return $count;
 }
 
+
+
+function tx_dias_habiles_rango_fechas($conexion, $fecha_inicio, $fecha_fin) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - DÍAS HÁBILES POR RANGO DE FECHAS
+    |--------------------------------------------------------------------------
+    |
+    | Uso:
+    |   Prorratear metas semanales capturadas en ejecucion_operativa_metas
+    |   cuando el dashboard analiza un periodo mayor o menor a una semana.
+    |
+    | Regla:
+    |   - Excluye domingos.
+    |   - Excluye fechas registradas en dias_inhabiles.
+    |--------------------------------------------------------------------------
+    */
+    $fecha_inicio = date('Y-m-d', strtotime($fecha_inicio));
+    $fecha_fin    = date('Y-m-d', strtotime($fecha_fin));
+
+    if ($fecha_inicio > $fecha_fin) {
+        $tmp = $fecha_inicio;
+        $fecha_inicio = $fecha_fin;
+        $fecha_fin = $tmp;
+    }
+
+    $inicio_sql = mysqli_real_escape_string($conexion, $fecha_inicio);
+    $fin_sql    = mysqli_real_escape_string($conexion, $fecha_fin);
+
+    $sql = "
+        SELECT COUNT(*) AS total
+        FROM (
+            SELECT DATE_ADD('$inicio_sql', INTERVAL n DAY) AS fecha
+            FROM (
+                SELECT a.N + b.N * 10 + c.N * 100 AS n
+                FROM
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a,
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b,
+                    (SELECT 0 N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) c
+            ) nums
+            WHERE DATE_ADD('$inicio_sql', INTERVAL n DAY) <= '$fin_sql'
+        ) calendario
+        WHERE DAYOFWEEK(fecha) <> 1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM dias_inhabiles di
+              WHERE di.fecha = calendario.fecha
+          )
+    ";
+
+    $r = mysqli_query($conexion, $sql);
+    if ($r && $row = mysqli_fetch_assoc($r)) {
+        return (int)($row['total'] ?? 0);
+    }
+
+    // Fallback defensivo.
+    $count = 0;
+    $ts_ini = strtotime($fecha_inicio);
+    $ts_fin = strtotime($fecha_fin);
+    for ($ts = $ts_ini; $ts <= $ts_fin; $ts += 86400) {
+        if ((int)date('w', $ts) !== 0) $count++;
+    }
+    return $count;
+}
 
 function tx_canales_cumplimiento_dashboard() {
     /*
@@ -914,6 +986,164 @@ function tx_meta_operativa_asignada($conexion, $anio, $semana, $id_superior, $id
     return (int)($row['meta'] ?? 0);
 }
 
+
+function tx_meta_operativa_asignada_periodo($conexion, $fecha_inicio, $fecha_fin, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - META OPERATIVA VIGENTE PRORRATEADA AL PERIODO
+    |--------------------------------------------------------------------------
+    |
+    | Corrige la tarjeta "Cumplimiento del nivel inferior vs meta".
+    |
+    | Regla vigente:
+    |   Si existe meta_asignada > 0 en ejecucion_operativa_metas, se toma la
+    |   meta semanal vigente del subordinado y se prorratea contra el rango
+    |   seleccionado del dashboard.
+    |
+    | Formula:
+    |   meta_periodo = (meta_semanal_vigente / 6) * dias_habiles_del_periodo
+    |
+    | Ejemplo:
+    |   Maria Jose:
+    |       meta semanal vigente = 170
+    |       rango 01-16 junio = 14 dias habiles
+    |       meta_periodo = 170 / 6 * 14 = 396.67 ~= 397
+    |
+    | IMPORTANTE:
+    |   Antes se sumaban solo las semanas que tenian registro capturado. Eso
+    |   provocaba que, si una semana del periodo no tenia captura, la meta
+    |   quedara subestimada. Ahora se toma la meta vigente y se proyecta al
+    |   periodo completo.
+    |--------------------------------------------------------------------------
+    */
+
+    $inicio_ts = strtotime($fecha_inicio);
+    $fin_ts    = strtotime($fecha_fin);
+    if (!$inicio_ts || !$fin_ts) return 0;
+
+    if ($inicio_ts > $fin_ts) {
+        $tmp = $inicio_ts;
+        $inicio_ts = $fin_ts;
+        $fin_ts = $tmp;
+    }
+
+    $anio_fin = (int)date('o', $fin_ts);
+    $semana_fin = (int)date('W', $fin_ts);
+
+    $id_superior_esc = mysqli_real_escape_string($conexion, (string)$id_superior);
+    $id_subordinado_esc = mysqli_real_escape_string($conexion, (string)$id_subordinado);
+    $nivel_superior_esc = mysqli_real_escape_string($conexion, (string)$nivel_superior);
+    $nivel_subordinado_esc = mysqli_real_escape_string($conexion, (string)$nivel_subordinado);
+
+    // 1) Busqueda preferente: misma linea superior -> subordinado.
+    $sql = "
+        SELECT meta_asignada
+        FROM ejecucion_operativa_metas
+        WHERE id_superior = '$id_superior_esc'
+          AND id_subordinado = '$id_subordinado_esc'
+          AND nivel_superior = '$nivel_superior_esc'
+          AND nivel_subordinado = '$nivel_subordinado_esc'
+          AND meta_asignada > 0
+          AND (
+                anio < $anio_fin
+                OR (anio = $anio_fin AND semana <= $semana_fin)
+          )
+        ORDER BY anio DESC, semana DESC, updated_at DESC, id DESC
+        LIMIT 1
+    ";
+    $r = mysqli_query($conexion, $sql);
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    $meta_semanal = (int)($row['meta_asignada'] ?? 0);
+
+    // 2) Respaldo: si el dashboard esta en scope/admin y no coincide id_superior,
+    // toma la ultima meta positiva vigente para ese subordinado.
+    if ($meta_semanal <= 0) {
+        $sql = "
+            SELECT meta_asignada
+            FROM ejecucion_operativa_metas
+            WHERE id_subordinado = '$id_subordinado_esc'
+              AND nivel_superior = '$nivel_superior_esc'
+              AND nivel_subordinado = '$nivel_subordinado_esc'
+              AND meta_asignada > 0
+              AND (
+                    anio < $anio_fin
+                    OR (anio = $anio_fin AND semana <= $semana_fin)
+              )
+            ORDER BY anio DESC, semana DESC, updated_at DESC, id DESC
+            LIMIT 1
+        ";
+        $r = mysqli_query($conexion, $sql);
+        $row = $r ? mysqli_fetch_assoc($r) : null;
+        $meta_semanal = (int)($row['meta_asignada'] ?? 0);
+    }
+
+    if ($meta_semanal <= 0) return 0;
+
+    $dias_periodo = tx_dias_habiles_rango_fechas(
+        $conexion,
+        date('Y-m-d', $inicio_ts),
+        date('Y-m-d', $fin_ts)
+    );
+
+    if ($dias_periodo <= 0) return 0;
+
+    // Meta semanal operativa estandar: 6 dias habiles por semana.
+    return (int)round(((float)$meta_semanal / 6.0) * (float)$dias_periodo);
+}
+
+function tx_meta_propia_operativa_periodo_dashboard($conexion, $fecha_inicio, $fecha_fin, $id_posicion) {
+    /*
+     * Meta propia del tablero actual para Lider, Coach o Vendedor.
+     *
+     * Toma la meta semanal vigente capturada para el id_subordinado y la
+     * prorratea al rango seleccionado:
+     *
+     *   meta_periodo = (meta_semanal_vigente / 6) * dias_habiles_del_periodo
+     */
+    $inicio_ts = strtotime($fecha_inicio);
+    $fin_ts    = strtotime($fecha_fin);
+    if (!$inicio_ts || !$fin_ts || empty($id_posicion)) return 0;
+
+    if ($inicio_ts > $fin_ts) {
+        $tmp = $inicio_ts;
+        $inicio_ts = $fin_ts;
+        $fin_ts = $tmp;
+    }
+
+    $anio_fin = (int)date('o', $fin_ts);
+    $semana_fin = (int)date('W', $fin_ts);
+    $id_posicion_esc = mysqli_real_escape_string($conexion, (string)$id_posicion);
+
+    $sql = "
+        SELECT meta_asignada
+        FROM ejecucion_operativa_metas
+        WHERE id_subordinado = '$id_posicion_esc'
+          AND meta_asignada > 0
+          AND (
+                anio < $anio_fin
+                OR (anio = $anio_fin AND semana <= $semana_fin)
+          )
+        ORDER BY anio DESC, semana DESC, updated_at DESC, id DESC
+        LIMIT 1
+    ";
+    $r = mysqli_query($conexion, $sql);
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    $meta_semanal = (int)($row['meta_asignada'] ?? 0);
+
+    if ($meta_semanal <= 0) return 0;
+
+    $dias_periodo = tx_dias_habiles_rango_fechas(
+        $conexion,
+        date('Y-m-d', $inicio_ts),
+        date('Y-m-d', $fin_ts)
+    );
+
+    if ($dias_periodo <= 0) return 0;
+
+    // Meta semanal operativa estandar: 6 dias habiles por semana.
+    return (int)round(((float)$meta_semanal / 6.0) * (float)$dias_periodo);
+}
+
 function tx_nivel_operativo_meta($nivel_dashboard) {
     if ($nivel_dashboard === 'director_distrital') return 'DIRECTOR_DISTRITAL';
     if ($nivel_dashboard === 'lider') return 'LIDER_VENTAS';
@@ -1004,16 +1234,17 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $real = tx_real_inst_folios($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
 
             // Meta oficial de Ejecución Operativa:
-            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se usa esa meta.
+            // Si existe meta_asignada > 0 en ejecucion_operativa_metas, se calcula con la meta semanal vigente
+            // prorrateada contra los dias habiles del rango seleccionado.
             // Si no existe o es 0, se conserva el cálculo automático por proporción de HC.
             $nivel_superior_meta = tx_nivel_operativo_meta($nivel_actual_dashboard);
             $nivel_subordinado_meta = tx_nivel_operativo_subordinado($target_nivel_inferior);
             $meta_oficial = 0;
             if ($nivel_superior_meta !== '' && $nivel_subordinado_meta !== '' && !empty($child['id_posicion'])) {
-                $meta_oficial = tx_meta_operativa_asignada(
+                $meta_oficial = tx_meta_operativa_asignada_periodo(
                     $conexion,
-                    $anio_operativo_dashboard,
-                    $semana_operativa_dashboard,
+                    $fecha_inicio_dashboard,
+                    $fecha_fin_dashboard,
                     $root_dashboard_id,
                     $child['id_posicion'],
                     $nivel_superior_meta,
@@ -1583,6 +1814,258 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
     return [$top, $off];
 }
 
+
+// ── TOP REGIONAL PRODUCTIVIDAD COACHES ──────────────────────────────────────
+// Se muestra antes del Top de vendedores y es regional para todos los niveles.
+// Productividad Coach = instalaciones / HC activo a cargo / días hábiles del rango seleccionado.
+function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_comerciales) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - TOP/BOTTOM COACHES DE VENTA
+    |--------------------------------------------------------------------------
+    |
+    | Esta lista debe coincidir con el universo del Ranking Coach en
+    | ranking_productividad.php.
+    |
+    | Regla:
+    |   Coach de Venta = colaborador/vacante que reporta a un Líder de Venta
+    |   y que además tiene vendedores asignados debajo en HC.
+    |
+    | Importante:
+    |   No basta con buscar posicion LIKE '%COACH%'. Eso puede incluir perfiles
+    |   de acompañamiento/operación que no aparecen en Ranking Coach.
+    |
+    | Homologación tomada del Ranking Coach:
+    |   - Coach reporta al líder: c.nombre_linea_reporte = líder.
+    |   - Vendedor reporta al coach: v.nombre_linea_reporte = coach.
+    |   - Si el coach es VACANTE, se amarra por v.posicion_lr = c.id_posicion.
+    |   - v.puesto_lr LIKE '%COACH%'.
+    |--------------------------------------------------------------------------
+    */
+    $sql = "
+        SELECT DISTINCT
+            c.id_posicion AS id_posicion,
+            c.nombre_colaborador AS coach,
+            c.distrito,
+            COALESCE(l.nombre_colaborador, c.nombre_linea_reporte, '') AS lider
+        FROM hc c
+        INNER JOIN hc l
+            ON l.nombre_colaborador = c.nombre_linea_reporte
+           AND l.distrito = c.distrito
+           AND l.semana = c.semana
+           AND l.anio = c.anio
+           AND UPPER(l.posicion) LIKE '%LIDER VENTAS%'
+           AND l.numero_talento_gs NOT LIKE '%VACANTE%'
+           AND l.nombre_colaborador <> 'VACANTE'
+        WHERE c.semana=".(int)$semana."
+          AND c.anio=".(int)$anio."
+          AND c.puesto_lr LIKE '%LIDER%'
+          AND c.id_posicion IS NOT NULL
+          AND c.id_posicion <> ''
+          AND EXISTS (
+              SELECT 1
+              FROM hc v
+              WHERE v.semana = c.semana
+                AND v.anio = c.anio
+                AND v.distrito = c.distrito
+                AND v.puesto_lr LIKE '%COACH%'
+                AND (
+                    (c.nombre_colaborador <> 'VACANTE' AND v.nombre_linea_reporte = c.nombre_colaborador)
+                    OR
+                    (c.nombre_colaborador = 'VACANTE' AND v.posicion_lr = c.id_posicion)
+                )
+          )
+        ORDER BY c.distrito, c.nombre_colaborador
+    ";
+
+    $res = mysqli_query($conexion, $sql);
+    $out = [];
+
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $id_pos = trim((string)($row['id_posicion'] ?? ''));
+        $coach_nombre = trim((string)($row['coach'] ?? ''));
+        $distrito = trim((string)($row['distrito'] ?? ''));
+
+        if ($id_pos === '' || $coach_nombre === '' || $distrito === '') continue;
+
+        $id_pos_esc = mysqli_real_escape_string($conexion, $id_pos);
+        $coach_esc = mysqli_real_escape_string($conexion, $coach_nombre);
+        $distrito_esc = mysqli_real_escape_string($conexion, $distrito);
+
+        /*
+         * Folios y HC activo del coach con la misma lógica del Ranking Coach.
+         * Evita tomar líneas que no son de venta y evita que entren coaches
+         * operativos que no aparecen en el ranking_productividad.php.
+         */
+        $sql_vendedores = "
+            SELECT DISTINCT
+                v.numero_talento_gs AS folio_empleado
+            FROM hc v
+            WHERE v.semana = ".(int)$semana."
+              AND v.anio = ".(int)$anio."
+              AND v.distrito = '$distrito_esc'
+              AND v.puesto_lr LIKE '%COACH%'
+              AND (
+                    ('$coach_esc' <> 'VACANTE' AND v.nombre_linea_reporte = '$coach_esc')
+                    OR
+                    ('$coach_esc' = 'VACANTE' AND v.posicion_lr = '$id_pos_esc')
+              )
+              AND v.numero_talento_gs <> ''
+              AND v.numero_talento_gs NOT LIKE '%VACANTE%'
+              AND v.nombre_colaborador <> 'VACANTE'
+        ";
+
+        $folios = [];
+        $res_v = mysqli_query($conexion, $sql_vendedores);
+        while ($res_v && $vrow = mysqli_fetch_assoc($res_v)) {
+            $folio = trim((string)($vrow['folio_empleado'] ?? ''));
+            if ($folio !== '') $folios[] = $folio;
+        }
+        $folios = array_unique(array_values($folios));
+
+        $out[$id_pos] = [
+            'id_posicion' => $id_pos,
+            'coach' => $row['coach'] ?? '',
+            'distrito' => $row['distrito'] ?? '',
+            'lider' => $row['lider'] ?? '',
+            'folios' => $folios,
+            'hc_activo' => count($folios),
+            'instalaciones' => 0,
+            'arpu' => 0,
+            'productividad' => 0,
+            'prod3m' => 0,
+            'spark' => []
+        ];
+    }
+
+    return $out;
+}
+
+function tx_sparkline_coach_dashboard($conexion, $folios, $fecha_corte_timestamp) {
+    $out = array_fill(0, 6, 0);
+    if (empty($folios)) return $out;
+
+    $folios_sql = tx_sql_in_escaped($conexion, $folios);
+    $fecha_fin = date('Y-m-d', $fecha_corte_timestamp);
+    $fecha_ini = date('Y-m-d', strtotime('-5 weeks', strtotime('monday this week', $fecha_corte_timestamp)));
+
+    $sql = "
+        SELECT YEARWEEK(fecha, 3) AS yw, COUNT(cuenta) AS total
+        FROM instalaciones
+        WHERE fecha BETWEEN '$fecha_ini' AND '$fecha_fin'
+          AND folio_empleado IN ($folios_sql)
+          AND origen_prospecto <> '-'
+        GROUP BY YEARWEEK(fecha, 3)
+        ORDER BY yw
+    ";
+    $res = mysqli_query($conexion, $sql);
+
+    $keys = [];
+    for ($i = 5; $i >= 0; $i--) {
+        $ts = strtotime('-'.$i.' weeks', strtotime('monday this week', $fecha_corte_timestamp));
+        $keys[] = date('oW', $ts);
+    }
+    $map = array_fill_keys($keys, 0);
+
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $yw = (string)($row['yw'] ?? '');
+        if (isset($map[$yw])) $map[$yw] = (int)($row['total'] ?? 0);
+    }
+
+    return array_values($map);
+}
+
+function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $mes, $anio, $cond_dia_fecha, $dias_productividad, $fecha_corte_timestamp) {
+    if (empty($coaches)) return [[], []];
+
+    foreach ($coaches as $id_pos => &$coach) {
+        $folios = $coach['folios'] ?? [];
+        if (empty($folios)) {
+            $coach['spark'] = array_fill(0, 6, 0);
+            continue;
+        }
+
+        $folios_sql = tx_sql_in_escaped($conexion, $folios);
+        $sql = "
+            SELECT
+                COUNT(cuenta) AS instalaciones,
+                COALESCE(SUM(precio_pronto_pago),0) AS ingreso,
+                SUM(CASE WHEN precio_pronto_pago > 0 THEN 1 ELSE 0 END) AS inst_arpu
+            FROM instalaciones
+            WHERE MONTH(fecha)=".(int)$mes."
+              AND YEAR(fecha)=".(int)$anio."
+              $cond_dia_fecha
+              AND origen_prospecto <> '-'
+              AND folio_empleado IN ($folios_sql)
+        ";
+        $res = mysqli_query($conexion, $sql);
+        $row = $res ? mysqli_fetch_assoc($res) : null;
+
+        $inst = (int)($row['instalaciones'] ?? 0);
+        $ingreso = (float)($row['ingreso'] ?? 0);
+        $inst_arpu = (int)($row['inst_arpu'] ?? 0);
+        $hc_activo = max(0, (int)($coach['hc_activo'] ?? 0));
+
+        $coach['instalaciones'] = $inst;
+        $coach['productividad'] = ($dias_productividad > 0 && $hc_activo > 0) ? round($inst / $hc_activo / $dias_productividad, 2) : 0;
+        $coach['arpu'] = $inst_arpu > 0 ? round($ingreso / $inst_arpu, 2) : 0;
+        $coach['spark'] = tx_sparkline_coach_dashboard($conexion, $folios, $fecha_corte_timestamp);
+    }
+    unset($coach);
+
+    $fecha_ini_3m = date('Y-m-01', strtotime('first day of -3 month', $fecha_corte_timestamp));
+    $fecha_fin_3m = date('Y-m-t', strtotime('last day of -1 month', $fecha_corte_timestamp));
+    $dias_3m = tx_dias_habiles_ultimos_3_meses_dashboard($conexion, $fecha_corte_timestamp);
+
+    foreach ($coaches as $id_pos => &$coach) {
+        $folios = $coach['folios'] ?? [];
+        if (empty($folios)) continue;
+
+        $folios_sql = tx_sql_in_escaped($conexion, $folios);
+        $sql3 = "
+            SELECT COUNT(cuenta) AS instalaciones_3m
+            FROM instalaciones
+            WHERE fecha BETWEEN '$fecha_ini_3m' AND '$fecha_fin_3m'
+              AND origen_prospecto <> '-'
+              AND folio_empleado IN ($folios_sql)
+        ";
+        $res3 = mysqli_query($conexion, $sql3);
+        $row3 = $res3 ? mysqli_fetch_assoc($res3) : null;
+        $inst3m = (int)($row3['instalaciones_3m'] ?? 0);
+        $hc_activo = max(0, (int)($coach['hc_activo'] ?? 0));
+        $coach['prod3m'] = ($dias_3m > 0 && $hc_activo > 0) ? round($inst3m / $hc_activo / $dias_3m, 2) : 0;
+    }
+    unset($coach);
+
+    $lista = array_values($coaches);
+
+    $top = $lista;
+    usort($top, function($a, $b) {
+        if ($a['productividad'] == $b['productividad']) return $b['instalaciones'] <=> $a['instalaciones'];
+        return $b['productividad'] <=> $a['productividad'];
+    });
+    $top = array_slice($top, 0, 5);
+
+    // BOTTOM Five Coaches:
+    // Debe salir del mismo universo de Coaches de Venta que Ranking Coach,
+    // no de todos los puestos que contengan la palabra COACH.
+    // Equivale a tomar los últimos 5 del Ranking Coach regional:
+    // menor productividad del rango seleccionado; en empate, menos instalaciones.
+    $off = $lista;
+    usort($off, function($a, $b) {
+        if ($a['productividad'] == $b['productividad']) {
+            if ((int)$a['instalaciones'] === (int)$b['instalaciones']) {
+                return strcmp((string)$a['coach'], (string)$b['coach']);
+            }
+            return ((int)$a['instalaciones']) <=> ((int)$b['instalaciones']);
+        }
+        return $a['productividad'] <=> $b['productividad'];
+    });
+    $off = array_slice($off, 0, 5);
+
+    return [$top, $off];
+}
+
 // Productividad vendedor = instalaciones / días hábiles del rango seleccionado.
 $dias_productividad_vendedor = tx_dias_habiles_rango_mes(
     $conexion,
@@ -1592,6 +2075,24 @@ $dias_productividad_vendedor = tx_dias_habiles_rango_mes(
     $dia_fin_dashboard
 );
 if ($dias_productividad_vendedor <= 0) $dias_productividad_vendedor = $dias_rango_dashboard;
+
+// TOP REGIONAL COACHES: se calcula con todos los coaches activos de la región.
+$coaches_regional_productividad = tx_get_coaches_regional_dashboard(
+    $conexion,
+    $semana_actual,
+    $anio_actual,
+    $puestos_comerciales
+);
+
+list($top_productividad_coaches, $top_offender_coaches) = tx_build_top_regional_coaches_dashboard(
+    $conexion,
+    $coaches_regional_productividad,
+    $mes_actual,
+    $anio_query,
+    $cond_dia_fecha,
+    $dias_productividad_vendedor,
+    $fecha_corte_timestamp
+);
 
 // TOP REGIONAL: se calcula con toda la plantilla comercial activa, sin importar el scope del tablero.
 $vendedores_regional_productividad = tx_get_vendedores_regional_dashboard(
@@ -2816,6 +3317,73 @@ include __DIR__ . '/includes/sidebar.php';
     <?php endif; ?>
 
 
+    <!-- TOP REGIONAL PRODUCTIVIDAD COACHES -->
+    <?php if (!empty($top_productividad_coaches) || !empty($top_offender_coaches)): ?>
+    <div class="top-productividad-grid">
+        <?php
+            $renderTopCoachTable = function($titulo, $subtitulo, $items, $extraClass = '') {
+        ?>
+        <div class="evo-card top-productividad-card <?= $extraClass ?>">
+            <div class="top-productividad-head">
+                <div>
+                    <div class="top-productividad-title"><?= htmlspecialchars($titulo) ?></div>
+                    <div class="top-productividad-sub"><?= htmlspecialchars($subtitulo) ?></div>
+                </div>
+                <div class="hierarchy-performance-note">TOP REGIONAL · <?= (int)$GLOBALS['dias_productividad_vendedor'] ?> días hábiles</div>
+            </div>
+            <div class="top-productividad-table-wrap">
+                <table class="top-productividad-table">
+                    <thead>
+                        <tr>
+                            <th style="width:34px;">#</th>
+                            <th>Nombre Coach</th>
+                            <th>Distrito</th>
+                            <th>Líder</th>
+                            <th style="text-align:right;">Ventas instaladas</th>
+                            <th style="text-align:right;">Prod.</th>
+                            <th style="text-align:right;">ARPU</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($items as $i => $row): ?>
+                        <?php
+                            $spark = $row['spark'] ?? [];
+                            $sparkMax = max(1, !empty($spark) ? max($spark) : 1);
+                        ?>
+                        <tr>
+                            <td><span class="rank-badge"><?= $i + 1 ?></span></td>
+                            <td><div class="seller-name" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
+                            <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
+                            <td><div class="seller-small" title="<?= htmlspecialchars($row['lider'] ?? '') ?>"><?= htmlspecialchars($row['lider'] ?? '') ?></div></td>
+                            <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
+                            <td class="seller-num">
+                                <div class="seller-prod">
+                                    <strong><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
+                                    <div class="sparkline" title="Tendencia últimas 6 semanas">
+                                        <?php foreach ($spark as $sv): ?>
+                                            <span style="height:<?= max(3, round(((int)$sv / $sparkMax) * 16)) ?>px;"></span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="seller-num">$<?= number_format((float)($row['arpu'] ?? 0), 0) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                        <?php if (empty($items)): ?>
+                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <?php }; ?>
+
+        <?php $renderTopCoachTable('TOP Five Coaches', 'Mejor PROD. regional de coaches del rango seleccionado', $top_productividad_coaches, 'top-productividad'); ?>
+        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender'); ?>
+    </div>
+    <?php endif; ?>
+
+
     <!-- TOP REGIONAL PRODUCTIVIDAD VENDEDORES -->
     <?php if (!empty($top_productividad_vendedores) || !empty($top_offender_vendedores)): ?>
     <div class="top-productividad-grid">
@@ -2877,8 +3445,8 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('Top regional PROD.', 'Mejor PROD. regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('Top Offender Regional', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mejor PROD. regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('BOTTOM Regional Vendedor', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
