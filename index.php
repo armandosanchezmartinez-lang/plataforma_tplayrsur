@@ -269,13 +269,31 @@ if ($scope_pos !== '') {
 $rol_consulta = $scope_activo ? 'scoped' : $rol;
 
 // Fecha de corte única para todo el dashboard.
-// Se usa el día vencido para evitar mezclar meses en cierres o inicios de mes.
-$fecha_corte_timestamp = strtotime('-1 day');
-$mes_actual   = (int)date('n', $fecha_corte_timestamp);
-$anio_query   = (int)date('Y', $fecha_corte_timestamp);
+// Default: día vencido actual. Ahora permite consultar meses/años anteriores
+// usando parámetros GET mes/anio, por ejemplo: ?mes=5&anio=2026.
+$fecha_corte_real_timestamp = strtotime('-1 day');
 
-// Semana operativa del corte para consultar metas capturadas en Ejecución Operativa.
-// No usar $semana_actual aquí, porque esa variable viene del último HC cargado.
+$mes_actual = isset($_GET['mes']) ? (int)$_GET['mes'] : (int)date('n', $fecha_corte_real_timestamp);
+$anio_query = isset($_GET['anio']) ? (int)$_GET['anio'] : (int)date('Y', $fecha_corte_real_timestamp);
+
+if ($mes_actual < 1 || $mes_actual > 12) {
+    $mes_actual = (int)date('n', $fecha_corte_real_timestamp);
+}
+if ($anio_query < 2020 || $anio_query > (int)date('Y', $fecha_corte_real_timestamp)) {
+    $anio_query = (int)date('Y', $fecha_corte_real_timestamp);
+}
+
+// No permitir meses futuros respecto al corte real.
+$yyyymm_sel = ((int)$anio_query * 100) + (int)$mes_actual;
+$yyyymm_now = ((int)date('Y', $fecha_corte_real_timestamp) * 100) + (int)date('n', $fecha_corte_real_timestamp);
+if ($yyyymm_sel > $yyyymm_now) {
+    $mes_actual = (int)date('n', $fecha_corte_real_timestamp);
+    $anio_query = (int)date('Y', $fecha_corte_real_timestamp);
+}
+
+// $fecha_corte_timestamp se ajusta más abajo al fin del rango seleccionado,
+// para que ARPU, TOP y productividad 3M respeten el mes analizado.
+$fecha_corte_timestamp = $fecha_corte_real_timestamp;
 $semana_operativa_dashboard = (int)date('W', $fecha_corte_timestamp);
 $anio_operativo_dashboard   = (int)date('Y', $fecha_corte_timestamp);
 
@@ -288,7 +306,15 @@ $meses_es = [
 // Default: MTD vencido, comparando todos los meses contra el mismo corte de días.
 // Mes completo: muestra la evolución como corte mensual completo.
 $ultimo_dia_mes_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-$dia_max_corte = min((int)date('j', $fecha_corte_timestamp), $ultimo_dia_mes_actual);
+$es_mes_actual_real = ((int)$anio_query === (int)date('Y', $fecha_corte_real_timestamp)
+    && (int)$mes_actual === (int)date('n', $fecha_corte_real_timestamp));
+
+// En el mes actual sólo se permite hasta el día vencido.
+// En meses anteriores se permite navegar el mes completo.
+$dia_max_corte = $es_mes_actual_real
+    ? min((int)date('j', $fecha_corte_real_timestamp), $ultimo_dia_mes_actual)
+    : $ultimo_dia_mes_actual;
+
 $primer_dia_semana_mes = (int)date('N', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
 
 $rango_mode = $_GET['rango_mode'] ?? 'mtd';
@@ -325,6 +351,21 @@ $dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
 // cuando el dashboard analiza periodos que cruzan más de una semana.
 $fecha_inicio_dashboard = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_inicio_dashboard);
 $fecha_fin_dashboard    = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_fin_dashboard);
+
+// Para consultas históricas, el corte operativo del dashboard debe ser el fin
+// del rango seleccionado, no necesariamente el día vencido actual.
+$fecha_corte_timestamp = strtotime($fecha_fin_dashboard);
+$semana_operativa_dashboard = (int)date('W', $fecha_corte_timestamp);
+$anio_operativo_dashboard   = (int)date('Y', $fecha_corte_timestamp);
+
+// Navegación de mes/año dentro del selector de rango.
+$mes_prev_ts = strtotime('-1 month', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
+$mes_next_ts = strtotime('+1 month', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
+$mes_prev = (int)date('n', $mes_prev_ts);
+$anio_prev = (int)date('Y', $mes_prev_ts);
+$mes_next = (int)date('n', $mes_next_ts);
+$anio_next = (int)date('Y', $mes_next_ts);
+$puede_mes_next = (($anio_next * 100) + $mes_next) <= $yyyymm_now;
 
 $dashboard_fecha_label = ($rango_mode === 'completo')
     ? 'Mes completo · ' . ($meses_es[$mes_actual] ?? '') . ' ' . $anio_query
@@ -2840,15 +2881,40 @@ include __DIR__ . '/includes/sidebar.php';
                 <div class="range-panel" id="dashboardRangePanel">
                     <form method="get" id="dashboardRangeForm">
                         <?php foreach ($_GET as $k => $v): ?>
-                            <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode'], true)): ?>
+                            <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode','mes','anio'], true)): ?>
                                 <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
                             <?php endif; ?>
                         <?php endforeach; ?>
                         <input type="hidden" name="rango_mode" value="custom">
+                        <input type="hidden" name="mes" value="<?= htmlspecialchars($mes_actual) ?>">
+                        <input type="hidden" name="anio" value="<?= htmlspecialchars($anio_query) ?>">
                         <input type="hidden" name="dia_inicio" id="dashDiaInicioInput" value="<?= htmlspecialchars($dia_inicio_dashboard) ?>">
                         <input type="hidden" name="dia_fin" id="dashDiaFinInput" value="<?= htmlspecialchars($dia_fin_dashboard) ?>">
 
-                        <div class="range-panel-title">Selecciona rango de <?= htmlspecialchars($meses_es[$mes_actual]) ?> <?= htmlspecialchars($anio_query) ?></div>
+                        <?php
+                            $qs_prev_mes = $_GET;
+                            $qs_prev_mes['mes'] = $mes_prev;
+                            $qs_prev_mes['anio'] = $anio_prev;
+                            $qs_prev_mes['rango_mode'] = 'mtd';
+                            $qs_prev_mes['dia_inicio'] = 1;
+                            unset($qs_prev_mes['dia_fin']);
+
+                            $qs_next_mes = $_GET;
+                            $qs_next_mes['mes'] = $mes_next;
+                            $qs_next_mes['anio'] = $anio_next;
+                            $qs_next_mes['rango_mode'] = 'mtd';
+                            $qs_next_mes['dia_inicio'] = 1;
+                            unset($qs_next_mes['dia_fin']);
+                        ?>
+                        <div class="range-month-nav">
+                            <a class="range-month-btn" href="?<?= htmlspecialchars(http_build_query($qs_prev_mes)) ?>">← Mes anterior</a>
+                            <div class="range-panel-title">Selecciona rango de <?= htmlspecialchars($meses_es[$mes_actual]) ?> <?= htmlspecialchars($anio_query) ?></div>
+                            <?php if ($puede_mes_next): ?>
+                                <a class="range-month-btn" href="?<?= htmlspecialchars(http_build_query($qs_next_mes)) ?>">Mes siguiente →</a>
+                            <?php else: ?>
+                                <span class="range-month-btn disabled">Mes siguiente →</span>
+                            <?php endif; ?>
+                        </div>
                         <div class="calendar-grid-real" id="dashCalendarGrid"
                              data-days="<?= htmlspecialchars($dia_max_corte) ?>"
                              data-start="<?= htmlspecialchars($dia_inicio_dashboard) ?>"
@@ -2890,11 +2956,11 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
 
             <a class="range-action-btn <?= ($rango_mode === 'mtd') ? 'active' : '' ?>"
-               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'mtd','dia_inicio'=>1,'dia_fin'=>$dia_max_corte])) ?>">
+               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'mtd','mes'=>$mes_actual,'anio'=>$anio_query,'dia_inicio'=>1,'dia_fin'=>$dia_max_corte])) ?>">
                 MTD vencido
             </a>
             <a class="range-action-btn <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
-               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'completo','dia_inicio'=>null,'dia_fin'=>null])) ?>">
+               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'completo','mes'=>$mes_actual,'anio'=>$anio_query,'dia_inicio'=>null,'dia_fin'=>null])) ?>">
                 Mes completo
             </a>
         </div>
