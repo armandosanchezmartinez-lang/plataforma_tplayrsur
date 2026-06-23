@@ -2198,7 +2198,6 @@ $roles_labels = [
     'coach'              => 'Coach',
     'vendedor'           => 'Vendedor',
 ];
-?>
 
 // ── GEORREFERENCIA TOTALXPEDIENT ─────────────────────────────────────────────
 // Mapa de calor de instalaciones georreferenciadas.
@@ -2301,7 +2300,7 @@ if ($tx_geo_sum_count > 0) {
     ];
     $tx_geo_zoom = ($rol_consulta === 'admin' || $rol === 'director_regional') ? 7 : 10;
 }
-
+?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
