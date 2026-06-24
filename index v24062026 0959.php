@@ -2291,6 +2291,12 @@ $tx_geo_zona_caliente_total = 0;
 $tx_geo_distrito_top = 'Sin datos';
 $tx_geo_distrito_top_total = 0;
 $tx_geo_cobertura_pct = 0;
+$tx_geo_inst_periodo = 0;
+$tx_geo_ventas_periodo = (int)$kpi_vent;
+$tx_geo_canales_disponibles = [];
+$tx_geo_canales_sel = [];
+$tx_geo_where_canal = "";
+$tx_geo_mostrar_filtro_canales = in_array($rol, ['admin','director_regional','director_distrital'], true);
 
 $tx_geo_where_scope = "";
 if ($rol_consulta === 'admin') {
@@ -2326,28 +2332,116 @@ $tx_geo_where_validas = "
     AND CAST(longitud AS DECIMAL(10,6)) BETWEEN -119 AND -86
 ";
 
+// Filtro interactivo por canal de venta dentro de la tarjeta de georreferencia.
+// Sólo se muestra para ADMIN, DIRECTOR REGIONAL y DIRECTOR DISTRITAL.
+$r_tx_geo_canales = mysqli_query($conexion, "
+    SELECT DISTINCT TRIM(origen_prospecto) AS canal
+    $tx_geo_where_base
+      AND TRIM(COALESCE(origen_prospecto,'')) <> ''
+    ORDER BY canal
+");
+while ($r_tx_geo_canales && $row_geo_canal = mysqli_fetch_assoc($r_tx_geo_canales)) {
+    $canal = trim((string)($row_geo_canal['canal'] ?? ''));
+    if ($canal !== '' && $canal !== '-') $tx_geo_canales_disponibles[] = $canal;
+}
+$tx_geo_canales_disponibles = array_values(array_unique($tx_geo_canales_disponibles));
+
+$tx_geo_canales_request = $_GET['geo_canales'] ?? [];
+if (!is_array($tx_geo_canales_request)) {
+    $tx_geo_canales_request = [$tx_geo_canales_request];
+}
+foreach ($tx_geo_canales_request as $canal_req) {
+    $canal_req = trim((string)$canal_req);
+    if ($canal_req !== '' && in_array($canal_req, $tx_geo_canales_disponibles, true)) {
+        $tx_geo_canales_sel[] = $canal_req;
+    }
+}
+$tx_geo_canales_sel = array_values(array_unique($tx_geo_canales_sel));
+
+if ($tx_geo_mostrar_filtro_canales && !empty($tx_geo_canales_sel)) {
+    $tx_geo_where_canal = " AND origen_prospecto IN (" . tx_sql_in_escaped($conexion, $tx_geo_canales_sel) . ")";
+}
+
+// Universo de instalaciones considerado por la tarjeta, ya con filtro de canal si aplica.
+$r_tx_geo_inst_periodo = mysqli_query($conexion, "
+    SELECT COUNT(*) AS total
+    $tx_geo_where_base
+    $tx_geo_where_canal
+");
+if ($r_tx_geo_inst_periodo && $row_geo_inst_periodo = mysqli_fetch_assoc($r_tx_geo_inst_periodo)) {
+    $tx_geo_inst_periodo = (int)($row_geo_inst_periodo['total'] ?? 0);
+}
+
+// Si la tabla ventas tiene campo de canal compatible, también se calcula ventas consideradas por canal.
+// Si no existe, se conserva el universo de ventas del dashboard para no romper compatibilidad.
+if ($tx_geo_mostrar_filtro_canales && !empty($tx_geo_canales_sel)) {
+    $tx_geo_col_venta_canal = '';
+    foreach (['origen_prospecto','canal_venta','canal'] as $cand_col) {
+        $cand_col_esc = mysqli_real_escape_string($conexion, $cand_col);
+        $r_col = mysqli_query($conexion, "SHOW COLUMNS FROM ventas LIKE '$cand_col_esc'");
+        if ($r_col && mysqli_num_rows($r_col) > 0) {
+            $tx_geo_col_venta_canal = $cand_col;
+            break;
+        }
+    }
+
+    if ($tx_geo_col_venta_canal !== '') {
+        $tx_geo_where_scope_ventas = '';
+        if ($rol_consulta === 'admin') {
+            $tx_geo_where_scope_ventas = '';
+        } elseif ($scope_filtrar_por_distrito) {
+            $tx_geo_where_scope_ventas = " AND distrito IN ($scope_distritos_sql)";
+        } elseif ($por_distrito) {
+            $tx_geo_where_scope_ventas = " AND distrito IN ($distritos_sql)";
+        } else {
+            $tx_geo_where_scope_ventas = empty($folio_ids) ? " AND 1=0" : " AND folio_empleado IN (" . tx_sql_in_escaped($conexion, $folio_ids) . ")";
+        }
+
+        $tx_geo_col_venta_canal_sql = "`" . str_replace("`", "", $tx_geo_col_venta_canal) . "`";
+        $r_tx_geo_ventas_periodo = mysqli_query($conexion, "
+            SELECT COUNT(*) AS total
+            FROM ventas
+            WHERE MONTH(fecha_cierre) = " . (int)$mes_actual . "
+              AND YEAR(fecha_cierre) = " . (int)$anio_query . "
+              $cond_dia_fecha_cierre
+              AND $tx_geo_col_venta_canal_sql IN (" . tx_sql_in_escaped($conexion, $tx_geo_canales_sel) . ")
+              $tx_geo_where_scope_ventas
+        ");
+        if ($r_tx_geo_ventas_periodo && $row_geo_ventas_periodo = mysqli_fetch_assoc($r_tx_geo_ventas_periodo)) {
+            $tx_geo_ventas_periodo = (int)($row_geo_ventas_periodo['total'] ?? 0);
+        }
+    }
+}
+
 $r_tx_geo_total = mysqli_query($conexion, "
     SELECT COUNT(*) AS total
     $tx_geo_where_base
+    $tx_geo_where_canal
     $tx_geo_where_validas
 ");
 if ($r_tx_geo_total && $row_geo_total = mysqli_fetch_assoc($r_tx_geo_total)) {
     $tx_geo_total = (int)($row_geo_total['total'] ?? 0);
 }
 
-$tx_geo_invalidas = max(0, (int)$kpi_inst - (int)$tx_geo_total);
+$tx_geo_invalidas = max(0, (int)$tx_geo_inst_periodo - (int)$tx_geo_total);
 
 $r_tx_geo = mysqli_query($conexion, "
     SELECT
         ROUND(CAST(latitud AS DECIMAL(10,6)), 5) AS lat,
         ROUND(CAST(longitud AS DECIMAL(10,6)), 5) AS lng,
         COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO') AS distrito,
-        COUNT(*) AS total
+        COALESCE(NULLIF(TRIM(origen_prospecto),''),'SIN CANAL') AS canal,
+        COUNT(*) AS total,
+        COUNT(DISTINCT folio_empleado) AS vendedores,
+        MIN(fecha) AS fecha_min,
+        MAX(fecha) AS fecha_max
     $tx_geo_where_base
+    $tx_geo_where_canal
     $tx_geo_where_validas
     GROUP BY ROUND(CAST(latitud AS DECIMAL(10,6)), 5),
              ROUND(CAST(longitud AS DECIMAL(10,6)), 5),
-             COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO')
+             COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO'),
+             COALESCE(NULLIF(TRIM(origen_prospecto),''),'SIN CANAL')
     ORDER BY total DESC
     LIMIT 5000
 ");
@@ -2368,7 +2462,11 @@ while ($r_tx_geo && $row_geo = mysqli_fetch_assoc($r_tx_geo)) {
         'lat' => $lat,
         'lng' => $lng,
         'total' => $count,
-        'distrito' => $row_geo['distrito'] ?? 'SIN DISTRITO'
+        'distrito' => $row_geo['distrito'] ?? 'SIN DISTRITO',
+        'canal' => $row_geo['canal'] ?? 'SIN CANAL',
+        'vendedores' => (int)($row_geo['vendedores'] ?? 0),
+        'fecha_min' => $row_geo['fecha_min'] ?? '',
+        'fecha_max' => $row_geo['fecha_max'] ?? ''
     ];
 
     $tx_geo_sum_lat += ($lat * $count);
@@ -2381,6 +2479,7 @@ $r_tx_geo_distrito = mysqli_query($conexion, "
         COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO') AS distrito,
         COUNT(*) AS total
     $tx_geo_where_base
+    $tx_geo_where_canal
     $tx_geo_where_validas
     GROUP BY COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO')
     ORDER BY total DESC
@@ -2393,7 +2492,7 @@ if ($r_tx_geo_distrito && $row_geo_dist = mysqli_fetch_assoc($r_tx_geo_distrito)
     $tx_geo_zona_caliente_total = $tx_geo_distrito_top_total;
 }
 
-$tx_geo_cobertura_pct = ((int)$kpi_inst > 0) ? round(((int)$tx_geo_total / (int)$kpi_inst) * 100, 1) : 0;
+$tx_geo_cobertura_pct = ((int)$tx_geo_inst_periodo > 0) ? round(((int)$tx_geo_total / (int)$tx_geo_inst_periodo) * 100, 1) : 0;
 
 if ($tx_geo_sum_count > 0) {
     $tx_geo_centro = [
@@ -3063,6 +3162,84 @@ if ($tx_geo_sum_count > 0) {
             text-transform:uppercase;
             letter-spacing:.08em;
         }
+        .geo-filter{
+            margin:10px 0 14px;
+            padding:12px 14px;
+            border-radius:18px;
+            background:linear-gradient(135deg,rgba(0,166,255,.07),rgba(122,43,255,.07));
+            border:1px solid rgba(122,43,255,.12);
+        }
+        .geo-filter-top{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin-bottom:10px;
+        }
+        .geo-filter-title{
+            font-size:.72rem;
+            font-weight:950;
+            color:#17213a;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+        }
+        .geo-filter-actions{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }
+        .geo-filter-clear,
+        .geo-filter-btn{
+            border:0;
+            border-radius:999px;
+            padding:8px 12px;
+            font-size:.68rem;
+            font-weight:950;
+            text-transform:uppercase;
+            letter-spacing:.06em;
+            cursor:pointer;
+            text-decoration:none;
+        }
+        .geo-filter-btn{
+            color:white;
+            background:linear-gradient(90deg,var(--magenta),var(--purple));
+            box-shadow:0 8px 18px rgba(122,43,255,.18);
+        }
+        .geo-filter-clear{
+            color:#6b7a99;
+            background:rgba(255,255,255,.75);
+            border:1px solid rgba(107,122,153,.18);
+        }
+        .geo-channel-pills{
+            display:flex;
+            align-items:center;
+            flex-wrap:wrap;
+            gap:8px;
+            max-height:92px;
+            overflow:auto;
+            padding-right:4px;
+        }
+        .geo-channel-pill{
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            padding:8px 10px;
+            border-radius:999px;
+            background:rgba(255,255,255,.72);
+            border:1px solid rgba(122,43,255,.13);
+            color:#24314d;
+            font-size:.7rem;
+            font-weight:900;
+            cursor:pointer;
+            user-select:none;
+        }
+        .geo-channel-pill input{accent-color:#7A2BFF;}
+        .geo-channel-pill.active{
+            color:#17213a;
+            background:linear-gradient(135deg,rgba(255,0,108,.13),rgba(0,166,255,.13));
+            border-color:rgba(122,43,255,.28);
+        }
         .geo-kpis{
             display:grid;
             grid-template-columns:repeat(6,minmax(140px,1fr));
@@ -3145,6 +3322,7 @@ if ($tx_geo_sum_count > 0) {
         }
         @media(max-width:900px){
             .geo-header{flex-direction:column}
+            .geo-filter-top{align-items:flex-start;flex-direction:column}
             .geo-kpis{grid-template-columns:1fr}
             #txGeoMap{height:420px}
         }
@@ -3206,7 +3384,13 @@ include __DIR__ . '/includes/sidebar.php';
                     <form method="get" id="dashboardRangeForm">
                         <?php foreach ($_GET as $k => $v): ?>
                             <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode','mes','anio'], true)): ?>
-                                <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                                <?php if (is_array($v)): ?>
+                                    <?php foreach ($v as $v_item): ?>
+                                        <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
+                                <?php endif; ?>
                             <?php endif; ?>
                         <?php endforeach; ?>
                         <input type="hidden" name="rango_mode" value="custom">
@@ -3308,7 +3492,13 @@ include __DIR__ . '/includes/sidebar.php';
         <form method="get" class="hierarchy-form">
             <?php foreach ($_GET as $k => $v): ?>
                 <?php if (!in_array($k, ['scope_pos'], true)): ?>
-                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                    <?php if (is_array($v)): ?>
+                        <?php foreach ($v as $v_item): ?>
+                            <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
+                    <?php endif; ?>
                 <?php endif; ?>
             <?php endforeach; ?>
 
@@ -3863,16 +4053,56 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
         </div>
 
+        <?php if ($tx_geo_mostrar_filtro_canales && !empty($tx_geo_canales_disponibles)): ?>
+        <form method="get" class="geo-filter">
+            <?php foreach ($_GET as $gk => $gv): ?>
+                <?php if ($gk === 'geo_canales') continue; ?>
+                <?php if (is_array($gv)): ?>
+                    <?php foreach ($gv as $gv_item): ?>
+                        <input type="hidden" name="<?= htmlspecialchars($gk) ?>[]" value="<?= htmlspecialchars((string)$gv_item) ?>">
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <input type="hidden" name="<?= htmlspecialchars($gk) ?>" value="<?= htmlspecialchars((string)$gv) ?>">
+                <?php endif; ?>
+            <?php endforeach; ?>
+            <div class="geo-filter-top">
+                <div>
+                    <div class="geo-filter-title">Filtrar mapa por canal de venta</div>
+                    <div class="geo-subtitle" style="margin-top:3px;text-transform:none;letter-spacing:.03em;">
+                        <?= empty($tx_geo_canales_sel) ? 'Mostrando todos los canales disponibles' : (count($tx_geo_canales_sel) . ' canal(es) seleccionado(s)') ?>
+                    </div>
+                </div>
+                <div class="geo-filter-actions">
+                    <button type="submit" class="geo-filter-btn">Aplicar filtro</button>
+                    <?php
+                        $qs_geo_clear = $_GET;
+                        unset($qs_geo_clear['geo_canales']);
+                    ?>
+                    <a class="geo-filter-clear" href="?<?= htmlspecialchars(http_build_query($qs_geo_clear)) ?>">Todos los canales</a>
+                </div>
+            </div>
+            <div class="geo-channel-pills">
+                <?php foreach ($tx_geo_canales_disponibles as $canal_geo): ?>
+                    <?php $is_checked_geo = in_array($canal_geo, $tx_geo_canales_sel, true); ?>
+                    <label class="geo-channel-pill <?= $is_checked_geo ? 'active' : '' ?>">
+                        <input type="checkbox" name="geo_canales[]" value="<?= htmlspecialchars($canal_geo) ?>" <?= $is_checked_geo ? 'checked' : '' ?>>
+                        <?= htmlspecialchars($canal_geo) ?>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+        </form>
+        <?php endif; ?>
+
         <div class="geo-kpis">
             <div class="geo-kpi">
                 <span>Ventas consideradas</span>
-                <strong><?= number_format((int)$kpi_vent) ?></strong>
-                <small>Universo de ventas del periodo</small>
+                <strong><?= number_format((int)$tx_geo_ventas_periodo) ?></strong>
+                <small><?= empty($tx_geo_canales_sel) ? 'Universo de ventas del periodo' : 'Ventas según canal seleccionado' ?></small>
             </div>
             <div class="geo-kpi">
                 <span>Instalaciones del periodo</span>
-                <strong><?= number_format((int)$kpi_inst) ?></strong>
-                <small>Base contra conversión</small>
+                <strong><?= number_format((int)$tx_geo_inst_periodo) ?></strong>
+                <small><?= empty($tx_geo_canales_sel) ? 'Base contra conversión' : 'Base filtrada por canal' ?></small>
             </div>
             <div class="geo-kpi">
                 <span>Instalaciones georreferenciadas</span>
@@ -3958,14 +4188,30 @@ if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
         }).addTo(txGeoMap);
     }
 
-    txGeoMarkerPoints.slice(0, 600).forEach(p => {
+    txGeoMarkerPoints.slice(0, 900).forEach(p => {
+        const totalGeo = Number(p.total || 0);
+        const canalGeo = p.canal || 'SIN CANAL';
+        const distritoGeo = p.distrito || 'SIN DISTRITO';
+        const rangoGeo = (p.fecha_min && p.fecha_max)
+            ? `${p.fecha_min}${p.fecha_min !== p.fecha_max ? ' al ' + p.fecha_max : ''}`
+            : '';
+        const tooltipGeo =
+            `<strong>${distritoGeo}</strong><br>` +
+            `Canal: <strong>${canalGeo}</strong><br>` +
+            `Instalaciones: <strong>${totalGeo.toLocaleString('es-MX')}</strong>`;
+
         L.circleMarker([p.lat, p.lng], {
-            radius: Math.min(12, 4 + Number(p.total || 1)),
+            radius: Math.min(13, 4 + totalGeo),
             weight: 1,
             fillOpacity: 0.72
-        }).addTo(txGeoMap).bindPopup(
-            `<strong>${p.distrito || 'SIN DISTRITO'}</strong><br>` +
-            `Instalaciones agrupadas: <strong>${Number(p.total || 0).toLocaleString('es-MX')}</strong>`
+        }).addTo(txGeoMap)
+          .bindTooltip(tooltipGeo, { sticky: true, direction: 'top', opacity: 0.95 })
+          .bindPopup(
+            `<strong>${distritoGeo}</strong><br>` +
+            `Canal de venta: <strong>${canalGeo}</strong><br>` +
+            `Instalaciones agrupadas: <strong>${totalGeo.toLocaleString('es-MX')}</strong><br>` +
+            `Vendedores distintos: <strong>${Number(p.vendedores || 0).toLocaleString('es-MX')}</strong>` +
+            `${rangoGeo ? '<br>Rango: <strong>' + rangoGeo + '</strong>' : ''}`
         );
     });
 
