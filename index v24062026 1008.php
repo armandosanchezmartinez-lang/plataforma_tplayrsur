@@ -2298,6 +2298,46 @@ $tx_geo_canales_sel = [];
 $tx_geo_where_canal = "";
 $tx_geo_mostrar_filtro_canales = in_array($rol, ['admin','director_regional','director_distrital'], true);
 
+
+function tx_geo_instalaciones_columna($conexion, $candidatos) {
+    foreach ($candidatos as $cand) {
+        $cand_esc = mysqli_real_escape_string($conexion, $cand);
+        $r = mysqli_query($conexion, "SHOW COLUMNS FROM instalaciones LIKE '$cand_esc'");
+        if ($r && mysqli_num_rows($r) > 0) {
+            return $cand;
+        }
+    }
+    return '';
+}
+
+function tx_geo_sql_col_expr($col, $default_label) {
+    if ($col === '') return "'" . str_replace("'", "''", $default_label) . "'";
+    $col_sql = "`" . str_replace("`", "", $col) . "`";
+    return "COALESCE(NULLIF(TRIM($col_sql),''),'" . str_replace("'", "''", $default_label) . "')";
+}
+
+function tx_geo_sql_precio_expr($col) {
+    if ($col === '') return "0";
+    $col_sql = "`" . str_replace("`", "", $col) . "`";
+    return "COALESCE(CAST($col_sql AS DECIMAL(12,2)),0)";
+}
+
+$tx_geo_col_vendedor = tx_geo_instalaciones_columna($conexion, ['vendedor','nombre_vendedor','nombre_colaborador','asesor','ejecutivo']);
+$tx_geo_col_coach    = tx_geo_instalaciones_columna($conexion, ['coach','nombre_coach']);
+$tx_geo_col_plan     = tx_geo_instalaciones_columna($conexion, ['plan','nombre_plan','paquete']);
+$tx_geo_col_precio   = tx_geo_instalaciones_columna($conexion, ['precio_pronto_pago','precio_lista_con_descuento','precio_descuento','precio_lista','precio']);
+
+$tx_geo_expr_vendedor = tx_geo_sql_col_expr($tx_geo_col_vendedor, 'SIN VENDEDOR');
+$tx_geo_expr_coach    = tx_geo_sql_col_expr($tx_geo_col_coach, 'SIN COACH');
+$tx_geo_expr_precio   = tx_geo_sql_precio_expr($tx_geo_col_precio);
+
+if ($tx_geo_col_plan !== '') {
+    $tx_geo_col_plan_sql = "`" . str_replace("`", "", $tx_geo_col_plan) . "`";
+    $tx_geo_expr_play = "CASE WHEN UPPER(COALESCE($tx_geo_col_plan_sql,'')) LIKE '%TV%' THEN '3P' ELSE '2P' END";
+} else {
+    $tx_geo_expr_play = "'SIN PLAN'";
+}
+
 $tx_geo_where_scope = "";
 if ($rol_consulta === 'admin') {
     $tx_geo_where_scope = "";
@@ -2431,6 +2471,10 @@ $r_tx_geo = mysqli_query($conexion, "
         ROUND(CAST(longitud AS DECIMAL(10,6)), 5) AS lng,
         COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO') AS distrito,
         COALESCE(NULLIF(TRIM(origen_prospecto),''),'SIN CANAL') AS canal,
+        $tx_geo_expr_vendedor AS vendedor,
+        $tx_geo_expr_coach AS coach,
+        $tx_geo_expr_play AS play,
+        $tx_geo_expr_precio AS precio_lista_descuento,
         COUNT(*) AS total,
         COUNT(DISTINCT folio_empleado) AS vendedores,
         MIN(fecha) AS fecha_min,
@@ -2441,7 +2485,11 @@ $r_tx_geo = mysqli_query($conexion, "
     GROUP BY ROUND(CAST(latitud AS DECIMAL(10,6)), 5),
              ROUND(CAST(longitud AS DECIMAL(10,6)), 5),
              COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO'),
-             COALESCE(NULLIF(TRIM(origen_prospecto),''),'SIN CANAL')
+             COALESCE(NULLIF(TRIM(origen_prospecto),''),'SIN CANAL'),
+             vendedor,
+             coach,
+             play,
+             precio_lista_descuento
     ORDER BY total DESC
     LIMIT 5000
 ");
@@ -2464,6 +2512,10 @@ while ($r_tx_geo && $row_geo = mysqli_fetch_assoc($r_tx_geo)) {
         'total' => $count,
         'distrito' => $row_geo['distrito'] ?? 'SIN DISTRITO',
         'canal' => $row_geo['canal'] ?? 'SIN CANAL',
+        'vendedor' => $row_geo['vendedor'] ?? 'SIN VENDEDOR',
+        'coach' => $row_geo['coach'] ?? 'SIN COACH',
+        'play' => $row_geo['play'] ?? 'SIN PLAN',
+        'precio_lista_descuento' => (float)($row_geo['precio_lista_descuento'] ?? 0),
         'vendedores' => (int)($row_geo['vendedores'] ?? 0),
         'fecha_min' => $row_geo['fecha_min'] ?? '',
         'fecha_max' => $row_geo['fecha_max'] ?? ''
@@ -3384,13 +3436,7 @@ include __DIR__ . '/includes/sidebar.php';
                     <form method="get" id="dashboardRangeForm">
                         <?php foreach ($_GET as $k => $v): ?>
                             <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode','mes','anio'], true)): ?>
-                                <?php if (is_array($v)): ?>
-                                    <?php foreach ($v as $v_item): ?>
-                                        <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
-                                <?php endif; ?>
+                                <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
                             <?php endif; ?>
                         <?php endforeach; ?>
                         <input type="hidden" name="rango_mode" value="custom">
@@ -3492,13 +3538,7 @@ include __DIR__ . '/includes/sidebar.php';
         <form method="get" class="hierarchy-form">
             <?php foreach ($_GET as $k => $v): ?>
                 <?php if (!in_array($k, ['scope_pos'], true)): ?>
-                    <?php if (is_array($v)): ?>
-                        <?php foreach ($v as $v_item): ?>
-                            <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
-                    <?php endif; ?>
+                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
                 <?php endif; ?>
             <?php endforeach; ?>
 
@@ -4192,25 +4232,33 @@ if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
         const totalGeo = Number(p.total || 0);
         const canalGeo = p.canal || 'SIN CANAL';
         const distritoGeo = p.distrito || 'SIN DISTRITO';
+        const vendedorGeo = p.vendedor || 'SIN VENDEDOR';
+        const coachGeo = p.coach || 'SIN COACH';
+        const playGeo = p.play || 'SIN PLAN';
+        const precioGeo = Number(p.precio_lista_descuento || 0);
+        const precioGeoFmt = precioGeo > 0
+            ? precioGeo.toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 })
+            : 'Sin precio';
         const rangoGeo = (p.fecha_min && p.fecha_max)
             ? `${p.fecha_min}${p.fecha_min !== p.fecha_max ? ' al ' + p.fecha_max : ''}`
             : '';
-        const tooltipGeo =
-            `<strong>${distritoGeo}</strong><br>` +
-            `Canal: <strong>${canalGeo}</strong><br>` +
-            `Instalaciones: <strong>${totalGeo.toLocaleString('es-MX')}</strong>`;
+        const detalleGeo =
+            `Canal de venta: <strong>${canalGeo}</strong><br>` +
+            `Vendedor: <strong>${vendedorGeo}</strong><br>` +
+            `Coach: <strong>${coachGeo}</strong><br>` +
+            `Play: <strong>${playGeo}</strong><br>` +
+            `Precio lista con descuento: <strong>${precioGeoFmt}</strong>` +
+            `${totalGeo > 1 ? '<br>Instalaciones agrupadas: <strong>' + totalGeo.toLocaleString('es-MX') + '</strong>' : ''}`;
 
         L.circleMarker([p.lat, p.lng], {
             radius: Math.min(13, 4 + totalGeo),
             weight: 1,
             fillOpacity: 0.72
         }).addTo(txGeoMap)
-          .bindTooltip(tooltipGeo, { sticky: true, direction: 'top', opacity: 0.95 })
+          .bindTooltip(detalleGeo, { sticky: true, direction: 'top', opacity: 0.98 })
           .bindPopup(
             `<strong>${distritoGeo}</strong><br>` +
-            `Canal de venta: <strong>${canalGeo}</strong><br>` +
-            `Instalaciones agrupadas: <strong>${totalGeo.toLocaleString('es-MX')}</strong><br>` +
-            `Vendedores distintos: <strong>${Number(p.vendedores || 0).toLocaleString('es-MX')}</strong>` +
+            detalleGeo +
             `${rangoGeo ? '<br>Rango: <strong>' + rangoGeo + '</strong>' : ''}`
         );
     });
