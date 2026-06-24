@@ -2198,6 +2198,132 @@ $roles_labels = [
     'coach'              => 'Coach',
     'vendedor'           => 'Vendedor',
 ];
+
+// ── GEORREFERENCIA TOTALXPEDIENT ─────────────────────────────────────────────
+// Mapa de calor de instalaciones georreferenciadas.
+// Respeta el mismo rango operativo, scope jerárquico y permisos del dashboard.
+$tx_geo_heat_points = [];
+$tx_geo_marker_points = [];
+$tx_geo_total = 0;
+$tx_geo_invalidas = 0;
+$tx_geo_centro = [20.9674, -89.5926]; // Default Mérida / Región Sur
+$tx_geo_zoom = 7;
+$tx_geo_zona_caliente = 'Sin datos';
+$tx_geo_zona_caliente_total = 0;
+$tx_geo_distrito_top = 'Sin datos';
+$tx_geo_distrito_top_total = 0;
+$tx_geo_cobertura_pct = 0;
+
+$tx_geo_where_scope = "";
+if ($rol_consulta === 'admin') {
+    $tx_geo_where_scope = "";
+} elseif ($scope_filtrar_por_distrito) {
+    $tx_geo_where_scope = " AND distrito IN ($scope_distritos_sql)";
+} elseif ($por_distrito) {
+    $tx_geo_where_scope = " AND distrito IN ($distritos_sql)";
+} else {
+    if (empty($folio_ids)) {
+        $tx_geo_where_scope = " AND 1=0";
+    } else {
+        $tx_geo_where_scope = " AND folio_empleado IN (" . tx_sql_in_escaped($conexion, $folio_ids) . ")";
+    }
+}
+
+$tx_geo_where_base = "
+    FROM instalaciones
+    WHERE MONTH(fecha) = " . (int)$mes_actual . "
+      AND YEAR(fecha) = " . (int)$anio_query . "
+      $cond_dia_fecha
+      AND origen_prospecto IS NOT NULL
+      AND origen_prospecto <> '-'
+      $tx_geo_where_scope
+";
+
+$tx_geo_where_validas = "
+    AND latitud IS NOT NULL
+    AND longitud IS NOT NULL
+    AND TRIM(CAST(latitud AS CHAR)) <> ''
+    AND TRIM(CAST(longitud AS CHAR)) <> ''
+    AND CAST(latitud AS DECIMAL(10,6)) BETWEEN 14 AND 33
+    AND CAST(longitud AS DECIMAL(10,6)) BETWEEN -119 AND -86
+";
+
+$r_tx_geo_total = mysqli_query($conexion, "
+    SELECT COUNT(*) AS total
+    $tx_geo_where_base
+    $tx_geo_where_validas
+");
+if ($r_tx_geo_total && $row_geo_total = mysqli_fetch_assoc($r_tx_geo_total)) {
+    $tx_geo_total = (int)($row_geo_total['total'] ?? 0);
+}
+
+$tx_geo_invalidas = max(0, (int)$kpi_inst - (int)$tx_geo_total);
+
+$r_tx_geo = mysqli_query($conexion, "
+    SELECT
+        ROUND(CAST(latitud AS DECIMAL(10,6)), 5) AS lat,
+        ROUND(CAST(longitud AS DECIMAL(10,6)), 5) AS lng,
+        COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO') AS distrito,
+        COUNT(*) AS total
+    $tx_geo_where_base
+    $tx_geo_where_validas
+    GROUP BY ROUND(CAST(latitud AS DECIMAL(10,6)), 5),
+             ROUND(CAST(longitud AS DECIMAL(10,6)), 5),
+             COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO')
+    ORDER BY total DESC
+    LIMIT 5000
+");
+
+$tx_geo_sum_lat = 0;
+$tx_geo_sum_lng = 0;
+$tx_geo_sum_count = 0;
+
+while ($r_tx_geo && $row_geo = mysqli_fetch_assoc($r_tx_geo)) {
+    $lat = (float)($row_geo['lat'] ?? 0);
+    $lng = (float)($row_geo['lng'] ?? 0);
+    $count = (int)($row_geo['total'] ?? 0);
+    if ($lat == 0 || $lng == 0 || $count <= 0) continue;
+
+    $intensity = min(1, 0.25 + ($count / 8));
+    $tx_geo_heat_points[] = [$lat, $lng, $intensity];
+    $tx_geo_marker_points[] = [
+        'lat' => $lat,
+        'lng' => $lng,
+        'total' => $count,
+        'distrito' => $row_geo['distrito'] ?? 'SIN DISTRITO'
+    ];
+
+    $tx_geo_sum_lat += ($lat * $count);
+    $tx_geo_sum_lng += ($lng * $count);
+    $tx_geo_sum_count += $count;
+}
+
+$r_tx_geo_distrito = mysqli_query($conexion, "
+    SELECT
+        COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO') AS distrito,
+        COUNT(*) AS total
+    $tx_geo_where_base
+    $tx_geo_where_validas
+    GROUP BY COALESCE(NULLIF(TRIM(distrito),''),'SIN DISTRITO')
+    ORDER BY total DESC
+    LIMIT 1
+");
+if ($r_tx_geo_distrito && $row_geo_dist = mysqli_fetch_assoc($r_tx_geo_distrito)) {
+    $tx_geo_distrito_top = $row_geo_dist['distrito'] ?? 'Sin datos';
+    $tx_geo_distrito_top_total = (int)($row_geo_dist['total'] ?? 0);
+    $tx_geo_zona_caliente = $tx_geo_distrito_top;
+    $tx_geo_zona_caliente_total = $tx_geo_distrito_top_total;
+}
+
+$tx_geo_cobertura_pct = ((int)$kpi_inst > 0) ? round(((int)$tx_geo_total / (int)$kpi_inst) * 100, 1) : 0;
+
+if ($tx_geo_sum_count > 0) {
+    $tx_geo_centro = [
+        round($tx_geo_sum_lat / $tx_geo_sum_count, 6),
+        round($tx_geo_sum_lng / $tx_geo_sum_count, 6)
+    ];
+    $tx_geo_zoom = ($rol_consulta === 'admin' || $rol === 'director_regional') ? 7 : 10;
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -2827,7 +2953,127 @@ $roles_labels = [
             .range-panel{left:auto;right:0;width:320px}
             .hierarchy-select{min-width:100%}
         }
+
+        /* ── GEORREFERENCIA TOTALXPEDIENT ───────────────────────────── */
+        .geo-card{
+            margin-top:22px;
+            padding:20px;
+            border-radius:22px;
+            background:rgba(255,255,255,.86);
+            border:1px solid rgba(122,43,255,.12);
+            box-shadow:0 18px 45px rgba(35,20,80,.12);
+            overflow:hidden;
+        }
+        .geo-header{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:16px;
+            margin-bottom:14px;
+        }
+        .geo-title{
+            font-weight:900;
+            font-size:1.05rem;
+            color:#17213a;
+            letter-spacing:.02em;
+        }
+        .geo-subtitle{
+            margin-top:4px;
+            font-size:.74rem;
+            font-weight:800;
+            color:#6b7a99;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+        }
+        .geo-kpis{
+            display:grid;
+            grid-template-columns:repeat(6,minmax(140px,1fr));
+            gap:10px;
+            margin-bottom:14px;
+        }
+        .geo-kpi{
+            padding:12px 14px;
+            border-radius:16px;
+            background:linear-gradient(135deg,rgba(122,43,255,.08),rgba(0,166,255,.08));
+            border:1px solid rgba(122,43,255,.12);
+        }
+        .geo-kpi span{
+            display:block;
+            font-size:.66rem;
+            font-weight:900;
+            color:#6b7a99;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+        }
+        .geo-kpi strong{
+            display:block;
+            margin-top:4px;
+            font-size:1.25rem;
+            color:#17213a;
+            font-weight:950;
+        }
+        .geo-kpi small{
+            display:block;
+            margin-top:2px;
+            font-size:.68rem;
+            color:#6b7a99;
+            font-weight:800;
+        }
+        .geo-map-wrap{position:relative;}
+        .geo-legend{
+            position:absolute;
+            right:14px;
+            bottom:14px;
+            z-index:500;
+            padding:10px 12px;
+            border-radius:14px;
+            background:rgba(255,255,255,.92);
+            border:1px solid rgba(122,43,255,.14);
+            box-shadow:0 10px 25px rgba(35,20,80,.14);
+            font-size:.7rem;
+            font-weight:900;
+            color:#17213a;
+        }
+        .geo-gradient{
+            display:inline-block;
+            width:120px;
+            height:10px;
+            margin:0 7px;
+            border-radius:999px;
+            background:linear-gradient(90deg,#2878ff,#20e8ff,#4dff5d,#ffe600,#ff2d00);
+            vertical-align:middle;
+        }
+        #txGeoMap{
+            height:760px;
+            min-height:70vh;
+            width:100%;
+            border-radius:20px;
+            overflow:hidden;
+            border:1px solid rgba(122,43,255,.16);
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);
+            background:#e9edf5;
+        }
+        .geo-empty{
+            height:240px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            text-align:center;
+            border-radius:20px;
+            border:1px dashed rgba(107,122,153,.35);
+            background:rgba(255,255,255,.5);
+            color:#6b7a99;
+            font-weight:800;
+        }
+        @media(max-width:900px){
+            .geo-header{flex-direction:column}
+            .geo-kpis{grid-template-columns:1fr}
+            #txGeoMap{height:420px}
+        }
+
     </style>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body class="page-dashboard">
 <?php
@@ -3526,7 +3772,69 @@ include __DIR__ . '/includes/sidebar.php';
     <?php endif; ?>
 
 
+
+    <!-- GEORREFERENCIA TOTALXPEDIENT -->
+    <section class="geo-card">
+        <div class="geo-header">
+            <div>
+                <div class="geo-title">Georreferencia TotalXpedient</div>
+                <div class="geo-subtitle">Mapa de calor de instalaciones · <?= htmlspecialchars($dashboard_fecha_label) ?></div>
+            </div>
+            <div class="geo-subtitle">
+                <?= $scope_activo ? 'Vista jerárquica seleccionada' : 'Vista actual del dashboard' ?>
+            </div>
+        </div>
+
+        <div class="geo-kpis">
+            <div class="geo-kpi">
+                <span>Ventas consideradas</span>
+                <strong><?= number_format((int)$kpi_vent) ?></strong>
+                <small>Universo de ventas del periodo</small>
+            </div>
+            <div class="geo-kpi">
+                <span>Instalaciones del periodo</span>
+                <strong><?= number_format((int)$kpi_inst) ?></strong>
+                <small>Base contra conversión</small>
+            </div>
+            <div class="geo-kpi">
+                <span>Instalaciones georreferenciadas</span>
+                <strong><?= number_format((int)$tx_geo_total) ?></strong>
+                <small><?= number_format((float)$tx_geo_cobertura_pct, 1) ?>% con coordenada válida</small>
+            </div>
+            <div class="geo-kpi">
+                <span>Puntos agrupados en mapa</span>
+                <strong><?= number_format(count($tx_geo_marker_points)) ?></strong>
+                <small>Coordenadas visibles agrupadas</small>
+            </div>
+            <div class="geo-kpi">
+                <span>Zona más caliente</span>
+                <strong><?= htmlspecialchars($tx_geo_zona_caliente) ?></strong>
+                <small><?= number_format((int)$tx_geo_zona_caliente_total) ?> instalaciones</small>
+            </div>
+            <div class="geo-kpi">
+                <span>Sin coordenada válida</span>
+                <strong><?= number_format((int)$tx_geo_invalidas) ?></strong>
+                <small>Registros no mapeados</small>
+            </div>
+        </div>
+
+        <?php if (!empty($tx_geo_heat_points)): ?>
+            <div class="geo-map-wrap">
+                <div id="txGeoMap"></div>
+                <div class="geo-legend">Menor concentración <span class="geo-gradient"></span> Mayor concentración</div>
+            </div>
+        <?php else: ?>
+            <div class="geo-empty">
+                No hay instalaciones con latitud/longitud válida para el rango y jerarquía seleccionados.
+            </div>
+        <?php endif; ?>
+    </section>
+
+
 </main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 
 <script>
 // --- PALETA TOTAL STORE / TOTALXPEDIENT ---
@@ -3544,6 +3852,52 @@ const txBrandColors = {
     grisClaro: '#E0E3EA'
 };
 
+
+
+
+// --- GEORREFERENCIA TOTALXPEDIENT ---
+const txGeoHeatPoints = <?= json_encode($tx_geo_heat_points, JSON_NUMERIC_CHECK) ?>;
+const txGeoMarkerPoints = <?= json_encode($tx_geo_marker_points, JSON_NUMERIC_CHECK) ?>;
+const txGeoCentro = <?= json_encode($tx_geo_centro, JSON_NUMERIC_CHECK) ?>;
+const txGeoZoom = <?= (int)$tx_geo_zoom ?>;
+
+if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
+    const txGeoMap = L.map('txGeoMap', {
+        scrollWheelZoom: false
+    }).setView(txGeoCentro, txGeoZoom);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(txGeoMap);
+
+    if (typeof L.heatLayer !== 'undefined' && txGeoHeatPoints.length) {
+        L.heatLayer(txGeoHeatPoints, {
+            radius: 27,
+            blur: 20,
+            maxZoom: 17,
+            minOpacity: 0.35
+        }).addTo(txGeoMap);
+    }
+
+    txGeoMarkerPoints.slice(0, 600).forEach(p => {
+        L.circleMarker([p.lat, p.lng], {
+            radius: Math.min(12, 4 + Number(p.total || 1)),
+            weight: 1,
+            fillOpacity: 0.72
+        }).addTo(txGeoMap).bindPopup(
+            `<strong>${p.distrito || 'SIN DISTRITO'}</strong><br>` +
+            `Instalaciones agrupadas: <strong>${Number(p.total || 0).toLocaleString('es-MX')}</strong>`
+        );
+    });
+
+    if (txGeoMarkerPoints.length > 1) {
+        const bounds = L.latLngBounds(txGeoMarkerPoints.map(p => [p.lat, p.lng]));
+        txGeoMap.fitBounds(bounds, { padding: [24, 24], maxZoom: txGeoZoom });
+    }
+
+    setTimeout(() => txGeoMap.invalidateSize(), 250);
+}
 
 
 // --- DONUTS (MIX) ---

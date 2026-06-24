@@ -130,17 +130,95 @@ if ($res_sem && $row_sem = mysqli_fetch_assoc($res_sem)) {
 $niveles = ['admin'=>6,'director_regional'=>5,'director_distrital'=>4,'lider'=>3,'coach'=>2,'vendedor'=>1];
 $nivel   = $niveles[$rol] ?? 1;
 
-$stmt_nombre = mysqli_prepare($conexion, "SELECT nombre_colaborador, posicion, distrito FROM hc WHERE id_posicion = ? LIMIT 1");
-if ($stmt_nombre) {
-    mysqli_stmt_bind_param($stmt_nombre, "s", $id_posicion);
-    mysqli_stmt_execute($stmt_nombre);
-    $res_nombre = mysqli_stmt_get_result($stmt_nombre);
-    if ($row_nombre = mysqli_fetch_assoc($res_nombre)) {
-        $nombre_completo  = $row_nombre['nombre_colaborador'] ?? $nombre_usuario;
-        $posicion_usuario = $row_nombre['posicion'] ?? '';
-        $distrito_usuario = $row_nombre['distrito'] ?? '';
+/*
+|--------------------------------------------------------------------------
+| TOTALXPEDIENT - IDENTIDAD DEL USUARIO EN DASHBOARD
+|--------------------------------------------------------------------------
+|
+| FIX 2026-06:
+| Antes se buscaba el nombre únicamente por id_posicion con LIMIT 1.
+| Eso podía mostrar al ocupante anterior del puesto cuando una posición
+| había cambiado de colaborador.
+|
+| Nueva regla:
+| 1) Buscar primero por numero_talento_gs en la semana/año vigente.
+| 2) Si no existe, respaldar por id_posicion en la semana/año vigente.
+| 3) Si tampoco existe, tomar el último registro histórico del id_posicion.
+|--------------------------------------------------------------------------
+*/
+$nombre_completo  = $nombre_usuario;
+$posicion_usuario = '';
+$distrito_usuario = '';
+
+if (!empty($talento_gs) && $semana_actual && $anio_actual) {
+    $stmt_nombre = mysqli_prepare($conexion, "
+        SELECT nombre_colaborador, posicion, distrito, id_posicion
+        FROM hc
+        WHERE numero_talento_gs = ?
+          AND semana = ?
+          AND anio = ?
+        ORDER BY anio DESC, semana DESC, id DESC
+        LIMIT 1
+    ");
+    if ($stmt_nombre) {
+        mysqli_stmt_bind_param($stmt_nombre, "sii", $talento_gs, $semana_actual, $anio_actual);
+        mysqli_stmt_execute($stmt_nombre);
+        $res_nombre = mysqli_stmt_get_result($stmt_nombre);
+        if ($row_nombre = mysqli_fetch_assoc($res_nombre)) {
+            $nombre_completo  = $row_nombre['nombre_colaborador'] ?? $nombre_usuario;
+            $posicion_usuario = $row_nombre['posicion'] ?? '';
+            $distrito_usuario = $row_nombre['distrito'] ?? '';
+            // Refresca id_posicion en memoria si el HC vigente lo trae actualizado.
+            if (!empty($row_nombre['id_posicion'])) {
+                $id_posicion = $row_nombre['id_posicion'];
+            }
+        }
+        mysqli_stmt_close($stmt_nombre);
     }
-    mysqli_stmt_close($stmt_nombre);
+}
+
+if (($nombre_completo === $nombre_usuario || $posicion_usuario === '') && !empty($id_posicion) && $semana_actual && $anio_actual) {
+    $stmt_nombre = mysqli_prepare($conexion, "
+        SELECT nombre_colaborador, posicion, distrito
+        FROM hc
+        WHERE id_posicion = ?
+          AND semana = ?
+          AND anio = ?
+        ORDER BY id DESC
+        LIMIT 1
+    ");
+    if ($stmt_nombre) {
+        mysqli_stmt_bind_param($stmt_nombre, "sii", $id_posicion, $semana_actual, $anio_actual);
+        mysqli_stmt_execute($stmt_nombre);
+        $res_nombre = mysqli_stmt_get_result($stmt_nombre);
+        if ($row_nombre = mysqli_fetch_assoc($res_nombre)) {
+            $nombre_completo  = $row_nombre['nombre_colaborador'] ?? $nombre_usuario;
+            $posicion_usuario = $row_nombre['posicion'] ?? '';
+            $distrito_usuario = $row_nombre['distrito'] ?? '';
+        }
+        mysqli_stmt_close($stmt_nombre);
+    }
+}
+
+if (($nombre_completo === $nombre_usuario || $posicion_usuario === '') && !empty($id_posicion)) {
+    $stmt_nombre = mysqli_prepare($conexion, "
+        SELECT nombre_colaborador, posicion, distrito
+        FROM hc
+        WHERE id_posicion = ?
+        ORDER BY anio DESC, semana DESC, id DESC
+        LIMIT 1
+    ");
+    if ($stmt_nombre) {
+        mysqli_stmt_bind_param($stmt_nombre, "s", $id_posicion);
+        mysqli_stmt_execute($stmt_nombre);
+        $res_nombre = mysqli_stmt_get_result($stmt_nombre);
+        if ($row_nombre = mysqli_fetch_assoc($res_nombre)) {
+            $nombre_completo  = $row_nombre['nombre_colaborador'] ?? $nombre_usuario;
+            $posicion_usuario = $row_nombre['posicion'] ?? '';
+            $distrito_usuario = $row_nombre['distrito'] ?? '';
+        }
+        mysqli_stmt_close($stmt_nombre);
+    }
 }
 
 // --- FILTRADO POR JERARQUÍA ---
