@@ -3468,7 +3468,13 @@ include __DIR__ . '/includes/sidebar.php';
                     <form method="get" id="dashboardRangeForm">
                         <?php foreach ($_GET as $k => $v): ?>
                             <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode','mes','anio'], true)): ?>
-                                <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                                <?php if (is_array($v)): ?>
+                                    <?php foreach ($v as $v_item): ?>
+                                        <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
+                                <?php endif; ?>
                             <?php endif; ?>
                         <?php endforeach; ?>
                         <input type="hidden" name="rango_mode" value="custom">
@@ -3570,7 +3576,13 @@ include __DIR__ . '/includes/sidebar.php';
         <form method="get" class="hierarchy-form">
             <?php foreach ($_GET as $k => $v): ?>
                 <?php if (!in_array($k, ['scope_pos'], true)): ?>
-                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                    <?php if (is_array($v)): ?>
+                        <?php foreach ($v as $v_item): ?>
+                            <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
+                    <?php endif; ?>
                 <?php endif; ?>
             <?php endforeach; ?>
 

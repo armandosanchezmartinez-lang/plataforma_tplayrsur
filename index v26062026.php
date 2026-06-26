@@ -2316,19 +2316,51 @@ function tx_geo_sql_col_expr($col, $default_label) {
     return "COALESCE(NULLIF(TRIM($col_sql),''),'" . str_replace("'", "''", $default_label) . "')";
 }
 
+function tx_geo_sql_multi_col_expr($conexion, $candidatos, $default_label, $extra_exprs = []) {
+    /*
+     * Devuelve el primer valor no vacío de una lista de columnas candidatas.
+     * Esto corrige casos donde existe una columna genérica como vendedor,
+     * pero el nombre real viene en otro campo o debe recuperarse desde HC.
+     */
+    $exprs = [];
+    foreach ($candidatos as $cand) {
+        $cand_esc = mysqli_real_escape_string($conexion, $cand);
+        $r = mysqli_query($conexion, "SHOW COLUMNS FROM instalaciones LIKE '$cand_esc'");
+        if ($r && mysqli_num_rows($r) > 0) {
+            $col_sql = "`" . str_replace("`", "", $cand) . "`";
+            $exprs[] = "NULLIF(TRIM($col_sql),'')";
+        }
+    }
+
+    foreach ($extra_exprs as $expr) {
+        if (trim((string)$expr) !== '') {
+            $exprs[] = $expr;
+        }
+    }
+
+    $default_sql = "'" . str_replace("'", "''", $default_label) . "'";
+    if (empty($exprs)) return $default_sql;
+    return "COALESCE(" . implode(',', $exprs) . ",$default_sql)";
+}
+
 function tx_geo_sql_precio_expr($col) {
     if ($col === '') return "0";
     $col_sql = "`" . str_replace("`", "", $col) . "`";
     return "COALESCE(CAST($col_sql AS DECIMAL(12,2)),0)";
 }
 
-$tx_geo_col_vendedor = tx_geo_instalaciones_columna($conexion, ['vendedor','nombre_vendedor','nombre_colaborador','asesor','ejecutivo']);
 $tx_geo_col_coach    = tx_geo_instalaciones_columna($conexion, ['coach','nombre_coach']);
 $tx_geo_col_plan     = tx_geo_instalaciones_columna($conexion, ['plan','nombre_plan','paquete']);
 $tx_geo_col_precio   = tx_geo_instalaciones_columna($conexion, ['precio_pronto_pago','precio_lista_con_descuento','precio_descuento','precio_lista','precio']);
 
-$tx_geo_expr_vendedor = tx_geo_sql_col_expr($tx_geo_col_vendedor, 'SIN VENDEDOR');
-$tx_geo_expr_coach    = tx_geo_sql_col_expr($tx_geo_col_coach, 'SIN COACH');
+$tx_geo_hc_vendedor_expr = "(SELECT NULLIF(TRIM(hgeo.nombre_colaborador),'') FROM hc hgeo WHERE hgeo.numero_talento_gs = folio_empleado AND hgeo.numero_talento_gs NOT LIKE '%VACANTE%' AND hgeo.semana = " . (int)$semana_actual . " AND hgeo.anio = " . (int)$anio_actual . " ORDER BY hgeo.id DESC LIMIT 1)";
+$tx_geo_expr_vendedor = tx_geo_sql_multi_col_expr(
+    $conexion,
+    ['nombre_vendedor','vendedor','vendedor_nombre','nombre_colaborador','asesor','ejecutivo'],
+    'SIN VENDEDOR',
+    [$tx_geo_hc_vendedor_expr]
+);
+$tx_geo_expr_coach    = tx_geo_sql_multi_col_expr($conexion, ['coach','nombre_coach','coach_nombre'], 'SIN COACH');
 $tx_geo_expr_precio   = tx_geo_sql_precio_expr($tx_geo_col_precio);
 
 if ($tx_geo_col_plan !== '') {
