@@ -786,6 +786,7 @@ coaches_raw AS (
         la.lider_hc AS lider,
         h.nombre_colaborador AS coach,
         h.id_posicion AS coach_pos,
+        h.numero_talento_gs AS folio_coach_hc,
         CONCAT(la.distrito_reporte, '|', la.lider_hc, '|', h.nombre_colaborador, '|', h.id_posicion) AS coach_key,
         h.semana,
         h.anio
@@ -806,9 +807,10 @@ coaches_base AS (
         lider,
         coach,
         coach_pos,
+        folio_coach_hc,
         coach_key
     FROM coaches_raw
-    GROUP BY distrito, distrito_hc, lider, coach, coach_pos, coach_key
+    GROUP BY distrito, distrito_hc, lider, coach, coach_pos, folio_coach_hc, coach_key
 ),
 vendedores AS (
     SELECT DISTINCT
@@ -846,7 +848,10 @@ ventas_base AS (
        AND la.lider_hc = c.lider
     LEFT JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
-       AND i.coach = c.coach
+       AND (
+            (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
+            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+       )
        AND {$cond_i_base}
     GROUP BY c.coach_key
 ),
@@ -860,7 +865,10 @@ ventas_actual AS (
        AND la.lider_hc = c.lider
     LEFT JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
-       AND i.coach = c.coach
+       AND (
+            (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
+            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+       )
        AND {$cond_i_actual}
     GROUP BY c.coach_key
 ),
@@ -947,6 +955,7 @@ coaches_base AS (
         la.lider_instalaciones,
         h.nombre_colaborador AS coach,
         h.id_posicion AS coach_pos,
+        h.numero_talento_gs AS folio_coach_hc,
         CONCAT(h.nombre_colaborador, '|', h.id_posicion) AS coach_key,
         h.semana,
         h.anio
@@ -1023,7 +1032,10 @@ ventas_base AS (
     FROM coaches_base c
     LEFT JOIN instalaciones i
         ON i.lider = c.lider_instalaciones
-       AND i.coach = c.coach
+       AND (
+            (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
+            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+       )
        AND {$cond_i_base}
     GROUP BY c.coach_key
 ),
@@ -1034,7 +1046,10 @@ ventas_actual AS (
     FROM coaches_base c
     LEFT JOIN instalaciones i
         ON i.lider = c.lider_instalaciones
-       AND i.coach = c.coach
+       AND (
+            (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
+            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+       )
        AND {$cond_i_actual}
     GROUP BY c.coach_key
 ),
@@ -1049,7 +1064,10 @@ ventas_sin_coach_base AS (
        AND {$cond_i_base}
     LEFT JOIN coaches_base c
         ON c.lider_instalaciones = i.lider
-       AND c.coach = i.coach
+       AND (
+            (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
+            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+       )
     WHERE c.coach_key IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
@@ -1064,7 +1082,10 @@ ventas_sin_coach_actual AS (
        AND {$cond_i_actual}
     LEFT JOIN coaches_base c
         ON c.lider_instalaciones = i.lider
-       AND c.coach = i.coach
+       AND (
+            (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
+            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+       )
     WHERE c.coach_key IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
