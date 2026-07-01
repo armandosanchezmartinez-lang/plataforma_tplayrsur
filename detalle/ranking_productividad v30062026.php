@@ -613,6 +613,15 @@ $vendedor_param  = $_GET['vendedor'] ?? '';
 $folio_param     = $_GET['folio'] ?? '';
 
 $distrito_sql  = esc($conexion, $distrito_param);
+
+// Normalización específica de distrito para cruces HC vs Ranking.
+// Ranking muestra COATZA-MINA, pero la tabla HC conserva COATZA MINA.
+$distrito_hc_param = $distrito_param;
+if (strtoupper(trim($distrito_hc_param)) === 'COATZA-MINA') {
+    $distrito_hc_param = 'COATZA MINA';
+}
+$distrito_hc_sql = esc($conexion, $distrito_hc_param);
+
 $lider_sql     = esc($conexion, $lider_param);
 $coach_sql     = esc($conexion, $coach_param);
 $coach_pos_sql = esc($conexion, $coach_pos_param);
@@ -927,7 +936,7 @@ WITH {$lideres_cte},
 selected_lider AS (
     SELECT *
     FROM lideres_activos
-    WHERE distrito_reporte = '{$distrito_sql}'
+    WHERE (distrito_reporte = '{$distrito_sql}' OR distrito_hc = '{$distrito_hc_sql}')
       AND lider_hc = '{$lider_sql}'
 ),
 coaches_base AS (
@@ -1142,7 +1151,7 @@ WITH vendedores_base AS (
         h.numero_talento_gs AS folio_empleado,
         {$antiguedad_expr} AS antiguedad
     FROM hc h
-    WHERE h.distrito = '{$distrito_sql}'
+    WHERE h.distrito = '{$distrito_hc_sql}'
       AND h.puesto_lr LIKE '%COACH%'
       AND h.numero_talento_gs <> 'VACANTE'
       AND h.nombre_colaborador <> 'VACANTE'
