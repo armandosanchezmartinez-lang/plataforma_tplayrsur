@@ -850,7 +850,18 @@ ventas_base AS (
         ON i.lider = la.lider_instalaciones
        AND (
             (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
-            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                -- Match legacy cuando instalaciones trae NOMBRE + APELLIDOS
+                -- y HC trae APELLIDOS + NOMBRE. Ejemplo:
+                -- i.coach = 'ALONDRA YAZMIN GONZALEZ FRANCO'
+                -- c.coach = 'GONZALEZ FRANCO ALONDRA YAZMIN'
+                UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+                OR (
+                    UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', 1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(c.coach), ' ', 2), ' ', -1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', -1)), '%')
+                )
+            )
        )
        AND {$cond_i_base}
     GROUP BY c.coach_key
@@ -867,7 +878,18 @@ ventas_actual AS (
         ON i.lider = la.lider_instalaciones
        AND (
             (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
-            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                -- Match legacy cuando instalaciones trae NOMBRE + APELLIDOS
+                -- y HC trae APELLIDOS + NOMBRE. Ejemplo:
+                -- i.coach = 'ALONDRA YAZMIN GONZALEZ FRANCO'
+                -- c.coach = 'GONZALEZ FRANCO ALONDRA YAZMIN'
+                UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+                OR (
+                    UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', 1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(c.coach), ' ', 2), ' ', -1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', -1)), '%')
+                )
+            )
        )
        AND {$cond_i_actual}
     GROUP BY c.coach_key
@@ -1034,7 +1056,18 @@ ventas_base AS (
         ON i.lider = c.lider_instalaciones
        AND (
             (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
-            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                -- Match legacy cuando instalaciones trae NOMBRE + APELLIDOS
+                -- y HC trae APELLIDOS + NOMBRE. Ejemplo:
+                -- i.coach = 'ALONDRA YAZMIN GONZALEZ FRANCO'
+                -- c.coach = 'GONZALEZ FRANCO ALONDRA YAZMIN'
+                UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+                OR (
+                    UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', 1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(c.coach), ' ', 2), ' ', -1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', -1)), '%')
+                )
+            )
        )
        AND {$cond_i_base}
     GROUP BY c.coach_key
@@ -1048,7 +1081,18 @@ ventas_actual AS (
         ON i.lider = c.lider_instalaciones
        AND (
             (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
-            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                -- Match legacy cuando instalaciones trae NOMBRE + APELLIDOS
+                -- y HC trae APELLIDOS + NOMBRE. Ejemplo:
+                -- i.coach = 'ALONDRA YAZMIN GONZALEZ FRANCO'
+                -- c.coach = 'GONZALEZ FRANCO ALONDRA YAZMIN'
+                UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+                OR (
+                    UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', 1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(c.coach), ' ', 2), ' ', -1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', -1)), '%')
+                )
+            )
        )
        AND {$cond_i_actual}
     GROUP BY c.coach_key
@@ -1066,7 +1110,18 @@ ventas_sin_coach_base AS (
         ON c.lider_instalaciones = i.lider
        AND (
             (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
-            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                -- Match legacy cuando instalaciones trae NOMBRE + APELLIDOS
+                -- y HC trae APELLIDOS + NOMBRE. Ejemplo:
+                -- i.coach = 'ALONDRA YAZMIN GONZALEZ FRANCO'
+                -- c.coach = 'GONZALEZ FRANCO ALONDRA YAZMIN'
+                UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+                OR (
+                    UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', 1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(c.coach), ' ', 2), ' ', -1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', -1)), '%')
+                )
+            )
        )
     WHERE c.coach_key IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
@@ -1084,7 +1139,18 @@ ventas_sin_coach_actual AS (
         ON c.lider_instalaciones = i.lider
        AND (
             (NULLIF(i.folio_coach,'') IS NOT NULL AND NULLIF(c.folio_coach_hc,'') IS NOT NULL AND i.folio_coach = c.folio_coach_hc)
-            OR UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                -- Match legacy cuando instalaciones trae NOMBRE + APELLIDOS
+                -- y HC trae APELLIDOS + NOMBRE. Ejemplo:
+                -- i.coach = 'ALONDRA YAZMIN GONZALEZ FRANCO'
+                -- c.coach = 'GONZALEZ FRANCO ALONDRA YAZMIN'
+                UPPER(TRIM(i.coach)) = UPPER(TRIM(c.coach))
+                OR (
+                    UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', 1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(c.coach), ' ', 2), ' ', -1)), '%')
+                    AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', UPPER(SUBSTRING_INDEX(TRIM(c.coach), ' ', -1)), '%')
+                )
+            )
        )
     WHERE c.coach_key IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
