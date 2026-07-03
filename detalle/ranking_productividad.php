@@ -654,6 +654,25 @@ $segmento_col = first_existing_column($conexion, 'instalaciones', [
 
 $segmento_select_expr = $segmento_col ? "i.`$segmento_col`" : "''";
 
+// Clasificación comercial para el rollout a nivel vendedor.
+// Antes solo se tomaba NEGOCIOS si el campo segmento contenía "NEGOC".
+// En instalaciones legacy, algunos paquetes de oferta negocios viajan en plan/subcanal
+// y el segmento puede venir vacío o como residencial; por eso se arma una señal amplia.
+$clasificacion_negocio_expr = "UPPER(CONCAT_WS(' ',
+    COALESCE({$segmento_select_expr},''),
+    COALESCE(i.plan,''),
+    COALESCE(i.subcanal,'')
+))";
+
+$cond_negocios_actual = "{$cond_mix_actual} AND (
+       {$clasificacion_negocio_expr} LIKE '%NEGOC%'
+    OR {$clasificacion_negocio_expr} LIKE '%PYME%'
+    OR {$clasificacion_negocio_expr} LIKE '%EMPRES%'
+    OR {$clasificacion_negocio_expr} LIKE '%BUSINESS%'
+    OR {$clasificacion_negocio_expr} LIKE '%COMERCIAL%'
+    OR {$clasificacion_negocio_expr} LIKE '%SOHO%'
+)";
+
 $lideres_cte = "
 lideres_activos AS (
     SELECT 'CANCUN' AS distrito_reporte, 'CANCUN' AS distrito_hc, 'COTO FELIX ERICK DANIEL' AS lider_hc, 'COTO FELIX ERICK DANIEL' AS lider_instalaciones
@@ -1185,12 +1204,11 @@ ventas_vendedor AS (
                  AND UPPER(COALESCE(i.plan,'')) NOT LIKE '%TV%' 
                 THEN 1 ELSE 0 END) AS doble_play,
         SUM(CASE 
-                WHEN {$cond_mix_actual}
-                 AND UPPER(COALESCE({$segmento_select_expr},'')) LIKE '%NEGOC%' 
+                WHEN {$cond_negocios_actual}
                 THEN 1 ELSE 0 END) AS negocios,
         SUM(CASE 
                 WHEN {$cond_mix_actual}
-                 AND UPPER(COALESCE({$segmento_select_expr},'')) NOT LIKE '%NEGOC%' 
+                 AND NOT ({$cond_negocios_actual})
                 THEN 1 ELSE 0 END) AS residencial
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
