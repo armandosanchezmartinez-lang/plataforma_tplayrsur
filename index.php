@@ -1152,40 +1152,76 @@ function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
     |--------------------------------------------------------------------------
     | TOTALXPEDIENT - RESIDENCIAL / NEGOCIOS EN VENTAS
     |--------------------------------------------------------------------------
-    | Misma lógica de catálogo que instalaciones:
-    | ventas.nombre_plan / plan / paquete se empata contra
-    | catalogo_paquetes.nombre_plan.
+    |
+    | FIX:
+    | La vista OFERTA RES-NEG en VENTAS debe usar la lógica del catálogo de
+    | paquetes, igual que Ranking Vendedor. No se deben usar columnas genéricas
+    | de ventas como negocio/unidad_negocio/linea_negocio porque pueden contener
+    | valores operativos y provocar que todo caiga como NEGOCIOS.
+    |
+    | Regla:
+    |   1) Buscar el paquete vendido en ventas.
+    |   2) Empatar contra catalogo_paquetes.nombre_plan.
+    |   3) Clasificar por columnas del catálogo o por el nombre del plan.
+    |   4) Si no hay match o no hay dato claro, default = RESIDENCIAL.
     |--------------------------------------------------------------------------
     */
     $prefix = $alias !== '' ? "`" . str_replace("`", "", $alias) . "`." : "";
 
-    $plan_cols = ['nombre_plan', 'plan', 'paquete', 'nombre_paquete'];
+    $plan_cols = [
+        'nombre_plan',
+        'plan',
+        'paquete',
+        'nombre_paquete',
+        'paquete_contratado',
+        'producto',
+        'nombre_producto',
+        'oferta'
+    ];
+
     $plan_parts = [];
     foreach ($plan_cols as $col) {
         if (tx_columna_existe_dashboard($conexion, 'ventas', $col)) {
             $plan_parts[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
         }
     }
-    $plan_expr = !empty($plan_parts) ? "COALESCE(" . implode(", ", $plan_parts) . ", '')" : "''";
+
+    if (empty($plan_parts)) {
+        return "'RESIDENCIAL'";
+    }
+
+    $plan_expr = "COALESCE(" . implode(", ", $plan_parts) . ", '')";
 
     $sources = [];
 
     if (
         tx_tabla_existe_dashboard($conexion, 'catalogo_paquetes') &&
-        tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan') &&
-        !empty($plan_parts)
+        tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan')
     ) {
         $cat_cols = [
-            'segmento','tipo_segmento','tipo_cliente','tipo_servicio','tipo_venta',
-            'mercado','unidad_negocio','negocio','linea_negocio','categoria',
-            'familia','tipo','producto'
+            'segmento',
+            'tipo_segmento',
+            'tipo_cliente',
+            'tipo_servicio',
+            'tipo_venta',
+            'mercado',
+            'unidad_negocio',
+            'negocio',
+            'linea_negocio',
+            'categoria',
+            'familia',
+            'tipo',
+            'producto'
         ];
+
         $cat_parts = [];
         foreach ($cat_cols as $col) {
             if (tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', $col)) {
                 $cat_parts[] = "NULLIF(TRIM(cp.`" . str_replace("`", "", $col) . "`),'')";
             }
         }
+
+        // Respaldo principal del catálogo.
         $cat_parts[] = "NULLIF(TRIM(cp.`nombre_plan`),'')";
 
         $sources[] = "(
@@ -1196,18 +1232,9 @@ function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
         )";
     }
 
-    $venta_cols = [
-        'segmento','tipo_segmento','tipo_cliente','tipo_servicio','tipo_venta',
-        'mercado','unidad_negocio','negocio','linea_negocio','canal_segmento','categoria'
-    ];
-    foreach ($venta_cols as $col) {
-        if (tx_columna_existe_dashboard($conexion, 'ventas', $col)) {
-            $sources[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
-        }
-    }
-    if (!empty($plan_parts)) $sources[] = $plan_expr;
-
-    if (empty($sources)) return "'RESIDENCIAL'";
+    // Respaldo final: solamente el nombre del paquete/plan de ventas.
+    // No usamos columnas operativas de ventas para evitar falsos NEGOCIOS.
+    $sources[] = $plan_expr;
 
     $segmento_expr = "UPPER(COALESCE(" . implode(", ", $sources) . ", ''))";
 
