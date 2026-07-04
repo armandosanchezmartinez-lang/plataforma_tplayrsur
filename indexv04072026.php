@@ -1146,83 +1146,6 @@ function tx_segmento_instalacion_expr_dashboard($conexion, $alias = '') {
     END";
 }
 
-
-function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
-    /*
-    |--------------------------------------------------------------------------
-    | TOTALXPEDIENT - RESIDENCIAL / NEGOCIOS EN VENTAS
-    |--------------------------------------------------------------------------
-    | Misma lógica de catálogo que instalaciones:
-    | ventas.nombre_plan / plan / paquete se empata contra
-    | catalogo_paquetes.nombre_plan.
-    |--------------------------------------------------------------------------
-    */
-    $prefix = $alias !== '' ? "`" . str_replace("`", "", $alias) . "`." : "";
-
-    $plan_cols = ['nombre_plan', 'plan', 'paquete', 'nombre_paquete'];
-    $plan_parts = [];
-    foreach ($plan_cols as $col) {
-        if (tx_columna_existe_dashboard($conexion, 'ventas', $col)) {
-            $plan_parts[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
-        }
-    }
-    $plan_expr = !empty($plan_parts) ? "COALESCE(" . implode(", ", $plan_parts) . ", '')" : "''";
-
-    $sources = [];
-
-    if (
-        tx_tabla_existe_dashboard($conexion, 'catalogo_paquetes') &&
-        tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan') &&
-        !empty($plan_parts)
-    ) {
-        $cat_cols = [
-            'segmento','tipo_segmento','tipo_cliente','tipo_servicio','tipo_venta',
-            'mercado','unidad_negocio','negocio','linea_negocio','categoria',
-            'familia','tipo','producto'
-        ];
-        $cat_parts = [];
-        foreach ($cat_cols as $col) {
-            if (tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', $col)) {
-                $cat_parts[] = "NULLIF(TRIM(cp.`" . str_replace("`", "", $col) . "`),'')";
-            }
-        }
-        $cat_parts[] = "NULLIF(TRIM(cp.`nombre_plan`),'')";
-
-        $sources[] = "(
-            SELECT COALESCE(" . implode(", ", $cat_parts) . ", '')
-            FROM catalogo_paquetes cp
-            WHERE UPPER(TRIM(cp.`nombre_plan`)) = UPPER(TRIM($plan_expr))
-            LIMIT 1
-        )";
-    }
-
-    $venta_cols = [
-        'segmento','tipo_segmento','tipo_cliente','tipo_servicio','tipo_venta',
-        'mercado','unidad_negocio','negocio','linea_negocio','canal_segmento','categoria'
-    ];
-    foreach ($venta_cols as $col) {
-        if (tx_columna_existe_dashboard($conexion, 'ventas', $col)) {
-            $sources[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
-        }
-    }
-    if (!empty($plan_parts)) $sources[] = $plan_expr;
-
-    if (empty($sources)) return "'RESIDENCIAL'";
-
-    $segmento_expr = "UPPER(COALESCE(" . implode(", ", $sources) . ", ''))";
-
-    return "CASE
-        WHEN $segmento_expr LIKE '%NEGOC%'
-          OR $segmento_expr LIKE '%BUSINESS%'
-          OR $segmento_expr LIKE '%EMPRES%'
-          OR $segmento_expr LIKE '%PYME%'
-          OR $segmento_expr LIKE '%SME%'
-        THEN 'NEGOCIOS'
-        ELSE 'RESIDENCIAL'
-    END";
-}
-
-
 function tx_mix_res_neg_where_dashboard($conexion, $where_sql) {
     $expr = tx_segmento_instalacion_expr_dashboard($conexion);
     $sql = "
@@ -1827,22 +1750,6 @@ $vent_2p = (int)($mix_vent['p2'] ?? 0);
 $meses_labels = [];
 $datos_inst_stacked = []; 
 $datos_vent_stacked = [];
-$datos_inst_oferta_stacked = [
-    'Residencial' => array_fill(0, 6, 0),
-    'Negocios' => array_fill(0, 6, 0),
-];
-$datos_vent_oferta_stacked = [
-    'Residencial' => array_fill(0, 6, 0),
-    'Negocios' => array_fill(0, 6, 0),
-];
-
-// Selector exclusivo para las tarjetas Evolución y Participación.
-$evo_view = (isset($_GET['evo_view']) && $_GET['evo_view'] === 'oferta') ? 'oferta' : 'canal';
-$evo_titulo = ($evo_view === 'oferta') ? 'Evolución — Últimos 6 meses por oferta RES-NEG' : 'Evolución — Últimos 6 meses por canal';
-$evo_participacion_titulo = ($evo_view === 'oferta') ? 'Participación por oferta RES-NEG — Últimos 6 meses (%)' : 'Participación por canal — Últimos 6 meses (%)';
-$evo_vent_sub = ($evo_view === 'oferta') ? 'Ventas por oferta RES-NEG' : 'Ventas por canal';
-$evo_inst_sub = ($evo_view === 'oferta') ? 'Instalaciones por oferta RES-NEG' : 'Instalaciones por origen';
-$evo_col_label = ($evo_view === 'oferta') ? 'Oferta' : 'Canal';
 
 // Fecha inicial alineada a los 6 meses mostrados en el dashboard.
 // Evita que el primer mes del periodo quede incompleto o en cero
@@ -1948,63 +1855,6 @@ while($row = mysqli_fetch_assoc($res_v)) {
         if(!isset($datos_vent_stacked[$canal])) $datos_vent_stacked[$canal] = array_fill(0, 6, 0);
         $datos_vent_stacked[$canal][$idx] = (int)$row['total'];
     }
-}
-
-// 3. Datos por Oferta RES-NEG para las mismas tarjetas de Evolución y Participación.
-// Este selector NO afecta las tarjetas superiores ni los TOP/BOTTOM.
-$segmento_inst_expr_evo = tx_segmento_instalacion_expr_dashboard($conexion);
-$query_inst_oferta = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, ($segmento_inst_expr_evo) as oferta, COUNT(*) as total
-    FROM instalaciones
-    WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_inst_oferta .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
-    $query_inst_oferta .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_inst_oferta .= " AND folio_empleado IN ('$ph')";
-}
-$query_inst_oferta .= " GROUP BY anio, mes, oferta";
-
-$res_io = mysqli_query($conexion, $query_inst_oferta);
-while($row = $res_io ? mysqli_fetch_assoc($res_io) : null) {
-    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
-    $idx = array_search($label_mes, $meses_labels);
-    if($idx !== false) {
-        $oferta = (strtoupper((string)$row['oferta']) === 'NEG' || strtoupper((string)$row['oferta']) === 'NEGOCIOS') ? 'Negocios' : 'Residencial';
-        $datos_inst_oferta_stacked[$oferta][$idx] = (int)$row['total'];
-    }
-}
-
-$segmento_venta_expr_evo = tx_segmento_venta_expr_dashboard($conexion);
-$query_vent_oferta = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, ($segmento_venta_expr_evo) as oferta, COUNT(*) as total
-    FROM ventas
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_vent_oferta .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
-    $query_vent_oferta .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_vent_oferta .= " AND folio_empleado IN ('$ph')";
-}
-$query_vent_oferta .= " GROUP BY anio, mes, oferta";
-
-$res_vo = mysqli_query($conexion, $query_vent_oferta);
-while($row = $res_vo ? mysqli_fetch_assoc($res_vo) : null) {
-    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
-    $idx = array_search($label_mes, $meses_labels);
-    if($idx !== false) {
-        $oferta = (strtoupper((string)$row['oferta']) === 'NEG' || strtoupper((string)$row['oferta']) === 'NEGOCIOS') ? 'Negocios' : 'Residencial';
-        $datos_vent_oferta_stacked[$oferta][$idx] = (int)$row['total'];
-    }
-}
-
-// Si el selector está en Oferta RES-NEG, sustituimos únicamente las matrices usadas
-// por las tarjetas Evolución y Participación.
-if ($evo_view === 'oferta') {
-    $datos_inst_stacked = $datos_inst_oferta_stacked;
-    $datos_vent_stacked = $datos_vent_oferta_stacked;
 }
 
 $colores_palette = ['#FF006C', '#7A2BFF', '#00A6FF', '#00E5FF', '#FF6500', '#7CFF00', '#2C2F3A'];
@@ -3800,41 +3650,7 @@ if ($tx_geo_sum_count > 0) {
             #txGeoMap{height:420px}
         }
 
-    
-        .evo-card-head{
-            display:flex;
-            align-items:center;
-            justify-content:space-between;
-            gap:14px;
-            flex-wrap:wrap;
-        }
-        .evo-toggle{
-            display:inline-flex;
-            gap:6px;
-            padding:4px;
-            border-radius:999px;
-            background:#EEF2FF;
-            border:1px solid #E0E3EA;
-        }
-        .evo-toggle a{
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-            padding:7px 11px;
-            border-radius:999px;
-            font-size:.72rem;
-            font-weight:900;
-            text-decoration:none;
-            color:#64748B;
-            white-space:nowrap;
-        }
-        .evo-toggle a.active{
-            color:#fff;
-            background:linear-gradient(135deg,#7A2BFF,#FF006C);
-            box-shadow:0 8px 18px rgba(122,43,255,.18);
-        }
-
-</style>
+    </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
@@ -4328,27 +4144,15 @@ include __DIR__ . '/includes/sidebar.php';
 
     </div>
 
-    <?php
-        $qs_evo_canal = $_GET;
-        $qs_evo_canal['evo_view'] = 'canal';
-        $qs_evo_oferta = $_GET;
-        $qs_evo_oferta['evo_view'] = 'oferta';
-    ?>
     <div class="evo-card">
-        <div class="evo-card-head">
-            <div class="chart-title"><?= htmlspecialchars($evo_titulo) ?></div>
-            <div class="evo-toggle" aria-label="Selector de vista de evolución">
-                <a class="<?= $evo_view === 'canal' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_canal)) ?>">CANAL DE VENTA</a>
-                <a class="<?= $evo_view === 'oferta' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_oferta)) ?>">OFERTA RES-NEG</a>
-            </div>
-        </div>
+        <div class="chart-title">Evolución — Últimos 6 meses por canal</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                <div class="evo-sub">Ventas por canal</div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
             </div>
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                <div class="evo-sub">Instalaciones por origen</div>
                 <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
@@ -4358,16 +4162,16 @@ include __DIR__ . '/includes/sidebar.php';
     <!-- TABLA DE PARTICIPACIÓN POR CANAL -->
     <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked)): ?>
     <div class="evo-card" style="margin-top:20px;">
-        <div class="chart-title"><?= htmlspecialchars($evo_participacion_titulo) ?></div>
+        <div class="chart-title">Participación por canal — Últimos 6 meses (%)</div>
         <div class="evo-grid" style="margin-top:16px;">
             <!-- VENTAS -->
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                <div class="evo-sub">Ventas por canal</div>
                 <div class="top-productividad-table-wrap">
                 <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead>
                         <tr>
-                            <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;"><?= htmlspecialchars($evo_col_label) ?></th>
+                            <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;">Canal</th>
                             <?php foreach ($meses_labels as $idx_mes => $ml): ?>
                             <th style="text-align:center;padding:7px 8px;background:#e8f0fe;color:#000;font-size:0.7rem;">
                                 <a href="<?= dashboard_sort_url('sort_vent_mes','sort_vent_dir',$idx_mes,$sort_vent_idx,$sort_vent_dir) ?>" style="color:#000;text-decoration:none;display:inline-flex;gap:4px;align-items:center;justify-content:center;font-weight:700;">
@@ -4404,12 +4208,12 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
             <!-- INSTALACIONES -->
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                <div class="evo-sub">Instalaciones por origen</div>
                 <div class="top-productividad-table-wrap">
                 <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead>
                         <tr>
-                            <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;"><?= htmlspecialchars($evo_col_label) ?></th>
+                            <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;">Origen</th>
                             <?php foreach ($meses_labels as $idx_mes => $ml): ?>
                             <th style="text-align:center;padding:7px 8px;background:#e8f0fe;color:#000;font-size:0.7rem;">
                                 <a href="<?= dashboard_sort_url('sort_inst_mes','sort_inst_dir',$idx_mes,$sort_inst_idx,$sort_inst_dir) ?>" style="color:#000;text-decoration:none;display:inline-flex;gap:4px;align-items:center;justify-content:center;font-weight:700;">
@@ -4928,8 +4732,6 @@ const canalColores = {
     'Distribuidor':                '#FF8A00',
     'Autoempresarios Autorizados': '#3B5BFF',
     'Otro':                        txBrandColors.grisClaro,
-    'Residencial':                 txBrandColors.azulElectrico,
-    'Negocios':                    txBrandColors.magenta,
 };
 
 // ... (Obtención de datasets igual que antes) ...
