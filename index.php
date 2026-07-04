@@ -1152,12 +1152,13 @@ function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
     |--------------------------------------------------------------------------
     | TOTALXPEDIENT - VENTAS POR OFERTA RES-NEG
     |--------------------------------------------------------------------------
-    | Regla corregida:
-    |   ventas.nombre_plan  =  catalogo_paquetes.nombre_plan
+    | Regla final:
+    |   ventas.nombre_plan = catalogo_paquetes.nombre_plan
+    |   catalogo_paquetes.tipo = RESIDENCIAL / NEGOCIOS
     |
-    | Esta función ya NO usa columnas operativas de ventas.
-    | Si catalogo_paquetes identifica el paquete como Negocios, clasifica NEGOCIOS.
-    | Si no hay match o no hay palabra clave de Negocios, clasifica RESIDENCIAL.
+    | IMPORTANTE:
+    | Se usa MATCH EXACTO contra nombre_plan. No usar LIKE parcial porque puede
+    | cruzar contra paquetes incorrectos y distorsionar la mezcla RES-NEG.
     |--------------------------------------------------------------------------
     */
     $prefix = $alias !== '' ? "`" . str_replace("`", "", $alias) . "`." : "";
@@ -1165,57 +1166,18 @@ function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
     if (
         !tx_columna_existe_dashboard($conexion, 'ventas', 'nombre_plan') ||
         !tx_tabla_existe_dashboard($conexion, 'catalogo_paquetes') ||
-        !tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan')
+        !tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan') ||
+        !tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'tipo')
     ) {
         return "'RESIDENCIAL'";
     }
 
-    $plan_expr = "NULLIF(TRIM(" . $prefix . "`nombre_plan`),'')";
-
-    $cat_cols = [
-        'segmento',
-        'tipo_segmento',
-        'tipo_cliente',
-        'tipo_servicio',
-        'tipo_venta',
-        'mercado',
-        'unidad_negocio',
-        'negocio',
-        'linea_negocio',
-        'categoria',
-        'familia',
-        'tipo',
-        'producto',
-        'nombre_plan'
-    ];
-
-    $cat_parts = [];
-    foreach ($cat_cols as $col) {
-        if (tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', $col)) {
-            $cat_parts[] = "COALESCE(cp.`" . str_replace("`", "", $col) . "`,'')";
-        }
-    }
-
-    if (empty($cat_parts)) {
-        $cat_parts[] = "COALESCE(cp.`nombre_plan`,'')";
-    }
-
-    $cat_text_expr = "(
-        SELECT UPPER(CONCAT_WS(' ', " . implode(", ", $cat_parts) . "))
+    return "COALESCE((
+        SELECT cp.`tipo`
         FROM catalogo_paquetes cp
-        WHERE UPPER(TRIM(cp.`nombre_plan`)) = UPPER(TRIM($plan_expr))
+        WHERE UPPER(TRIM(cp.`nombre_plan`)) = UPPER(TRIM(" . $prefix . "`nombre_plan`))
         LIMIT 1
-    )";
-
-    return "CASE
-        WHEN COALESCE($cat_text_expr, '') LIKE '%NEGOC%'
-          OR COALESCE($cat_text_expr, '') LIKE '%BUSINESS%'
-          OR COALESCE($cat_text_expr, '') LIKE '%EMPRES%'
-          OR COALESCE($cat_text_expr, '') LIKE '%PYME%'
-          OR COALESCE($cat_text_expr, '') LIKE '%SME%'
-        THEN 'NEGOCIOS'
-        ELSE 'RESIDENCIAL'
-    END";
+    ), 'RESIDENCIAL')";
 }
 
 function tx_mix_res_neg_where_dashboard($conexion, $where_sql) {
