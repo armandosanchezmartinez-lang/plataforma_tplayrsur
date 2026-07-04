@@ -1052,24 +1052,93 @@ function tx_columna_existe_dashboard($conexion, $tabla, $columna) {
     return $cache[$key];
 }
 
+function tx_tabla_existe_dashboard($conexion, $tabla) {
+    static $cache = [];
+    if (array_key_exists($tabla, $cache)) return $cache[$tabla];
+
+    $tabla_esc = mysqli_real_escape_string($conexion, $tabla);
+    $r = mysqli_query($conexion, "SHOW TABLES LIKE '$tabla_esc'");
+    $cache[$tabla] = ($r && mysqli_num_rows($r) > 0);
+    return $cache[$tabla];
+}
+
 function tx_segmento_instalacion_expr_dashboard($conexion, $alias = '') {
     /*
     |--------------------------------------------------------------------------
     | TOTALXPEDIENT - CLASIFICACIÓN RESIDENCIAL / NEGOCIOS
     |--------------------------------------------------------------------------
     |
-    | Se usa para agregar mezcla 🏠 Res / 🏢 Neg dentro de las barras de:
-    |   - Cumplimiento del nivel inferior vs meta.
-    |   - Cumplimiento por canal de venta.
+    | La mezcla 🏠 Res / 🏢 Neg debe salir de la misma lógica usada en Ranking
+    | Vendedor: identificar el paquete instalado y clasificarlo contra
+    | catalogo_paquetes.
     |
-    | Regla defensiva:
-    |   Se busca primero una columna explícita de segmento/tipo. Si no existe,
-    |   se usa el nombre del plan como respaldo. Cualquier valor que contenga
-    |   NEGOC, BUSINESS o EMPRES se clasifica como Negocios; el resto como Res.
+    | Prioridad:
+    |   1) catalogo_paquetes, empatando instalaciones.plan/nombre_plan/paquete
+    |      contra catalogo_paquetes.nombre_plan.
+    |   2) Si el catálogo no existe o no tiene columnas de segmento, se usa un
+    |      respaldo defensivo con columnas explícitas de instalaciones.
+    |
+    | Clasificación:
+    |   Valores con NEGOC / BUSINESS / EMPRES / PYME / SME => NEG
+    |   Todo lo demás => RES
     |--------------------------------------------------------------------------
     */
     $prefix = $alias !== '' ? "`" . str_replace("`", "", $alias) . "`." : "";
-    $candidatos = [
+
+    // Campo de plan/paquete dentro de instalaciones.
+    $plan_cols = ['plan', 'nombre_plan', 'paquete', 'nombre_paquete'];
+    $plan_parts = [];
+    foreach ($plan_cols as $col) {
+        if (tx_columna_existe_dashboard($conexion, 'instalaciones', $col)) {
+            $plan_parts[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
+        }
+    }
+    $plan_expr = !empty($plan_parts) ? "COALESCE(" . implode(", ", $plan_parts) . ", '')" : "''";
+
+    $segmento_sources = [];
+
+    // Fuente principal: catalogo_paquetes.
+    if (
+        tx_tabla_existe_dashboard($conexion, 'catalogo_paquetes')
+        && tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan')
+        && !empty($plan_parts)
+    ) {
+        $cat_cols = [
+            'segmento',
+            'tipo_segmento',
+            'tipo_cliente',
+            'tipo_servicio',
+            'tipo_venta',
+            'mercado',
+            'unidad_negocio',
+            'negocio',
+            'linea_negocio',
+            'categoria',
+            'familia',
+            'tipo',
+            'producto'
+        ];
+
+        $cat_parts = [];
+        foreach ($cat_cols as $col) {
+            if (tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', $col)) {
+                $cat_parts[] = "NULLIF(TRIM(cp.`" . str_replace("`", "", $col) . "`),'')";
+            }
+        }
+
+        // Siempre agregamos nombre_plan como respaldo dentro del catálogo.
+        $cat_parts[] = "NULLIF(TRIM(cp.`nombre_plan`),'')";
+
+        $segmento_sources[] = "(
+            SELECT COALESCE(" . implode(", ", $cat_parts) . ", '')
+            FROM catalogo_paquetes cp
+            WHERE UPPER(TRIM(cp.`nombre_plan`)) = UPPER(TRIM($plan_expr))
+            LIMIT 1
+        )";
+    }
+
+    // Respaldo defensivo: columnas explícitas dentro de instalaciones.
+    $inst_cols = [
         'segmento',
         'tipo_segmento',
         'tipo_cliente',
@@ -1077,27 +1146,35 @@ function tx_segmento_instalacion_expr_dashboard($conexion, $alias = '') {
         'tipo_venta',
         'mercado',
         'unidad_negocio',
-        'categoria',
-        'plan'
+        'negocio',
+        'linea_negocio',
+        'canal_segmento',
+        'categoria'
     ];
 
-    $partes = [];
-    foreach ($candidatos as $col) {
+    foreach ($inst_cols as $col) {
         if (tx_columna_existe_dashboard($conexion, 'instalaciones', $col)) {
-            $partes[] = "COALESCE(" . $prefix . "`" . str_replace("`", "", $col) . "`,'')";
+            $segmento_sources[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
         }
     }
 
-    if (empty($partes)) {
+    // Último respaldo: nombre del plan.
+    if (!empty($plan_parts)) {
+        $segmento_sources[] = $plan_expr;
+    }
+
+    if (empty($segmento_sources)) {
         return "'RES'";
     }
 
-    $concat = "UPPER(CONCAT_WS(' ', " . implode(", ", $partes) . "))";
+    $segmento_expr = "UPPER(COALESCE(" . implode(", ", $segmento_sources) . ", ''))";
 
     return "CASE
-        WHEN $concat LIKE '%NEGOC%'
-          OR $concat LIKE '%BUSINESS%'
-          OR $concat LIKE '%EMPRES%'
+        WHEN $segmento_expr LIKE '%NEGOC%'
+          OR $segmento_expr LIKE '%BUSINESS%'
+          OR $segmento_expr LIKE '%EMPRES%'
+          OR $segmento_expr LIKE '%PYME%'
+          OR $segmento_expr LIKE '%SME%'
         THEN 'NEG'
         ELSE 'RES'
     END";
