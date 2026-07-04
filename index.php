@@ -1933,17 +1933,17 @@ while($row = $res_io ? mysqli_fetch_assoc($res_io) : null) {
     }
 }
 
-$segmento_venta_expr_evo = tx_segmento_venta_expr_dashboard($conexion);
-$query_vent_oferta = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, ($segmento_venta_expr_evo) as oferta, COUNT(*) as total
-    FROM ventas
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
+$segmento_venta_expr_evo = tx_segmento_venta_expr_dashboard($conexion, 'v');
+$query_vent_oferta = "SELECT MONTH(v.fecha_cierre) as mes, YEAR(v.fecha_cierre) as anio, ($segmento_venta_expr_evo) as oferta, COUNT(*) as total
+    FROM ventas v
+    WHERE v.fecha_cierre >= '$fecha_inicio_evolucion' " . str_replace('fecha_cierre', 'v.fecha_cierre', $cond_dia_evolucion_fecha_cierre) . " ";
 if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_vent_oferta .= " AND distrito IN ($scope_distritos_sql)";
+    $query_vent_oferta .= " AND v.distrito IN ($scope_distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
-    $query_vent_oferta .= " AND distrito IN ($distritos_sql)";
+    $query_vent_oferta .= " AND v.distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
     $ph = implode("','", array_values($folio_ids));
-    $query_vent_oferta .= " AND folio_empleado IN ('$ph')";
+    $query_vent_oferta .= " AND v.folio_empleado IN ('$ph')";
 }
 $query_vent_oferta .= " GROUP BY anio, mes, oferta";
 
