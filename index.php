@@ -2919,7 +2919,7 @@ if ($tx_geo_sum_count > 0) {
             top:46px;
             z-index:50;
             width:335px;
-            background:#fff;
+            background:#000;
             border:1px solid #e2e8f0;
             border-radius:22px;
             padding:16px;
@@ -3000,7 +3000,7 @@ if ($tx_geo_sum_count > 0) {
             border:1px solid #dbe4f0;
             border-radius:999px;
             padding:12px 14px;
-            background:#fff;
+            background:#000;
             color:#1a2540;
             font-family:inherit;
             font-weight:800;
@@ -3592,7 +3592,7 @@ if ($tx_geo_sum_count > 0) {
         }
         .geo-filter-clear{
             color:#6b7a99;
-            background:rgba(255,255,255,.75);
+            background:#000;
             border:1px solid rgba(107,122,153,.18);
         }
         .geo-channel-pills{
