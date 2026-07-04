@@ -4213,7 +4213,7 @@ include __DIR__ . '/includes/sidebar.php';
         <?php if (!empty($tx_geo_heat_points)): ?>
             <div class="geo-map-wrap">
                 <div id="txGeoMap"></div>
-                <div class="geo-kmz-badge">Cobertura KMZ <span class="geo-kmz-line"></span> Mérida</div>
+                <div class="geo-kmz-badge">Cobertura <span class="geo-kmz-line"></span> Distrito</div>
                 <div class="geo-legend">Menor concentración <span class="geo-gradient"></span> Mayor concentración</div>
             </div>
         <?php else: ?>
@@ -4254,10 +4254,11 @@ const txGeoMarkerPoints = <?= json_encode($tx_geo_marker_points, JSON_NUMERIC_CH
 const txGeoCentro = <?= json_encode($tx_geo_centro, JSON_NUMERIC_CHECK) ?>;
 const txGeoZoom = <?= (int)$tx_geo_zoom ?>;
 const txGeoKmzLayers = [
-    {
-        name: 'Cobertura Mérida KMZ',
-        url: 'assets/kmz/MERIDA.geojson'
-    }
+    { name: 'Cobertura Mérida', url: 'assets/kmz/MERIDA.geojson' },
+    { name: 'Cobertura Cancún', url: 'assets/kmz/CANCUN.geojson' },
+    { name: 'Cobertura Tuxtla', url: 'assets/kmz/TUXTLA.geojson' },
+    { name: 'Cobertura Villahermosa', url: 'assets/kmz/VILLAHERMOSA.geojson' },
+    { name: 'Cobertura Coatza / Mina', url: 'assets/kmz/COATZA_MINA.geojson' }
 ];
 
 if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
@@ -4270,12 +4271,13 @@ if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
         attribution: '&copy; OpenStreetMap'
     }).addTo(txGeoMap);
 
-    const txGeoKmzOverlayGroup = L.layerGroup().addTo(txGeoMap);
-    const txGeoOverlayControl = L.control.layers(null, {
-        'Cobertura Mérida KMZ': txGeoKmzOverlayGroup
-    }, { collapsed: false, position: 'topright' }).addTo(txGeoMap);
+    const txGeoOverlayMaps = {};
+    const txGeoOverlayControl = L.control.layers(null, txGeoOverlayMaps, { collapsed: false, position: 'topright' }).addTo(txGeoMap);
 
     txGeoKmzLayers.forEach(layerInfo => {
+        const overlayGroup = L.layerGroup().addTo(txGeoMap);
+        txGeoOverlayControl.addOverlay(overlayGroup, layerInfo.name);
+
         fetch(layerInfo.url, { cache: 'no-store' })
             .then(response => response.ok ? response.json() : null)
             .then(data => {
@@ -4290,14 +4292,14 @@ if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
                     },
                     onEachFeature: function(feature, layer) {
                         const nombre = feature && feature.properties && feature.properties.name ? feature.properties.name : layerInfo.name;
-                        layer.bindTooltip('<strong>' + nombre + '</strong><br>Cobertura comercial KMZ', { sticky: true, opacity: 0.95 });
+                        layer.bindTooltip('<strong>' + nombre + '</strong><br>Cobertura comercial', { sticky: true, opacity: 0.95 });
                     }
                 });
-                geoJsonLayer.addTo(txGeoKmzOverlayGroup);
-                txGeoKmzOverlayGroup.bringToBack();
+                geoJsonLayer.addTo(overlayGroup);
+                overlayGroup.bringToBack();
             })
             .catch(() => {
-                console.warn('No se pudo cargar la capa KMZ convertida:', layerInfo.url);
+                console.warn('No se pudo cargar la capa de cobertura:', layerInfo.url);
             });
     });
 

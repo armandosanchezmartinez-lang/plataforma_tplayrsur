@@ -1040,6 +1040,162 @@ function tx_real_inst_folios($conexion, $folios, $mes, $anio, $cond_dia_fecha) {
     return (int)($row['total'] ?? 0);
 }
 
+function tx_columna_existe_dashboard($conexion, $tabla, $columna) {
+    static $cache = [];
+    $key = $tabla . '.' . $columna;
+    if (array_key_exists($key, $cache)) return $cache[$key];
+
+    $tabla_esc = mysqli_real_escape_string($conexion, $tabla);
+    $col_esc = mysqli_real_escape_string($conexion, $columna);
+    $r = mysqli_query($conexion, "SHOW COLUMNS FROM `$tabla_esc` LIKE '$col_esc'");
+    $cache[$key] = ($r && mysqli_num_rows($r) > 0);
+    return $cache[$key];
+}
+
+function tx_segmento_instalacion_expr_dashboard($conexion, $alias = '') {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - CLASIFICACIÓN RESIDENCIAL / NEGOCIOS
+    |--------------------------------------------------------------------------
+    |
+    | Se usa para agregar mezcla 🏠 Res / 🏢 Neg dentro de las barras de:
+    |   - Cumplimiento del nivel inferior vs meta.
+    |   - Cumplimiento por canal de venta.
+    |
+    | Regla defensiva:
+    |   Se busca primero una columna explícita de segmento/tipo. Si no existe,
+    |   se usa el nombre del plan como respaldo. Cualquier valor que contenga
+    |   NEGOC, BUSINESS o EMPRES se clasifica como Negocios; el resto como Res.
+    |--------------------------------------------------------------------------
+    */
+    $prefix = $alias !== '' ? "`" . str_replace("`", "", $alias) . "`." : "";
+    $candidatos = [
+        'segmento',
+        'tipo_segmento',
+        'tipo_cliente',
+        'tipo_servicio',
+        'tipo_venta',
+        'mercado',
+        'unidad_negocio',
+        'categoria',
+        'plan'
+    ];
+
+    $partes = [];
+    foreach ($candidatos as $col) {
+        if (tx_columna_existe_dashboard($conexion, 'instalaciones', $col)) {
+            $partes[] = "COALESCE(" . $prefix . "`" . str_replace("`", "", $col) . "`,'')";
+        }
+    }
+
+    if (empty($partes)) {
+        return "'RES'";
+    }
+
+    $concat = "UPPER(CONCAT_WS(' ', " . implode(", ", $partes) . "))";
+
+    return "CASE
+        WHEN $concat LIKE '%NEGOC%'
+          OR $concat LIKE '%BUSINESS%'
+          OR $concat LIKE '%EMPRES%'
+        THEN 'NEG'
+        ELSE 'RES'
+    END";
+}
+
+function tx_mix_res_neg_where_dashboard($conexion, $where_sql) {
+    $expr = tx_segmento_instalacion_expr_dashboard($conexion);
+    $sql = "
+        SELECT
+            COUNT(cuenta) AS total,
+            SUM(CASE WHEN ($expr) = 'NEG' THEN 1 ELSE 0 END) AS negocios
+        FROM instalaciones
+        WHERE $where_sql
+    ";
+    $r = mysqli_query($conexion, $sql);
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+
+    $total = (int)($row['total'] ?? 0);
+    $neg = (int)($row['negocios'] ?? 0);
+    $res = max(0, $total - $neg);
+
+    if ($total <= 0) {
+        return ['total' => 0, 'res' => 0, 'neg' => 0, 'res_pct' => null, 'neg_pct' => null];
+    }
+
+    $neg_pct = (int)round(($neg / $total) * 100);
+    $res_pct = max(0, 100 - $neg_pct);
+
+    return [
+        'total' => $total,
+        'res' => $res,
+        'neg' => $neg,
+        'res_pct' => $res_pct,
+        'neg_pct' => $neg_pct
+    ];
+}
+
+function tx_mix_res_neg_distrito_dashboard($conexion, $distrito, $mes, $anio, $cond_dia_fecha) {
+    $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
+    return tx_mix_res_neg_where_dashboard(
+        $conexion,
+        "MONTH(fecha)=".(int)$mes."
+         AND YEAR(fecha)=".(int)$anio."
+         $cond_dia_fecha
+         AND origen_prospecto <> '-'
+         AND distrito IN ($dsql)"
+    );
+}
+
+function tx_mix_res_neg_folios_dashboard($conexion, $folios, $mes, $anio, $cond_dia_fecha) {
+    if (empty($folios)) {
+        return ['total' => 0, 'res' => 0, 'neg' => 0, 'res_pct' => null, 'neg_pct' => null];
+    }
+
+    $folios_sql = tx_sql_in_escaped($conexion, $folios);
+    return tx_mix_res_neg_where_dashboard(
+        $conexion,
+        "MONTH(fecha)=".(int)$mes."
+         AND YEAR(fecha)=".(int)$anio."
+         $cond_dia_fecha
+         AND origen_prospecto <> '-'
+         AND folio_empleado IN ($folios_sql)"
+    );
+}
+
+function tx_mix_res_neg_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_fecha, $scope_sql = '') {
+    $where_scope = $scope_sql !== '' ? " AND distrito IN ($scope_sql)" : "";
+    $mapa = tx_canales_cumplimiento_dashboard();
+    $regla = $mapa[$canal] ?? [];
+    $canales_real = $regla['real'] ?? [];
+
+    if (empty($canales_real)) {
+        return ['total' => 0, 'res' => 0, 'neg' => 0, 'res_pct' => null, 'neg_pct' => null];
+    }
+
+    $canales_sql = tx_sql_in_upper_trim($conexion, $canales_real);
+    $where_subcanal = '';
+
+    if (!empty($regla['only_subcanal'])) {
+        $where_subcanal = tx_sql_subcanal_filter_dashboard($conexion, $regla['only_subcanal'], 'only');
+    } elseif (!empty($regla['exclude_subcanal'])) {
+        $where_subcanal = tx_sql_subcanal_filter_dashboard($conexion, $regla['exclude_subcanal'], 'exclude');
+    }
+
+    return tx_mix_res_neg_where_dashboard(
+        $conexion,
+        "MONTH(fecha)=".(int)$mes."
+         AND YEAR(fecha)=".(int)$anio."
+         $cond_dia_fecha
+         AND origen_prospecto IS NOT NULL
+         AND origen_prospecto <> '-'
+         AND UPPER(TRIM(origen_prospecto)) IN ($canales_sql)
+         $where_subcanal
+         $where_scope"
+    );
+}
+
+
 
 function tx_meta_operativa_asignada($conexion, $anio, $semana, $id_superior, $id_subordinado, $nivel_superior, $nivel_subordinado) {
     // 1) Búsqueda exacta: semana/año + superior + subordinado + niveles.
@@ -1286,6 +1442,9 @@ $cumplimiento_inferior_meta = [];
 $cumplimiento_inferior_pct = [];
 $cumplimiento_inferior_fuente = [];
 $cumplimiento_inferior_visual_pct = [];
+$cumplimiento_inferior_res_pct = [];
+$cumplimiento_inferior_neg_pct = [];
+$cumplimiento_inferior_mix_total = [];
 $cumplimiento_inferior_items = [];
 
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
@@ -1316,7 +1475,16 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
         $meta = tx_meta_acum_distrito($conexion, $dist, $mes_actual, $anio_query, $dias_transcurridos);
         if ($real <= 0 && $meta <= 0) continue;
         $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
-        $tmp[] = ['label'=>$dist, 'real'=>$real, 'meta'=>$meta, 'pct'=>$pct];
+        $mix_res_neg = tx_mix_res_neg_distrito_dashboard($conexion, $dist, $mes_actual, $anio_query, $cond_dia_fecha);
+        $tmp[] = [
+            'label'=>$dist,
+            'real'=>$real,
+            'meta'=>$meta,
+            'pct'=>$pct,
+            'res_pct'=>$mix_res_neg['res_pct'],
+            'neg_pct'=>$mix_res_neg['neg_pct'],
+            'mix_total'=>$mix_res_neg['total']
+        ];
     }
 } else {
     $target_nivel_inferior = '';
@@ -1388,12 +1556,16 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
 
             if ($real <= 0 && $meta <= 0) continue;
             $pct = $meta > 0 ? round(($real / $meta) * 100, 1) : 0;
+            $mix_res_neg = tx_mix_res_neg_folios_dashboard($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
             $tmp[] = [
                 'label'=>$child['label'],
                 'real'=>$real,
                 'meta'=>$meta,
                 'pct'=>$pct,
-                'meta_fuente'=>$meta_fuente
+                'meta_fuente'=>$meta_fuente,
+                'res_pct'=>$mix_res_neg['res_pct'],
+                'neg_pct'=>$mix_res_neg['neg_pct'],
+                'mix_total'=>$mix_res_neg['total']
             ];
         }
     }
@@ -1418,6 +1590,9 @@ foreach ($tmp as $r) {
     $cumplimiento_inferior_meta[] = (int)$r['meta'];
     $cumplimiento_inferior_pct[] = (float)$r['pct'];
     $cumplimiento_inferior_fuente[] = $r['meta_fuente'] ?? '';
+    $cumplimiento_inferior_res_pct[] = $r['res_pct'] ?? null;
+    $cumplimiento_inferior_neg_pct[] = $r['neg_pct'] ?? null;
+    $cumplimiento_inferior_mix_total[] = (int)($r['mix_total'] ?? 0);
     $cumplimiento_inferior_visual_pct[] = (($r['meta_fuente'] ?? '') === 'sin_meta' && $max_real_sin_meta > 0)
         ? round(((int)$r['real'] / $max_real_sin_meta) * 100, 1)
         : (float)$r['pct'];
@@ -1474,12 +1649,23 @@ if ($mostrar_cumplimiento_canal) {
         if ($real_canal <= 0 && $meta_canal <= 0) continue;
 
         $pct_canal = $meta_canal > 0 ? round(($real_canal / $meta_canal) * 100, 1) : 0;
+        $mix_res_neg_canal = tx_mix_res_neg_canal_dashboard(
+            $conexion,
+            $canal,
+            $mes_actual,
+            $anio_query,
+            $cond_dia_fecha,
+            $scope_canal_sql
+        );
         $cumplimiento_canal_items[] = [
             'nombre' => $canal,
             'real' => $real_canal,
             'meta' => $meta_canal,
             'pct' => $pct_canal,
-            'visual_pct' => $pct_canal
+            'visual_pct' => $pct_canal,
+            'res_pct' => $mix_res_neg_canal['res_pct'],
+            'neg_pct' => $mix_res_neg_canal['neg_pct'],
+            'mix_total' => $mix_res_neg_canal['total']
         ];
     }
 
@@ -2252,6 +2438,9 @@ foreach ($cumplimiento_inferior_labels as $idx_ci => $nombre_ci) {
         'pct'    => (float)($cumplimiento_inferior_pct[$idx_ci] ?? 0),
         'visual_pct' => (float)($cumplimiento_inferior_visual_pct[$idx_ci] ?? ($cumplimiento_inferior_pct[$idx_ci] ?? 0)),
         'fuente' => $cumplimiento_inferior_fuente[$idx_ci] ?? '',
+        'res_pct' => $cumplimiento_inferior_res_pct[$idx_ci] ?? null,
+        'neg_pct' => $cumplimiento_inferior_neg_pct[$idx_ci] ?? null,
+        'mix_total' => (int)($cumplimiento_inferior_mix_total[$idx_ci] ?? 0),
     ];
 }
 usort($cumplimiento_inferior_items, function($a, $b) {
@@ -2822,6 +3011,40 @@ if ($tx_geo_sum_count > 0) {
         .cumplimiento-fill.warn{background:linear-gradient(90deg,#7A2BFF,#B026FF);}
         .cumplimiento-fill.risk{background:linear-gradient(90deg,#FF006C,#FF4FA3);}
         .cumplimiento-fill.neutral{background:linear-gradient(90deg,#64748B,#CBD5E1);}
+
+        .cumplimiento-track{
+            position:relative;
+        }
+        .cumplimiento-fill{
+            position:relative;
+            overflow:hidden;
+        }
+        .cumplimiento-resneg-divider{
+            position:absolute;
+            top:2px;
+            bottom:2px;
+            width:2px;
+            background:rgba(255,255,255,.96);
+            box-shadow:0 0 0 1px rgba(26,37,64,.20), 0 0 5px rgba(255,255,255,.75);
+            border-radius:999px;
+            transform:translateX(-1px);
+        }
+        .cumplimiento-bar-block{
+            display:flex;
+            flex-direction:column;
+            gap:4px;
+            min-width:0;
+        }
+        .cumplimiento-mix{
+            font-size:.66rem;
+            color:#6b7280;
+            font-weight:900;
+            letter-spacing:.1px;
+            line-height:1.1;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
         .cumplimiento-metric{
             font-size:.86rem;
             font-weight:950;
@@ -3766,8 +3989,21 @@ include __DIR__ . '/includes/sidebar.php';
                     <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
                         <?= htmlspecialchars($item['nombre'] ?? '') ?>
                     </div>
-                    <div class="cumplimiento-track">
-                        <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                    <div class="cumplimiento-bar-block">
+                        <div class="cumplimiento-track">
+                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;">
+                                <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
+                                    <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="cumplimiento-mix">
+                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
+                                🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
+                            <?php else: ?>
+                                🏠 Res -- &nbsp;&nbsp; 🏢 Neg --
+                            <?php endif; ?>
+                        </div>
                     </div>
                     <div class="cumplimiento-metric">
                         <?php if ($sin_meta_item): ?>
@@ -3854,8 +4090,21 @@ include __DIR__ . '/includes/sidebar.php';
                     <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
                         <?= htmlspecialchars($item['nombre'] ?? '') ?>
                     </div>
-                    <div class="cumplimiento-track">
-                        <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                    <div class="cumplimiento-bar-block">
+                        <div class="cumplimiento-track">
+                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;">
+                                <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
+                                    <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="cumplimiento-mix">
+                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
+                                🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
+                            <?php else: ?>
+                                🏠 Res -- &nbsp;&nbsp; 🏢 Neg --
+                            <?php endif; ?>
+                        </div>
                     </div>
                     <div class="cumplimiento-metric">
                         <?= number_format($pct_item, 0) ?>%
