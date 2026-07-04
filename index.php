@@ -3048,7 +3048,8 @@ if ($tx_geo_sum_count > 0) {
             border-radius:999px;
             transform:translateX(-1.5px);
             box-shadow:0 0 0 1px rgba(255,255,255,.85);
-            z-index:2;
+            z-index:5;
+            pointer-events:none;
         }
         .cumplimiento-mix{
             font-size:.66rem;
@@ -3997,7 +3998,7 @@ include __DIR__ . '/includes/sidebar.php';
                     $real_item = (int)($item['real'] ?? 0);
                     $meta_item = (int)($item['meta'] ?? 0);
                     $sin_meta_item = (($item['fuente'] ?? '') === 'sin_meta');
-                    $bar_width = min($visual_pct_item, 180);
+                    $bar_width = min($visual_pct_item, 100);
                     $bar_class = $sin_meta_item ? 'neutral' : (($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk'));
                 ?>
                 <div class="cumplimiento-row">
@@ -4006,11 +4007,10 @@ include __DIR__ . '/includes/sidebar.php';
                     </div>
                     <div class="cumplimiento-bar-block">
                         <div class="cumplimiento-track">
-                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;">
-                                <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                    <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
-                                <?php endif; ?>
-                            </div>
+                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
+                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                            <?php endif; ?>
                         </div>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
@@ -4098,7 +4098,7 @@ include __DIR__ . '/includes/sidebar.php';
                     $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
                     $real_item = (int)($item['real'] ?? 0);
                     $meta_item = (int)($item['meta'] ?? 0);
-                    $bar_width = min($visual_pct_item, 180);
+                    $bar_width = min($visual_pct_item, 100);
                     $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
                 ?>
                 <div class="cumplimiento-row">
@@ -4107,11 +4107,10 @@ include __DIR__ . '/includes/sidebar.php';
                     </div>
                     <div class="cumplimiento-bar-block">
                         <div class="cumplimiento-track">
-                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;">
-                                <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                    <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
-                                <?php endif; ?>
-                            </div>
+                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
+                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                            <?php endif; ?>
                         </div>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
