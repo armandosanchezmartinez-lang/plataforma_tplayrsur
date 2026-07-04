@@ -4213,6 +4213,7 @@ include __DIR__ . '/includes/sidebar.php';
         <?php if (!empty($tx_geo_heat_points)): ?>
             <div class="geo-map-wrap">
                 <div id="txGeoMap"></div>
+                <div class="geo-kmz-badge">Cobertura KMZ <span class="geo-kmz-line"></span> Mérida</div>
                 <div class="geo-legend">Menor concentración <span class="geo-gradient"></span> Mayor concentración</div>
             </div>
         <?php else: ?>
@@ -4252,6 +4253,12 @@ const txGeoHeatPoints = <?= json_encode($tx_geo_heat_points, JSON_NUMERIC_CHECK)
 const txGeoMarkerPoints = <?= json_encode($tx_geo_marker_points, JSON_NUMERIC_CHECK) ?>;
 const txGeoCentro = <?= json_encode($tx_geo_centro, JSON_NUMERIC_CHECK) ?>;
 const txGeoZoom = <?= (int)$tx_geo_zoom ?>;
+const txGeoKmzLayers = [
+    {
+        name: 'Cobertura Mérida KMZ',
+        url: 'assets/kmz/MERIDA.geojson'
+    }
+];
 
 if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
     const txGeoMap = L.map('txGeoMap', {
@@ -4262,6 +4269,37 @@ if (document.getElementById('txGeoMap') && typeof L !== 'undefined') {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap'
     }).addTo(txGeoMap);
+
+    const txGeoKmzOverlayGroup = L.layerGroup().addTo(txGeoMap);
+    const txGeoOverlayControl = L.control.layers(null, {
+        'Cobertura Mérida KMZ': txGeoKmzOverlayGroup
+    }, { collapsed: false, position: 'topright' }).addTo(txGeoMap);
+
+    txGeoKmzLayers.forEach(layerInfo => {
+        fetch(layerInfo.url, { cache: 'no-store' })
+            .then(response => response.ok ? response.json() : null)
+            .then(data => {
+                if (!data) return;
+                const geoJsonLayer = L.geoJSON(data, {
+                    style: {
+                        color: '#7A2BFF',
+                        weight: 1.4,
+                        opacity: 0.9,
+                        fillColor: '#7A2BFF',
+                        fillOpacity: 0.10
+                    },
+                    onEachFeature: function(feature, layer) {
+                        const nombre = feature && feature.properties && feature.properties.name ? feature.properties.name : layerInfo.name;
+                        layer.bindTooltip('<strong>' + nombre + '</strong><br>Cobertura comercial KMZ', { sticky: true, opacity: 0.95 });
+                    }
+                });
+                geoJsonLayer.addTo(txGeoKmzOverlayGroup);
+                txGeoKmzOverlayGroup.bringToBack();
+            })
+            .catch(() => {
+                console.warn('No se pudo cargar la capa KMZ convertida:', layerInfo.url);
+            });
+    });
 
     if (typeof L.heatLayer !== 'undefined' && txGeoHeatPoints.length) {
         L.heatLayer(txGeoHeatPoints, {
