@@ -1150,57 +1150,27 @@ function tx_segmento_instalacion_expr_dashboard($conexion, $alias = '') {
 function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
     /*
     |--------------------------------------------------------------------------
-    | TOTALXPEDIENT - RESIDENCIAL / NEGOCIOS EN VENTAS
+    | TOTALXPEDIENT - VENTAS POR OFERTA RES-NEG
     |--------------------------------------------------------------------------
+    | Regla corregida:
+    |   ventas.nombre_plan  =  catalogo_paquetes.nombre_plan
     |
-    | FIX OFERTA RES-NEG:
-    | Para VENTAS no se usan columnas operativas de la tabla ventas como
-    | negocio, unidad_negocio, linea_negocio, etc., porque pueden clasificar
-    | erróneamente todo como NEGOCIOS.
-    |
-    | La clasificación debe venir del catálogo:
-    |   ventas.<campo_paquete>  →  catalogo_paquetes.nombre_plan
-    |
-    | Si no hay match contra catalogo_paquetes, el default es RESIDENCIAL para
-    | evitar inflar NEGOCIOS.
+    | Esta función ya NO usa columnas operativas de ventas.
+    | Si catalogo_paquetes identifica el paquete como Negocios, clasifica NEGOCIOS.
+    | Si no hay match o no hay palabra clave de Negocios, clasifica RESIDENCIAL.
     |--------------------------------------------------------------------------
     */
     $prefix = $alias !== '' ? "`" . str_replace("`", "", $alias) . "`." : "";
 
-    // Posibles campos de paquete en ventas. Se toman sólo si existen.
-    $plan_cols = [
-        'nombre_plan',
-        'plan',
-        'paquete',
-        'nombre_paquete',
-        'paquete_contratado',
-        'producto',
-        'nombre_producto',
-        'oferta',
-        'descripcion_paquete'
-    ];
-
-    $plan_parts = [];
-    foreach ($plan_cols as $col) {
-        if (tx_columna_existe_dashboard($conexion, 'ventas', $col)) {
-            $plan_parts[] = "NULLIF(TRIM(" . $prefix . "`" . str_replace("`", "", $col) . "`),'')";
-        }
-    }
-
-    // Sin campo de paquete en ventas no hay forma segura de clasificar por catálogo.
-    if (empty($plan_parts)) {
-        return "'RESIDENCIAL'";
-    }
-
-    $plan_expr = "COALESCE(" . implode(", ", $plan_parts) . ", '')";
-
-    // Si no existe catalogo_paquetes/nombre_plan, no clasificamos como negocio.
     if (
+        !tx_columna_existe_dashboard($conexion, 'ventas', 'nombre_plan') ||
         !tx_tabla_existe_dashboard($conexion, 'catalogo_paquetes') ||
         !tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', 'nombre_plan')
     ) {
         return "'RESIDENCIAL'";
     }
+
+    $plan_expr = "NULLIF(TRIM(" . $prefix . "`nombre_plan`),'')";
 
     $cat_cols = [
         'segmento',
@@ -1215,38 +1185,34 @@ function tx_segmento_venta_expr_dashboard($conexion, $alias = '') {
         'categoria',
         'familia',
         'tipo',
-        'producto'
+        'producto',
+        'nombre_plan'
     ];
 
     $cat_parts = [];
     foreach ($cat_cols as $col) {
         if (tx_columna_existe_dashboard($conexion, 'catalogo_paquetes', $col)) {
-            $cat_parts[] = "NULLIF(TRIM(cp.`" . str_replace("`", "", $col) . "`),'')";
+            $cat_parts[] = "COALESCE(cp.`" . str_replace("`", "", $col) . "`,'')";
         }
     }
 
-    // Respaldo del catálogo: nombre_plan.
-    $cat_parts[] = "NULLIF(TRIM(cp.`nombre_plan`),'')";
+    if (empty($cat_parts)) {
+        $cat_parts[] = "COALESCE(cp.`nombre_plan`,'')";
+    }
 
-    $cat_expr = "(
-        SELECT COALESCE(" . implode(", ", $cat_parts) . ", '')
+    $cat_text_expr = "(
+        SELECT UPPER(CONCAT_WS(' ', " . implode(", ", $cat_parts) . "))
         FROM catalogo_paquetes cp
-        WHERE
-            UPPER(TRIM(cp.`nombre_plan`)) = UPPER(TRIM($plan_expr))
-            OR UPPER(TRIM($plan_expr)) LIKE CONCAT('%', UPPER(TRIM(cp.`nombre_plan`)), '%')
-            OR UPPER(TRIM(cp.`nombre_plan`)) LIKE CONCAT('%', UPPER(TRIM($plan_expr)), '%')
-        ORDER BY LENGTH(cp.`nombre_plan`) DESC
+        WHERE UPPER(TRIM(cp.`nombre_plan`)) = UPPER(TRIM($plan_expr))
         LIMIT 1
     )";
 
-    $segmento_expr = "UPPER(COALESCE($cat_expr, ''))";
-
     return "CASE
-        WHEN $segmento_expr LIKE '%NEGOC%'
-          OR $segmento_expr LIKE '%BUSINESS%'
-          OR $segmento_expr LIKE '%EMPRES%'
-          OR $segmento_expr LIKE '%PYME%'
-          OR $segmento_expr LIKE '%SME%'
+        WHEN COALESCE($cat_text_expr, '') LIKE '%NEGOC%'
+          OR COALESCE($cat_text_expr, '') LIKE '%BUSINESS%'
+          OR COALESCE($cat_text_expr, '') LIKE '%EMPRES%'
+          OR COALESCE($cat_text_expr, '') LIKE '%PYME%'
+          OR COALESCE($cat_text_expr, '') LIKE '%SME%'
         THEN 'NEGOCIOS'
         ELSE 'RESIDENCIAL'
     END";
