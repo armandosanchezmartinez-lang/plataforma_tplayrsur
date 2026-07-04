@@ -1195,21 +1195,23 @@ ventas_vendedor AS (
         vb.antiguedad,
         CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END AS semana,
         COUNT(i.cuenta) AS ventas,
-        SUM(CASE 
+        SUM(CASE
                 WHEN {$cond_mix_actual}
-                 AND UPPER(COALESCE(i.plan,'')) LIKE '%TV%' 
+                 AND cp.play = 'TRIPLE PLAY'
                 THEN 1 ELSE 0 END) AS triple_play,
-        SUM(CASE 
+        SUM(CASE
                 WHEN {$cond_mix_actual}
-                 AND UPPER(COALESCE(i.plan,'')) NOT LIKE '%TV%' 
+                 AND cp.play = 'DOBLE PLAY'
                 THEN 1 ELSE 0 END) AS doble_play,
-        SUM(CASE 
-                WHEN {$cond_negocios_actual}
-                THEN 1 ELSE 0 END) AS negocios,
-        SUM(CASE 
+        SUM(CASE
                 WHEN {$cond_mix_actual}
-                 AND NOT ({$cond_negocios_actual})
+                 AND cp.tipo = 'NEGOCIOS'
+                THEN 1 ELSE 0 END) AS negocios,
+        SUM(CASE
+                WHEN {$cond_mix_actual}
+                 AND cp.tipo = 'RESIDENCIAL'
                 THEN 1 ELSE 0 END) AS residencial
+
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
         ON i.folio_empleado = vb.folio_empleado
@@ -1217,6 +1219,8 @@ ventas_vendedor AS (
             ({$cond_i_base})
          OR ({$cond_i_actual})
        )
+    LEFT JOIN catalogo_paquetes cp
+        ON UPPER(TRIM(i.plan)) = UPPER(TRIM(cp.nombre_plan))
     GROUP BY
         vb.distrito,
         vb.lider,
