@@ -915,6 +915,31 @@ hc_resumen AS (
        AND {$cond_iactual}
        AND v.anio={$hc_anio_actual}
        AND v.semana={$hc_semana_actual}
+
+    /* FIX: Conteo de instalaciones por coach histórico del evento.
+       La plantilla HC conserva nombres como APELLIDOS + NOMBRE, mientras
+       instalaciones.coach puede venir como NOMBRE + APELLIDOS. Por eso el
+       conteo del coach NO debe depender solo del folio del vendedor en HC. */
+    LEFT JOIN instalaciones ibase_coach
+        ON {$cond_ibase}
+       AND ibase_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
+       AND (
+            UPPER(TRIM(ibase_coach.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                UPPER(TRIM(ibase_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
+                AND UPPER(TRIM(ibase_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%')
+            )
+       )
+    LEFT JOIN instalaciones iactual_coach
+        ON {$cond_iactual}
+       AND iactual_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
+       AND (
+            UPPER(TRIM(iactual_coach.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                UPPER(TRIM(iactual_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
+                AND UPPER(TRIM(iactual_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%')
+            )
+       )
     GROUP BY c.distrito, c.lider, c.coach, c.coach_pos, c.coach_key
 )
 SELECT
@@ -1023,8 +1048,8 @@ resumen AS (
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
-        COUNT(DISTINCT ibase.cuenta) AS ins_sem_base,
-        COUNT(DISTINCT iactual.cuenta) AS ins_sem_actual
+        COUNT(DISTINCT ibase_coach.cuenta) AS ins_sem_base,
+        COUNT(DISTINCT iactual_coach.cuenta) AS ins_sem_actual
     FROM coaches_base c
     LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
     LEFT JOIN instalaciones ibase
@@ -1048,13 +1073,17 @@ ventas_sin_coach_base AS (
     INNER JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
        AND {$cond_i_base}
-    LEFT JOIN vendedores v
-        ON v.folio_empleado = i.folio_empleado
-       AND v.anio = {$hc_anio_base}
-       AND v.semana = {$hc_semana_base}
-       AND v.folio_empleado <> 'VACANTE'
-       AND v.nombre_colaborador <> 'VACANTE'
-    WHERE v.folio_empleado IS NULL
+    LEFT JOIN coaches_base cm
+        ON cm.anio = {$hc_anio_base}
+       AND cm.semana = {$hc_semana_base}
+       AND (
+            UPPER(TRIM(i.coach)) = UPPER(TRIM(cm.coach))
+            OR (
+                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', 1), '%')
+                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', -1), '%')
+            )
+       )
+    WHERE cm.coach_key IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
 ventas_sin_coach_actual AS (
@@ -1066,13 +1095,17 @@ ventas_sin_coach_actual AS (
     INNER JOIN instalaciones i
         ON i.lider = la.lider_instalaciones
        AND {$cond_i_actual}
-    LEFT JOIN vendedores v
-        ON v.folio_empleado = i.folio_empleado
-       AND v.anio = {$hc_anio_actual}
-       AND v.semana = {$hc_semana_actual}
-       AND v.folio_empleado <> 'VACANTE'
-       AND v.nombre_colaborador <> 'VACANTE'
-    WHERE v.folio_empleado IS NULL
+    LEFT JOIN coaches_base cm
+        ON cm.anio = {$hc_anio_actual}
+       AND cm.semana = {$hc_semana_actual}
+       AND (
+            UPPER(TRIM(i.coach)) = UPPER(TRIM(cm.coach))
+            OR (
+                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', 1), '%')
+                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', -1), '%')
+            )
+       )
+    WHERE cm.coach_key IS NULL
     GROUP BY la.distrito_reporte, la.lider_hc
 ),
 sin_coach AS (
