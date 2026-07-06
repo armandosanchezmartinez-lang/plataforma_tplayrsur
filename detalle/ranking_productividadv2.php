@@ -605,6 +605,11 @@ $cond_mix_actual = $periodo === 'mensual'
     ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
     : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
 
+// Condiciones específicas para conteos por coach histórico del evento.
+// Evita usar el alias incorrecto dentro de JOINs adicionales.
+$cond_ibase_coach = str_replace('ibase.', 'ibase_coach.', $cond_ibase);
+$cond_iactual_coach = str_replace('iactual.', 'iactual_coach.', $cond_iactual);
+
 $distrito_param  = $_GET['distrito'] ?? '';
 $lider_param     = $_GET['lider'] ?? '';
 $coach_param     = $_GET['coach'] ?? '';
@@ -921,7 +926,7 @@ hc_resumen AS (
        instalaciones.coach puede venir como NOMBRE + APELLIDOS. Por eso el
        conteo del coach NO debe depender solo del folio del vendedor en HC. */
     LEFT JOIN instalaciones ibase_coach
-        ON {$cond_ibase}
+        ON {$cond_ibase_coach}
        AND ibase_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
        AND (
             UPPER(TRIM(ibase_coach.coach)) = UPPER(TRIM(c.coach))
@@ -931,7 +936,7 @@ hc_resumen AS (
             )
        )
     LEFT JOIN instalaciones iactual_coach
-        ON {$cond_iactual}
+        ON {$cond_iactual_coach}
        AND iactual_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
        AND (
             UPPER(TRIM(iactual_coach.coach)) = UPPER(TRIM(c.coach))
@@ -1062,6 +1067,37 @@ resumen AS (
        AND {$cond_iactual}
        AND v.anio={$hc_anio_actual}
        AND v.semana={$hc_semana_actual}
+
+    /* FIX: Conteo de instalaciones por coach histórico del evento.
+       No depende de que el vendedor siga en la estructura HC actual. */
+    LEFT JOIN instalaciones ibase_coach
+        ON {$cond_ibase_coach}
+       AND ibase_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
+       AND (
+            UPPER(TRIM(ibase_coach.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                UPPER(TRIM(ibase_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
+                AND UPPER(TRIM(ibase_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%')
+            )
+            OR (
+                UPPER(TRIM(ibase_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 2), '%')
+                AND UPPER(TRIM(ibase_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -2), '%')
+            )
+       )
+    LEFT JOIN instalaciones iactual_coach
+        ON {$cond_iactual_coach}
+       AND iactual_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
+       AND (
+            UPPER(TRIM(iactual_coach.coach)) = UPPER(TRIM(c.coach))
+            OR (
+                UPPER(TRIM(iactual_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
+                AND UPPER(TRIM(iactual_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%')
+            )
+            OR (
+                UPPER(TRIM(iactual_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 2), '%')
+                AND UPPER(TRIM(iactual_coach.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -2), '%')
+            )
+       )
     GROUP BY c.distrito, c.lider, c.coach, c.coach_pos, c.coach_key
 ),
 ventas_sin_coach_base AS (
@@ -1081,6 +1117,10 @@ ventas_sin_coach_base AS (
             OR (
                 UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', 1), '%')
                 AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', -1), '%')
+            )
+            OR (
+                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', 2), '%')
+                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', -2), '%')
             )
        )
     WHERE cm.coach_key IS NULL
@@ -1103,6 +1143,10 @@ ventas_sin_coach_actual AS (
             OR (
                 UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', 1), '%')
                 AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', -1), '%')
+            )
+            OR (
+                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', 2), '%')
+                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(cm.coach)), ' ', -2), '%')
             )
        )
     WHERE cm.coach_key IS NULL
