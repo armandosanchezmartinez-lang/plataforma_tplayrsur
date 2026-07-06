@@ -115,31 +115,31 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
 
                     $numero_talento_anterior = valor_por_alias($f, $map, [
                         'numero_talento_anterior','numero talento anterior','talento anterior',
-                        'numero_talento_gs_sem26','numero talento gs sem26','talento sem26',
+                        'numero_talento_gs_sem26','numero talento gs sem26','numero_talento_gs_26','numero talento gs_26','numero talento gs 26','talento sem26',
                         'numero_talento_gs anterior'
                     ]);
 
                     $numero_talento_nuevo = valor_por_alias($f, $map, [
                         'numero_talento_nuevo','numero talento nuevo','talento nuevo',
-                        'numero_talento_gs_sem27','numero talento gs sem27','talento sem27',
+                        'numero_talento_gs_sem27','numero talento gs sem27','numero_talento_gs_27','numero talento gs_27','numero talento gs 27','talento sem27',
                         'numero_talento_gs nuevo'
                     ]);
 
                     $id_posicion_anterior = valor_por_alias($f, $map, [
                         'id_posicion_anterior','id posicion anterior','posicion anterior',
-                        'id_posicion_sem26','id posicion sem26','id_posicion anterior'
+                        'id_posicion_sem26','id posicion sem26','id_posiciones_26','id posiciones 26','id posiciones_26','id_posicion_26','id posicion 26','id_posicion anterior'
                     ]);
 
                     $id_posicion_nueva = valor_por_alias($f, $map, [
                         'id_posicion_nueva','id posicion nueva','id posicion nuevo','posicion nueva',
-                        'id_posicion_sem27','id posicion sem27','id_posicion nuevo'
+                        'id_posicion_sem27','id posicion sem27','id_posiciones_27','id posiciones 27','id posiciones_27','id_posicion_27','id posicion 27','id_posicion nuevo'
                     ]);
 
                     $nombre_colaborador = valor_por_alias($f, $map, [
                         'nombre_colaborador','nombre del colaborador','colaborador','nombre'
                     ]);
 
-                    $distrito = valor_por_alias($f, $map, ['distrito']);
+                    $distrito = valor_por_alias($f, $map, ['distrito','distrito_27','distrito 27','distrito_sem27','distrito sem27','distrito_26','distrito 26','distrito_sem26','distrito sem26']);
 
                     $fecha_movimiento = fecha_excel(valor_por_alias($f, $map, [
                         'fecha_movimiento','fecha movimiento','fecha'
@@ -187,7 +187,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                 }
 
                 if (empty($datos)) {
-                    $mensaje = "No se encontraron cambios válidos de número talento o id_posición para importar.";
+                    $mensaje = "No se encontraron cambios válidos de número talento o id_posición para importar. Encabezados detectados: " . implode(", ", array_keys($map));
                     $tipo_mensaje = "error";
                 } else {
                     mysqli_begin_transaction($conexion);
