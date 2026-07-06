@@ -968,6 +968,7 @@ coaches_base AS (
         la.distrito_reporte AS distrito,
         la.distrito_hc,
         la.lider_hc AS lider,
+        la.lider_instalaciones AS lider_instalaciones,
         h.nombre_colaborador AS coach,
         h.id_posicion AS coach_pos,
         CONCAT(h.nombre_colaborador, '|', h.id_posicion) AS coach_key,
