@@ -580,26 +580,15 @@ function inferir_nivel_reai($row, $puestos_comerciales) {
     if (strpos($p, 'LIDER') !== false || strpos($p, 'GERENTE') !== false) return 'LÍDER';
     return 'COLABORADOR';
 }
-function obtener_vendedores_descendientes_reai($id_posicion, &$children_by_lr, $puestos_comerciales, &$memo = [], $visitados = []) {
+function obtener_vendedores_descendientes_reai($id_posicion, &$children_by_lr, $puestos_comerciales, &$memo = []) {
     $key = (string)$id_posicion;
-    if ($key === '') return [];
     if (isset($memo[$key])) return $memo[$key];
-
-    // Protección contra ciclos de jerarquía.
-    // Caso real: algunos colaboradores migrados de nómina quedaron con posicion_lr = id_posicion.
-    if (isset($visitados[$key])) return [];
-    $visitados[$key] = true;
-
     $out = [];
     foreach ($children_by_lr[$key] ?? [] as $child) {
-        $child_id = (string)($child['id_posicion'] ?? '');
-
         if (es_puesto_vendedor_reai($child['posicion'] ?? '', $puestos_comerciales)) {
             if (!empty($child['numero_talento_gs'])) $out[] = (string)$child['numero_talento_gs'];
         } else {
-            // Evita autoreferencia directa: coach/líder que se reporta a sí mismo.
-            if ($child_id === '' || $child_id === $key) continue;
-            $out = array_merge($out, obtener_vendedores_descendientes_reai($child_id, $children_by_lr, $puestos_comerciales, $memo, $visitados));
+            $out = array_merge($out, obtener_vendedores_descendientes_reai($child['id_posicion'] ?? '', $children_by_lr, $puestos_comerciales, $memo));
         }
     }
     $out = array_values(array_unique(array_filter($out)));
@@ -753,58 +742,6 @@ if ($semana_hc && $anio_hc) {
         $vendedores[] = crear_fila_reai($row, $nivel, $childs);
     };
 
-    /*
-     * Fallback controlado para coaches con jerarquía rota.
-     * Algunos migrados de nómina quedaron con posicion_lr = id_posicion o fuera del árbol del líder.
-     * Si tienen vendedores reportando a su id_posicion, deben aparecer como COACH aunque no cuelguen
-     * correctamente del líder/director en HC.
-     */
-    $agregar_coaches_indirectos = function($coaches_base, $distritos_permitidos = null) use (&$hc_rows, &$children_by_lr, $puestos_comerciales) {
-        $out = $coaches_base;
-        $ya = [];
-        foreach ($out as $c0) {
-            $id0 = (string)($c0['id_posicion'] ?? '');
-            if ($id0 !== '') $ya[$id0] = true;
-        }
-
-        $dist_ok = null;
-        if (is_array($distritos_permitidos)) {
-            $dist_ok = [];
-            foreach ($distritos_permitidos as $dperm) {
-                $dist_ok[normaliza_key($dperm)] = true;
-                foreach (tx_distrito_equivalentes_reai($dperm) as $deq) $dist_ok[normaliza_key($deq)] = true;
-            }
-        }
-
-        foreach ($hc_rows as $cand) {
-            $pos_key = normaliza_key($cand['posicion'] ?? '');
-            if (strpos($pos_key, 'COACH') === false) continue;
-
-            $idc = (string)($cand['id_posicion'] ?? '');
-            if ($idc === '' || isset($ya[$idc])) continue;
-
-            if ($dist_ok !== null && !isset($dist_ok[normaliza_key($cand['distrito'] ?? '')])) continue;
-
-            $tiene_vendedores = false;
-            foreach ($children_by_lr[$idc] ?? [] as $hijo) {
-                // Ignorar autoreferencia del propio coach.
-                if ((string)($hijo['id_posicion'] ?? '') === $idc) continue;
-                if (es_puesto_vendedor_reai($hijo['posicion'] ?? '', $puestos_comerciales)) {
-                    $tiene_vendedores = true;
-                    break;
-                }
-            }
-
-            if ($tiene_vendedores) {
-                $out[] = $cand;
-                $ya[$idc] = true;
-            }
-        }
-
-        ordenar_por_nombre_reai($out);
-        return $out;
-    };
-
     $directores = array_values(array_filter($hc_rows, function($r) { return es_director_distrital_reai($r); }));
     ordenar_por_nombre_reai($directores);
 
@@ -828,7 +765,7 @@ if ($semana_hc && $anio_hc) {
                 if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
             }
         }
-        $coaches = $agregar_coaches_indirectos($coaches);
+        ordenar_por_nombre_reai($coaches);
         foreach ($coaches as $c) $agregar_fila($c, 'COACH');
 
         $vend_rows = [];
@@ -853,8 +790,7 @@ if ($semana_hc && $anio_hc) {
                 if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
             }
         }
-        $dist_dir_reai = isset($by_id_posicion[(string)$id_posicion]) ? [($by_id_posicion[(string)$id_posicion]['distrito'] ?? '')] : null;
-        $coaches = $agregar_coaches_indirectos($coaches, $dist_dir_reai);
+        ordenar_por_nombre_reai($coaches);
         foreach ($coaches as $c) $agregar_fila($c, 'COACH');
 
         $vend_rows = [];
@@ -870,8 +806,7 @@ if ($semana_hc && $anio_hc) {
         foreach ($children_by_lr[(string)$id_posicion] ?? [] as $c) {
             if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
         }
-        $dist_lider_reai = isset($by_id_posicion[(string)$id_posicion]) ? [($by_id_posicion[(string)$id_posicion]['distrito'] ?? '')] : null;
-        $coaches = $agregar_coaches_indirectos($coaches, $dist_lider_reai);
+        ordenar_por_nombre_reai($coaches);
         foreach ($coaches as $c) $agregar_fila($c, 'COACH');
 
         $vend_rows = [];
