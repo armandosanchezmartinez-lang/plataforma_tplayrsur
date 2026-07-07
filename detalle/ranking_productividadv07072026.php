@@ -63,12 +63,6 @@ function pct_hc_sin_ins_class($pct) {
 function qs($arr) { return http_build_query($arr); }
 function esc($conexion, $v) { return mysqli_real_escape_string($conexion, (string)$v); }
 
-function identidad_key_php($v) {
-    $v = strtoupper(trim((string)$v));
-    $v = preg_replace('/\s+/', ' ', $v);
-    return $v;
-}
-
 function table_has_column($conexion, $table, $column) {
     $table = mysqli_real_escape_string($conexion, $table);
     $column = mysqli_real_escape_string($conexion, $column);
@@ -756,39 +750,9 @@ vendedores AS (
     FROM coaches_lider c
     INNER JOIN hc h
         ON (
-            (
-                c.coach <> 'VACANTE'
-                AND (
-                    h.nombre_linea_reporte = c.coach
-                    OR h.posicion_lr = c.coach_pos
-                    OR EXISTS (
-                        SELECT 1
-                        FROM historial_identidad_colaborador hicc
-                        WHERE (
-                                h.posicion_lr = hicc.id_posicion_anterior
-                             OR h.posicion_lr = hicc.id_posicion_nueva
-                        )
-                          AND (
-                                c.coach_pos = hicc.id_posicion_anterior
-                             OR c.coach_pos = hicc.id_posicion_nueva
-                             OR UPPER(TRIM(hicc.nombre_colaborador)) = UPPER(TRIM(c.coach))
-                          )
-                    )
-                )
-            )
+            (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
             OR
-            (
-                c.coach = 'VACANTE'
-                AND (
-                    h.posicion_lr = c.coach_pos
-                    OR EXISTS (
-                        SELECT 1
-                        FROM historial_identidad_colaborador hicv
-                        WHERE (c.coach_pos = hicv.id_posicion_anterior OR c.coach_pos = hicv.id_posicion_nueva)
-                          AND (h.posicion_lr = hicv.id_posicion_anterior OR h.posicion_lr = hicv.id_posicion_nueva)
-                    )
-                )
-            )
+            (c.coach = 'VACANTE' AND h.posicion_lr = c.coach_pos)
         )
        AND h.distrito = c.distrito_hc
        AND h.semana = c.semana
@@ -914,39 +878,9 @@ vendedores AS (
     FROM coaches_raw c
     INNER JOIN hc h
         ON (
-            (
-                c.coach <> 'VACANTE'
-                AND (
-                    h.nombre_linea_reporte = c.coach
-                    OR h.posicion_lr = c.coach_pos
-                    OR EXISTS (
-                        SELECT 1
-                        FROM historial_identidad_colaborador hicc
-                        WHERE (
-                                h.posicion_lr = hicc.id_posicion_anterior
-                             OR h.posicion_lr = hicc.id_posicion_nueva
-                        )
-                          AND (
-                                c.coach_pos = hicc.id_posicion_anterior
-                             OR c.coach_pos = hicc.id_posicion_nueva
-                             OR UPPER(TRIM(hicc.nombre_colaborador)) = UPPER(TRIM(c.coach))
-                          )
-                    )
-                )
-            )
+            (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
             OR
-            (
-                c.coach = 'VACANTE'
-                AND (
-                    h.posicion_lr = c.coach_pos
-                    OR EXISTS (
-                        SELECT 1
-                        FROM historial_identidad_colaborador hicv
-                        WHERE (c.coach_pos = hicv.id_posicion_anterior OR c.coach_pos = hicv.id_posicion_nueva)
-                          AND (h.posicion_lr = hicv.id_posicion_anterior OR h.posicion_lr = hicv.id_posicion_nueva)
-                    )
-                )
-            )
+            (c.coach = 'VACANTE' AND h.posicion_lr = c.coach_pos)
         )
        AND h.distrito = c.distrito_hc
        AND h.semana = c.semana
@@ -1029,7 +963,7 @@ hc_resumen AS (
        conteo del coach NO debe depender solo del folio del vendedor en HC. */
     LEFT JOIN instalaciones ibase_coach
         ON {$cond_ibase_coach}
-       AND ibase_coach.lider = c.lider_instalaciones
+       AND ibase_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
        AND (
             UPPER(TRIM(ibase_coach.coach)) = UPPER(TRIM(c.coach))
             OR (
@@ -1039,7 +973,7 @@ hc_resumen AS (
        )
     LEFT JOIN instalaciones iactual_coach
         ON {$cond_iactual_coach}
-       AND iactual_coach.lider = c.lider_instalaciones
+       AND iactual_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
        AND (
             UPPER(TRIM(iactual_coach.coach)) = UPPER(TRIM(c.coach))
             OR (
@@ -1100,7 +1034,6 @@ coaches_base AS (
         la.distrito_reporte AS distrito,
         la.distrito_hc,
         la.lider_hc AS lider,
-        la.lider_instalaciones AS lider_instalaciones,
         h.nombre_colaborador AS coach,
         h.id_posicion AS coach_pos,
         CASE
@@ -1141,39 +1074,9 @@ vendedores AS (
     FROM coaches_base c
     INNER JOIN hc h
         ON (
-            (
-                c.coach <> 'VACANTE'
-                AND (
-                    h.nombre_linea_reporte = c.coach
-                    OR h.posicion_lr = c.coach_pos
-                    OR EXISTS (
-                        SELECT 1
-                        FROM historial_identidad_colaborador hicc
-                        WHERE (
-                                h.posicion_lr = hicc.id_posicion_anterior
-                             OR h.posicion_lr = hicc.id_posicion_nueva
-                        )
-                          AND (
-                                c.coach_pos = hicc.id_posicion_anterior
-                             OR c.coach_pos = hicc.id_posicion_nueva
-                             OR UPPER(TRIM(hicc.nombre_colaborador)) = UPPER(TRIM(c.coach))
-                          )
-                    )
-                )
-            )
+            (c.coach <> 'VACANTE' AND h.nombre_linea_reporte = c.coach)
             OR
-            (
-                c.coach = 'VACANTE'
-                AND (
-                    h.posicion_lr = c.coach_pos
-                    OR EXISTS (
-                        SELECT 1
-                        FROM historial_identidad_colaborador hicv
-                        WHERE (c.coach_pos = hicv.id_posicion_anterior OR c.coach_pos = hicv.id_posicion_nueva)
-                          AND (h.posicion_lr = hicv.id_posicion_anterior OR h.posicion_lr = hicv.id_posicion_nueva)
-                    )
-                )
-            )
+            (c.coach = 'VACANTE' AND h.posicion_lr = c.coach_pos)
         )
        AND h.distrito = c.distrito_hc
        AND h.semana = c.semana
@@ -1225,7 +1128,7 @@ resumen AS (
        No depende de que el vendedor siga en la estructura HC actual. */
     LEFT JOIN instalaciones ibase_coach
         ON {$cond_ibase_coach}
-       AND ibase_coach.lider = c.lider_instalaciones
+       AND ibase_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
        AND (
             UPPER(TRIM(ibase_coach.coach)) = UPPER(TRIM(c.coach))
             OR (
@@ -1239,7 +1142,7 @@ resumen AS (
        )
     LEFT JOIN instalaciones iactual_coach
         ON {$cond_iactual_coach}
-       AND iactual_coach.lider = c.lider_instalaciones
+       AND iactual_coach.lider = (SELECT lider_instalaciones FROM selected_lider LIMIT 1)
        AND (
             UPPER(TRIM(iactual_coach.coach)) = UPPER(TRIM(c.coach))
             OR (
@@ -1426,39 +1329,9 @@ WITH vendedores_base AS (
       AND h.numero_talento_gs <> 'VACANTE'
       AND h.nombre_colaborador <> 'VACANTE'
       AND (
-          (
-              '{$coach_sql}' <> 'VACANTE'
-              AND (
-                  h.nombre_linea_reporte = '{$coach_sql}'
-                  OR h.posicion_lr = '{$coach_pos_sql}'
-                  OR EXISTS (
-                      SELECT 1
-                      FROM historial_identidad_colaborador hicc
-                      WHERE (
-                              h.posicion_lr = hicc.id_posicion_anterior
-                           OR h.posicion_lr = hicc.id_posicion_nueva
-                      )
-                        AND (
-                              '{$coach_pos_sql}' = hicc.id_posicion_anterior
-                           OR '{$coach_pos_sql}' = hicc.id_posicion_nueva
-                           OR UPPER(TRIM(hicc.nombre_colaborador)) = UPPER(TRIM('{$coach_sql}'))
-                        )
-                  )
-              )
-          )
+          ('{$coach_sql}' <> 'VACANTE' AND h.nombre_linea_reporte = '{$coach_sql}')
           OR
-          (
-              '{$coach_sql}' = 'VACANTE'
-              AND (
-                  h.posicion_lr = '{$coach_pos_sql}'
-                  OR EXISTS (
-                      SELECT 1
-                      FROM historial_identidad_colaborador hicv
-                      WHERE ('{$coach_pos_sql}' = hicv.id_posicion_anterior OR '{$coach_pos_sql}' = hicv.id_posicion_nueva)
-                        AND (h.posicion_lr = hicv.id_posicion_anterior OR h.posicion_lr = hicv.id_posicion_nueva)
-                  )
-              )
-          )
+          ('{$coach_sql}' = 'VACANTE' AND h.posicion_lr = '{$coach_pos_sql}')
       )
       AND (
             (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
@@ -1476,22 +1349,22 @@ ventas_vendedor AS (
         vb.antiguedad,
         CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END AS semana,
         COUNT(DISTINCT i.cuenta) AS ventas,
-        COUNT(DISTINCT CASE
+        SUM(CASE
                 WHEN {$cond_mix_actual}
                  AND cp.play = 'TRIPLE PLAY'
-                THEN i.cuenta ELSE NULL END) AS triple_play,
-        COUNT(DISTINCT CASE
+                THEN 1 ELSE 0 END) AS triple_play,
+        SUM(CASE
                 WHEN {$cond_mix_actual}
                  AND cp.play = 'DOBLE PLAY'
-                THEN i.cuenta ELSE NULL END) AS doble_play,
-        COUNT(DISTINCT CASE
+                THEN 1 ELSE 0 END) AS doble_play,
+        SUM(CASE
                 WHEN {$cond_mix_actual}
                  AND cp.tipo = 'NEGOCIOS'
-                THEN i.cuenta ELSE NULL END) AS negocios,
-        COUNT(DISTINCT CASE
+                THEN 1 ELSE 0 END) AS negocios,
+        SUM(CASE
                 WHEN {$cond_mix_actual}
                  AND cp.tipo = 'RESIDENCIAL'
-                THEN i.cuenta ELSE NULL END) AS residencial
+                THEN 1 ELSE 0 END) AS residencial
 
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
@@ -1557,10 +1430,8 @@ if (!$res) {
     } elseif ($view === 'vendedores') {
         while ($r = mysqli_fetch_assoc($res)) {
             $folio = $r['folio_empleado'] ?? '';
-            $matrix_key = identidad_key_php($r['vendedor'] ?? '');
-            if ($matrix_key === '') $matrix_key = (string)$folio;
-            if (!isset($coach_matrix[$matrix_key])) {
-                $coach_matrix[$matrix_key] = [
+            if (!isset($coach_matrix[$folio])) {
+                $coach_matrix[$folio] = [
                     'vendedor' => $r['vendedor'] ?? '',
                     'folio_empleado' => $folio,
                     'antiguedad' => $r['antiguedad'] ?? '-',
@@ -1575,12 +1446,12 @@ if (!$res) {
             $sem = (int)($r['semana'] ?? 0);
             $ventas = (int)($r['ventas'] ?? 0);
             if ($sem >= 1 && $sem <= $semana_actual) {
-                $coach_matrix[$matrix_key]['semanas'][$sem] = $ventas;
-                $coach_matrix[$matrix_key]['total'] += $ventas;
-                $coach_matrix[$matrix_key]['triple_play'] += (int)($r['triple_play'] ?? 0);
-                $coach_matrix[$matrix_key]['doble_play'] += (int)($r['doble_play'] ?? 0);
-                $coach_matrix[$matrix_key]['negocios'] += (int)($r['negocios'] ?? 0);
-                $coach_matrix[$matrix_key]['residencial'] += (int)($r['residencial'] ?? 0);
+                $coach_matrix[$folio]['semanas'][$sem] = $ventas;
+                $coach_matrix[$folio]['total'] += $ventas;
+                $coach_matrix[$folio]['triple_play'] += (int)($r['triple_play'] ?? 0);
+                $coach_matrix[$folio]['doble_play'] += (int)($r['doble_play'] ?? 0);
+                $coach_matrix[$folio]['negocios'] += (int)($r['negocios'] ?? 0);
+                $coach_matrix[$folio]['residencial'] += (int)($r['residencial'] ?? 0);
             }
         }
         uasort($coach_matrix, function($a, $b) use ($semana_actual) {
