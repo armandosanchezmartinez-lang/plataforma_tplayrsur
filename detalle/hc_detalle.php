@@ -35,73 +35,292 @@ function pct($activo, $total) {
     return $total > 0 ? round(($activo / $total) * 100) : 0;
 }
 
-function getDirectores($conexion, $rol, $id_posicion, $semana, $anio) {
-    if ($rol === 'admin' || $rol === 'director_regional') {
-        $sql = "SELECT DISTINCT id_posicion, nombre_colaborador FROM hc WHERE posicion = 'DIRECTOR DISTRITAL' AND semana = ? AND anio = ? ORDER BY nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "ii", $semana, $anio);
-    } elseif ($rol === 'director_distrital') {
-        $sql = "SELECT DISTINCT id_posicion, nombre_colaborador FROM hc WHERE id_posicion = ? AND semana = ? AND anio = ? LIMIT 1";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana, $anio);
-    } elseif ($rol === 'lider') {
-        $sql = "SELECT DISTINCT h2.id_posicion, h2.nombre_colaborador FROM hc h1 INNER JOIN hc h2 ON h1.posicion_lr = h2.id_posicion WHERE h1.id_posicion = ? AND h1.semana = ? AND h1.anio = ? LIMIT 1";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana, $anio);
-    } elseif ($rol === 'coach') {
-        $sql = "SELECT DISTINCT h3.id_posicion, h3.nombre_colaborador FROM hc h1 INNER JOIN hc h2 ON h1.posicion_lr = h2.id_posicion INNER JOIN hc h3 ON h2.posicion_lr = h3.id_posicion WHERE h1.id_posicion = ? AND h1.semana = ? AND h1.anio = ? LIMIT 1";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $id_posicion, $semana, $anio);
-    } else { return []; }
-    mysqli_stmt_execute($stmt); $res = mysqli_stmt_get_result($stmt);
-    $dirs = []; while ($row = mysqli_fetch_assoc($res)) $dirs[] = $row;
-    mysqli_stmt_close($stmt); return $dirs;
+/* =========================================================
+   Parche HIC-Fallback v1.0 — HC Detalle
+   - Aplica historial_identidad_colaborador en memoria para
+     homologar id_posicion / posicion_lr históricos.
+   - Reconstruye jerarquía con fallback cuando existan
+     posiciones autoreferenciadas o ligas históricas.
+   ========================================================= */
+
+function norm_txt($v) {
+    return strtoupper(trim((string)$v));
 }
 
-function getLideres($conexion, $dir_id_posicion, $rol, $mi_id_posicion, $semana, $anio) {
-    if ($rol === 'coach') {
-        $sql = "SELECT DISTINCT h2.id_posicion, h2.nombre_colaborador FROM hc h1 INNER JOIN hc h2 ON h1.posicion_lr = h2.id_posicion WHERE h1.id_posicion = ? AND h1.semana = ? AND h1.anio = ? LIMIT 1";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $mi_id_posicion, $semana, $anio);
-    } else {
-        $sql = "SELECT DISTINCT id_posicion, nombre_colaborador FROM hc WHERE posicion_lr = ? AND posicion LIKE '%LIDER VENTA%' AND semana = ? AND anio = ? ORDER BY nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $dir_id_posicion, $semana, $anio);
+function is_blank_id($v) {
+    $v = trim((string)$v);
+    return $v === '' || $v === '-' || strtoupper($v) === 'NULL' || strtoupper($v) === '0';
+}
+
+function is_role_pos($pos, $role) {
+    $p = norm_txt($pos);
+    if ($role === 'director') return $p === 'DIRECTOR DISTRITAL';
+    if ($role === 'lider')    return strpos($p, 'LIDER VENTA') !== false || strpos($p, 'LÍDER VENTA') !== false;
+    if ($role === 'coach')    return strpos($p, 'COACH') !== false;
+    return false;
+}
+
+function is_puesto_comercial($pos, $puestos_comerciales) {
+    return in_array(norm_txt($pos), array_map('norm_txt', $puestos_comerciales), true);
+}
+
+function is_vacante_row($row) {
+    return stripos((string)($row['numero_talento_gs'] ?? ''), 'VACANTE') !== false
+        || stripos((string)($row['nombre_colaborador'] ?? ''), 'VACANTE') !== false;
+}
+
+function table_exists($conexion, $table) {
+    $table = mysqli_real_escape_string($conexion, $table);
+    $res = mysqli_query($conexion, "SHOW TABLES LIKE '$table'");
+    return $res && mysqli_num_rows($res) > 0;
+}
+
+function table_columns($conexion, $table) {
+    $cols = [];
+    $table = mysqli_real_escape_string($conexion, $table);
+    $res = mysqli_query($conexion, "SHOW COLUMNS FROM `$table`");
+    if ($res) {
+        while ($r = mysqli_fetch_assoc($res)) $cols[] = $r['Field'];
     }
-    mysqli_stmt_execute($stmt); $res = mysqli_stmt_get_result($stmt);
-    $lids = []; while ($row = mysqli_fetch_assoc($res)) $lids[] = $row;
-    mysqli_stmt_close($stmt); return $lids;
+    return $cols;
 }
 
-function getCoaches($conexion, $lider_id_posicion, $rol, $mi_id_posicion, $semana, $anio) {
-    if ($rol === 'coach') {
-        $sql = "SELECT DISTINCT id_posicion, nombre_colaborador FROM hc WHERE id_posicion = ? AND semana = ? AND anio = ? LIMIT 1";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $mi_id_posicion, $semana, $anio);
-    } else {
-        $sql = "SELECT DISTINCT id_posicion, nombre_colaborador FROM hc WHERE posicion_lr = ? AND posicion LIKE '%COACH%' AND semana = ? AND anio = ? ORDER BY nombre_colaborador";
-        $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $lider_id_posicion, $semana, $anio);
+function hic_alias_map($conexion) {
+    $map = [];
+    if (!table_exists($conexion, 'historial_identidad_colaborador')) return $map;
+
+    $cols = table_columns($conexion, 'historial_identidad_colaborador');
+    if (!$cols) return $map;
+
+    $id_cols = [];
+    foreach ($cols as $c) {
+        $lc = strtolower($c);
+        if (strpos($lc, 'id_posicion') !== false || strpos($lc, 'posicion') !== false) $id_cols[] = $c;
     }
-    mysqli_stmt_execute($stmt); $res = mysqli_stmt_get_result($stmt);
-    $coaches = []; while ($row = mysqli_fetch_assoc($res)) $coaches[] = $row;
-    mysqli_stmt_close($stmt); return $coaches;
+    if (!$id_cols) return $map;
+
+    $select = '`' . implode('`,`', array_map(function($c){ return str_replace('`','',$c); }, $id_cols)) . '`';
+    $res = mysqli_query($conexion, "SELECT $select FROM historial_identidad_colaborador");
+    if (!$res) return $map;
+
+    while ($r = mysqli_fetch_assoc($res)) {
+        $ids = [];
+        foreach ($id_cols as $c) {
+            $v = trim((string)($r[$c] ?? ''));
+            if (!is_blank_id($v)) $ids[] = $v;
+        }
+        $ids = array_values(array_unique($ids));
+        if (count($ids) < 2) continue;
+
+        // Se toma como canónico el último id_posicion no vacío del registro.
+        // Esto permite que posiciones antiguas apunten a la identidad vigente.
+        $canon = end($ids);
+        foreach ($ids as $id) $map[$id] = $canon;
+    }
+
+    // Aplanar cadenas de alias: A->B->C queda A->C.
+    foreach (array_keys($map) as $k) {
+        $seen = [];
+        $v = $k;
+        while (isset($map[$v]) && !isset($seen[$v])) {
+            $seen[$v] = true;
+            $v = $map[$v];
+        }
+        $map[$k] = $v;
+    }
+    return $map;
 }
 
-function getVendedores($conexion, $coach_id_posicion, $semana, $anio, $puestos_in) {
-    $sql = "SELECT nombre_colaborador, numero_talento_gs FROM hc WHERE posicion_lr = ? AND posicion IN ($puestos_in) AND semana = ? AND anio = ? ORDER BY numero_talento_gs LIKE '%VACANTE%', nombre_colaborador";
-    $stmt = mysqli_prepare($conexion, $sql); mysqli_stmt_bind_param($stmt, "sii", $coach_id_posicion, $semana, $anio);
-    mysqli_stmt_execute($stmt); $res = mysqli_stmt_get_result($stmt);
-    $vendedores = [];
+function canon_id($id, $alias) {
+    $id = trim((string)$id);
+    if ($id === '') return $id;
+    return $alias[$id] ?? $id;
+}
+
+function load_hc_snapshot($conexion, $semana, $anio, $alias) {
+    $sql = "SELECT * FROM hc WHERE semana = ? AND anio = ?";
+    $stmt = mysqli_prepare($conexion, $sql);
+    mysqli_stmt_bind_param($stmt, "ii", $semana, $anio);
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+
+    $rows = [];
     while ($row = mysqli_fetch_assoc($res)) {
-        $es_vacante = stripos($row['numero_talento_gs'], 'VACANTE') !== false;
-        $vendedores[] = ['nombre' => $row['nombre_colaborador'], 'es_vacante' => $es_vacante, 'activo' => $es_vacante ? 0 : 1, 'vacante' => $es_vacante ? 1 : 0];
+        $row['_id_original'] = (string)($row['id_posicion'] ?? '');
+        $row['_lr_original'] = (string)($row['posicion_lr'] ?? '');
+        $row['id_posicion'] = canon_id($row['_id_original'], $alias);
+        $row['posicion_lr'] = canon_id($row['_lr_original'], $alias);
+        $rows[] = $row;
     }
-    mysqli_stmt_close($stmt); return $vendedores;
+    mysqli_stmt_close($stmt);
+    return $rows;
 }
 
-$directores = getDirectores($conexion, $rol, $id_posicion, $semana_actual, $anio_actual);
+function first_row_by_id($rows, $id, $role = null) {
+    $id = trim((string)$id);
+    foreach ($rows as $r) {
+        if ((string)($r['id_posicion'] ?? '') !== $id) continue;
+        if ($role && !is_role_pos($r['posicion'] ?? '', $role)) continue;
+        return $r;
+    }
+    return null;
+}
+
+function unique_people($rows, $role = null) {
+    $out = []; $seen = [];
+    foreach ($rows as $r) {
+        if ($role && !is_role_pos($r['posicion'] ?? '', $role)) continue;
+        $id = (string)($r['id_posicion'] ?? '');
+        if ($id === '' || isset($seen[$id])) continue;
+        $seen[$id] = true;
+        $out[] = ['id_posicion' => $id, 'nombre_colaborador' => $r['nombre_colaborador'] ?? '', '_row' => $r];
+    }
+    usort($out, function($a, $b){ return strcmp($a['nombre_colaborador'], $b['nombre_colaborador']); });
+    return $out;
+}
+
+function children_by_parent($rows, $parent_id, $role = null) {
+    $out = []; $seen = [];
+    $parent_id = trim((string)$parent_id);
+    foreach ($rows as $r) {
+        if ((string)($r['posicion_lr'] ?? '') !== $parent_id) continue;
+        if ((string)($r['id_posicion'] ?? '') === $parent_id) continue; // evita autoreferenciados
+        if ($role && !is_role_pos($r['posicion'] ?? '', $role)) continue;
+        $id = (string)($r['id_posicion'] ?? '');
+        if ($id === '' || isset($seen[$id])) continue;
+        $seen[$id] = true;
+        $out[] = ['id_posicion' => $id, 'nombre_colaborador' => $r['nombre_colaborador'] ?? '', '_row' => $r];
+    }
+    usort($out, function($a, $b){ return strcmp($a['nombre_colaborador'], $b['nombre_colaborador']); });
+    return $out;
+}
+
+function same_scope($a, $b) {
+    $dist_a = norm_txt($a['distrito'] ?? '');
+    $dist_b = norm_txt($b['distrito'] ?? '');
+    return $dist_a !== '' && $dist_a === $dist_b;
+}
+
+function find_parent_row($rows, $child_row, $parent_role) {
+    $lr = (string)($child_row['posicion_lr'] ?? '');
+    $id = (string)($child_row['id_posicion'] ?? '');
+    if (!is_blank_id($lr) && $lr !== $id) {
+        $p = first_row_by_id($rows, $lr, $parent_role);
+        if ($p) return $p;
+    }
+
+    // Fallback por liga original sin canonizar.
+    $lr_orig = (string)($child_row['_lr_original'] ?? '');
+    if (!is_blank_id($lr_orig) && $lr_orig !== (string)($child_row['_id_original'] ?? '')) {
+        foreach ($rows as $r) {
+            if (((string)($r['_id_original'] ?? '') === $lr_orig || (string)($r['id_posicion'] ?? '') === $lr_orig)
+                && is_role_pos($r['posicion'] ?? '', $parent_role)) return $r;
+        }
+    }
+
+    // Fallback de alcance: si solo existe un posible padre del rol esperado en el mismo distrito, se toma.
+    $candidates = [];
+    foreach ($rows as $r) {
+        if (!is_role_pos($r['posicion'] ?? '', $parent_role)) continue;
+        if (same_scope($child_row, $r)) $candidates[] = $r;
+    }
+    if (count($candidates) === 1) return $candidates[0];
+
+    return null;
+}
+
+function getDirectoresMem($rows, $rol, $id_posicion) {
+    if ($rol === 'admin' || $rol === 'director_regional') return unique_people($rows, 'director');
+
+    $me = first_row_by_id($rows, $id_posicion);
+    if (!$me) return [];
+
+    if ($rol === 'director_distrital') return is_role_pos($me['posicion'] ?? '', 'director') ? [[ 'id_posicion'=>$me['id_posicion'], 'nombre_colaborador'=>$me['nombre_colaborador'], '_row'=>$me ]] : [];
+    if ($rol === 'lider') {
+        $dir = find_parent_row($rows, $me, 'director');
+        return $dir ? [[ 'id_posicion'=>$dir['id_posicion'], 'nombre_colaborador'=>$dir['nombre_colaborador'], '_row'=>$dir ]] : [];
+    }
+    if ($rol === 'coach') {
+        $lid = find_parent_row($rows, $me, 'lider');
+        $dir = $lid ? find_parent_row($rows, $lid, 'director') : null;
+        return $dir ? [[ 'id_posicion'=>$dir['id_posicion'], 'nombre_colaborador'=>$dir['nombre_colaborador'], '_row'=>$dir ]] : [];
+    }
+    return [];
+}
+
+function getLideresMem($rows, $dir, $rol, $mi_id_posicion) {
+    if ($rol === 'coach') {
+        $me = first_row_by_id($rows, $mi_id_posicion, 'coach');
+        $lid = $me ? find_parent_row($rows, $me, 'lider') : null;
+        return $lid ? [[ 'id_posicion'=>$lid['id_posicion'], 'nombre_colaborador'=>$lid['nombre_colaborador'], '_row'=>$lid ]] : [];
+    }
+    if ($rol === 'lider') {
+        $me = first_row_by_id($rows, $mi_id_posicion, 'lider');
+        return $me ? [[ 'id_posicion'=>$me['id_posicion'], 'nombre_colaborador'=>$me['nombre_colaborador'], '_row'=>$me ]] : [];
+    }
+    return children_by_parent($rows, $dir['id_posicion'], 'lider');
+}
+
+function getCoachesMem($rows, $lider, $rol, $mi_id_posicion) {
+    if ($rol === 'coach') {
+        $me = first_row_by_id($rows, $mi_id_posicion, 'coach');
+        return $me ? [[ 'id_posicion'=>$me['id_posicion'], 'nombre_colaborador'=>$me['nombre_colaborador'], '_row'=>$me ]] : [];
+    }
+
+    $coaches = children_by_parent($rows, $lider['id_posicion'], 'coach');
+    $seen = [];
+    foreach ($coaches as $c) $seen[$c['id_posicion']] = true;
+
+    // Fallback: agrega coaches autoreferenciados/históricos cuyo padre real sea este líder.
+    foreach ($rows as $r) {
+        if (!is_role_pos($r['posicion'] ?? '', 'coach')) continue;
+        $id = (string)($r['id_posicion'] ?? '');
+        if ($id === '' || isset($seen[$id])) continue;
+        $parent = find_parent_row($rows, $r, 'lider');
+        if ($parent && (string)$parent['id_posicion'] === (string)$lider['id_posicion']) {
+            $seen[$id] = true;
+            $coaches[] = ['id_posicion'=>$id, 'nombre_colaborador'=>$r['nombre_colaborador'] ?? '', '_row'=>$r];
+        }
+    }
+    usort($coaches, function($a, $b){ return strcmp($a['nombre_colaborador'], $b['nombre_colaborador']); });
+    return $coaches;
+}
+
+function getVendedoresMem($rows, $coach, $puestos_comerciales) {
+    $vendedores = [];
+    foreach ($rows as $row) {
+        if (!is_puesto_comercial($row['posicion'] ?? '', $puestos_comerciales)) continue;
+        if ((string)($row['posicion_lr'] ?? '') !== (string)$coach['id_posicion']) continue;
+        if ((string)($row['id_posicion'] ?? '') === (string)$coach['id_posicion']) continue;
+        $es_vacante = is_vacante_row($row);
+        $vendedores[] = [
+            'nombre' => $row['nombre_colaborador'] ?? '',
+            'es_vacante' => $es_vacante,
+            'activo' => $es_vacante ? 0 : 1,
+            'vacante' => $es_vacante ? 1 : 0
+        ];
+    }
+    usort($vendedores, function($a, $b){
+        if ($a['es_vacante'] !== $b['es_vacante']) return $a['es_vacante'] ? 1 : -1;
+        return strcmp($a['nombre'], $b['nombre']);
+    });
+    return $vendedores;
+}
+
+$hic_alias = hic_alias_map($conexion);
+$hc_rows = load_hc_snapshot($conexion, $semana_actual, $anio_actual, $hic_alias);
+$id_posicion_canon = canon_id($id_posicion, $hic_alias);
+
+$directores = getDirectoresMem($hc_rows, $rol, $id_posicion_canon);
 $matriz = [];
 foreach ($directores as $dir) {
-    $lideres = getLideres($conexion, $dir['id_posicion'], $rol, $id_posicion, $semana_actual, $anio_actual);
+    $lideres = getLideresMem($hc_rows, $dir, $rol, $id_posicion_canon);
     $dir_activo = 0; $dir_vacante = 0; $lids_data = [];
     foreach ($lideres as $lid) {
-        $coaches = getCoaches($conexion, $lid['id_posicion'], $rol, $id_posicion, $semana_actual, $anio_actual);
+        $coaches = getCoachesMem($hc_rows, $lid, $rol, $id_posicion_canon);
         $lid_activo = 0; $lid_vacante = 0; $coaches_data = [];
         foreach ($coaches as $coach) {
-            $vendedores = getVendedores($conexion, $coach['id_posicion'], $semana_actual, $anio_actual, $puestos_in);
+            $vendedores = getVendedoresMem($hc_rows, $coach, $puestos_comerciales);
             $c_activo  = array_sum(array_column($vendedores, 'activo'));
             $c_vacante = array_sum(array_column($vendedores, 'vacante'));
             $lid_activo  += $c_activo; $lid_vacante += $c_vacante;
