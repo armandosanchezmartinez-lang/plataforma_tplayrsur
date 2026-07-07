@@ -9,6 +9,13 @@ use Shuchkin\SimpleXLSX;
 
 include $_SERVER['DOCUMENT_ROOT'] . '/plataforma/includes/conexion.php';
 
+// Normaliza la conexión para evitar errores de collation al comparar textos del Excel contra MySQL.
+if (isset($conexion) && $conexion) {
+    mysqli_set_charset($conexion, 'utf8mb4');
+    @mysqli_query($conexion, "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+    @mysqli_query($conexion, "SET collation_connection = 'utf8mb4_unicode_ci'");
+}
+
 $mensaje = "";
 $tipo_mensaje = "";
 
@@ -196,11 +203,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                         $check = mysqli_prepare($conexion, "
                             SELECT id
                             FROM historial_identidad_colaborador
-                            WHERE COALESCE(numero_talento_anterior,'') = COALESCE(?, '')
-                              AND COALESCE(numero_talento_nuevo,'') = COALESCE(?, '')
-                              AND COALESCE(id_posicion_anterior,'') = COALESCE(?, '')
-                              AND COALESCE(id_posicion_nueva,'') = COALESCE(?, '')
-                              AND COALESCE(nombre_colaborador,'') = COALESCE(?, '')
+                            WHERE COALESCE(numero_talento_anterior,'') COLLATE utf8mb4_unicode_ci = COALESCE(CAST(? AS CHAR CHARACTER SET utf8mb4), '') COLLATE utf8mb4_unicode_ci
+                              AND COALESCE(numero_talento_nuevo,'') COLLATE utf8mb4_unicode_ci = COALESCE(CAST(? AS CHAR CHARACTER SET utf8mb4), '') COLLATE utf8mb4_unicode_ci
+                              AND COALESCE(id_posicion_anterior,'') COLLATE utf8mb4_unicode_ci = COALESCE(CAST(? AS CHAR CHARACTER SET utf8mb4), '') COLLATE utf8mb4_unicode_ci
+                              AND COALESCE(id_posicion_nueva,'') COLLATE utf8mb4_unicode_ci = COALESCE(CAST(? AS CHAR CHARACTER SET utf8mb4), '') COLLATE utf8mb4_unicode_ci
+                              AND COALESCE(nombre_colaborador,'') COLLATE utf8mb4_unicode_ci = COALESCE(CAST(? AS CHAR CHARACTER SET utf8mb4), '') COLLATE utf8mb4_unicode_ci
                               AND fecha_movimiento = ?
                             LIMIT 1
                         ");
