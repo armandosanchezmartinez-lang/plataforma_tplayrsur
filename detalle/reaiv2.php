@@ -560,49 +560,8 @@ $hc_rows = [];
 $children_by_lr = [];
 $by_id_posicion = [];
 $by_talento = [];
-$identidad_talento_aliases = [];
-$identidad_talento_alias_to_canon = [];
-$identidad_id_aliases = [];
-$identidad_id_alias_to_canon = [];
-
-function reai_first_value($row, $candidates) {
-    foreach ($candidates as $c) {
-        foreach ($row as $k => $v) {
-            if (strtolower((string)$k) === strtolower((string)$c) && trim((string)$v) !== '') return (string)$v;
-        }
-    }
-    return '';
-}
-function reai_add_alias_group(&$aliases_by_canon, &$alias_to_canon, $canon, $aliases) {
-    $canon = trim((string)$canon);
-    if ($canon === '') return;
-    $aliases[] = $canon;
-    $aliases = array_values(array_unique(array_filter(array_map('strval', $aliases), function($v) { return trim((string)$v) !== ''; })));
-    if (!isset($aliases_by_canon[$canon])) $aliases_by_canon[$canon] = [];
-    $aliases_by_canon[$canon] = array_values(array_unique(array_merge($aliases_by_canon[$canon], $aliases)));
-    foreach ($aliases as $a) $alias_to_canon[(string)$a] = $canon;
-}
-function reai_cargar_identidades_colaborador($conexion, &$tal_aliases, &$tal_to_canon, &$id_aliases, &$id_to_canon) {
-    if (!table_exists($conexion, 'historial_identidad_colaborador')) return;
-    $res = mysqli_query($conexion, "SELECT * FROM historial_identidad_colaborador");
-    while ($res && $row = mysqli_fetch_assoc($res)) {
-        $tal_ant = reai_first_value($row, ['numero_talento_anterior','talento_anterior','numero_talento_gs_anterior','folio_anterior','talento_gs_anterior','num_talento_anterior']);
-        $tal_nvo = reai_first_value($row, ['numero_talento_nuevo','talento_nuevo','numero_talento_gs_nuevo','folio_nuevo','talento_gs_nuevo','num_talento_nuevo']);
-        $id_ant  = reai_first_value($row, ['id_posicion_anterior','id_posicion_old','posicion_anterior','id_anterior','idposicion_anterior']);
-        $id_nvo  = reai_first_value($row, ['id_posicion_nueva','id_posicion_nuevo','id_posicion_new','posicion_nueva','posicion_nuevo','id_nuevo','idposicion_nueva']);
-
-        $tal_canon = $tal_nvo !== '' ? $tal_nvo : $tal_ant;
-        $id_canon  = $id_nvo  !== '' ? $id_nvo  : $id_ant;
-        reai_add_alias_group($tal_aliases, $tal_to_canon, $tal_canon, [$tal_ant, $tal_nvo]);
-        reai_add_alias_group($id_aliases,  $id_to_canon,  $id_canon,  [$id_ant, $id_nvo]);
-    }
-}
-function reai_aliases_for($canon, $aliases_by_canon) {
-    $canon = (string)$canon;
-    $aliases = $aliases_by_canon[$canon] ?? [$canon];
-    $aliases[] = $canon;
-    return array_values(array_unique(array_filter($aliases, function($v) { return trim((string)$v) !== ''; })));
-}
+$talento_aliases_reai = [];
+$id_aliases_reai = [];
 
 function es_puesto_vendedor_reai($posicion, $puestos_comerciales) {
     return in_array(trim((string)$posicion), $puestos_comerciales, true);
@@ -664,7 +623,6 @@ function ordenar_por_nombre_reai(&$arr) {
 }
 
 if ($semana_hc && $anio_hc) {
-    reai_cargar_identidades_colaborador($conexion, $identidad_talento_aliases, $identidad_talento_alias_to_canon, $identidad_id_aliases, $identidad_id_alias_to_canon);
     $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, distrito, fecha_alta
                FROM hc
                WHERE semana = ? AND anio = ?
@@ -675,44 +633,111 @@ if ($semana_hc && $anio_hc) {
     mysqli_stmt_execute($stmt_hc);
     $res_hc = mysqli_stmt_get_result($stmt_hc);
     while ($r = mysqli_fetch_assoc($res_hc)) {
-        $id_original = (string)($r['id_posicion'] ?? '');
-        $lr_original = (string)($r['posicion_lr'] ?? '');
-        $tal_original = (string)($r['numero_talento_gs'] ?? '');
-
-        $id_canon = $identidad_id_alias_to_canon[$id_original] ?? $id_original;
-        $tal_canon = $identidad_talento_alias_to_canon[$tal_original] ?? $tal_original;
-        $lr_canon = $identidad_id_alias_to_canon[$lr_original] ?? $lr_original;
-
-        $r['id_posicion_original'] = $id_original;
-        $r['posicion_lr_original'] = $lr_original;
-        $r['numero_talento_original'] = $tal_original;
-        $r['id_posicion'] = (string)$id_canon;
-        $r['posicion_lr'] = (string)$lr_canon;
-        $r['numero_talento_gs'] = (string)$tal_canon;
-        $r['id_posicion_aliases'] = reai_aliases_for($id_canon, $identidad_id_aliases);
-        if ($id_original !== '' && !in_array($id_original, $r['id_posicion_aliases'], true)) $r['id_posicion_aliases'][] = $id_original;
-        $r['numero_talento_aliases'] = reai_aliases_for($tal_canon, $identidad_talento_aliases);
-        if ($tal_original !== '' && !in_array($tal_original, $r['numero_talento_aliases'], true)) $r['numero_talento_aliases'][] = $tal_original;
-
+        $r['id_posicion'] = (string)($r['id_posicion'] ?? '');
+        $r['posicion_lr'] = (string)($r['posicion_lr'] ?? '');
+        $r['numero_talento_gs'] = (string)($r['numero_talento_gs'] ?? '');
         $hc_rows[] = $r;
-        if ($r['id_posicion'] !== '') {
-            $by_id_posicion[$r['id_posicion']] = $r;
-            foreach ($r['id_posicion_aliases'] as $aid) $by_id_posicion[(string)$aid] = $r;
-        }
-        if ($r['numero_talento_gs'] !== '') {
-            $by_talento[$r['numero_talento_gs']] = $r;
-            foreach ($r['numero_talento_aliases'] as $at) $by_talento[(string)$at] = $r;
-        }
-
-        // Guardar el hijo tanto bajo el posicion_lr original como bajo el canónico.
-        // Esto resuelve migraciones donde el subordinado aún apunta al id_posicion anterior del jefe.
-        if ($lr_original !== '') $children_by_lr[$lr_original][] = $r;
-        if ($lr_canon !== '' && $lr_canon !== $lr_original) $children_by_lr[$lr_canon][] = $r;
     }
     mysqli_stmt_close($stmt_hc);
 
-    $id_posicion = $identidad_id_alias_to_canon[(string)$id_posicion] ?? $id_posicion;
-    $talento_gs_coach = $identidad_talento_alias_to_canon[(string)$talento_gs_coach] ?? $talento_gs_coach;
+    /*
+     * FIX REAI · Migración de nómina Elektra → Grupo Salinas
+     * Se normalizan numero_talento_gs, id_posicion y posicion_lr usando la tabla puente.
+     * Importante: este bloque no hace JOIN directo contra HC; primero lee HC productivo
+     * y después aplica equivalencias en memoria para evitar SQL 500 si la tabla cambia.
+     */
+    $talento_alias_to_canon_reai = [];
+    $id_alias_to_canon_reai = [];
+    if (table_exists($conexion, 'historial_identidad_colaborador')) {
+        $cols_hic = table_columns_reai($conexion, 'historial_identidad_colaborador');
+        $col_tal_ant = pick_column_reai($cols_hic, ['numero_talento_anterior','talento_anterior','folio_anterior','numero_talento_gs_anterior']);
+        $col_tal_new = pick_column_reai($cols_hic, ['numero_talento_nuevo','talento_nuevo','folio_nuevo','numero_talento_gs_nuevo']);
+        $col_id_ant  = pick_column_reai($cols_hic, ['id_posicion_anterior','posicion_anterior','id_anterior']);
+        $col_id_new  = pick_column_reai($cols_hic, ['id_posicion_nueva','id_posicion_nuevo','posicion_nueva','id_nuevo']);
+        if ($col_tal_ant || $col_tal_new || $col_id_ant || $col_id_new) {
+            $selects_hic = [];
+            $selects_hic[] = $col_tal_ant ? bt_reai($col_tal_ant) . " AS tal_ant" : "'' AS tal_ant";
+            $selects_hic[] = $col_tal_new ? bt_reai($col_tal_new) . " AS tal_new" : "'' AS tal_new";
+            $selects_hic[] = $col_id_ant  ? bt_reai($col_id_ant)  . " AS id_ant"  : "'' AS id_ant";
+            $selects_hic[] = $col_id_new  ? bt_reai($col_id_new)  . " AS id_new"  : "'' AS id_new";
+            $sql_hic = "SELECT " . implode(',', $selects_hic) . " FROM historial_identidad_colaborador";
+            $res_hic = mysqli_query($conexion, $sql_hic);
+            while ($res_hic && $hic = mysqli_fetch_assoc($res_hic)) {
+                $tal_ant = trim((string)($hic['tal_ant'] ?? ''));
+                $tal_new = trim((string)($hic['tal_new'] ?? ''));
+                $id_ant  = trim((string)($hic['id_ant'] ?? ''));
+                $id_new  = trim((string)($hic['id_new'] ?? ''));
+
+                $tal_canon = $tal_new !== '' ? $tal_new : $tal_ant;
+                if ($tal_canon !== '') {
+                    foreach ([$tal_ant, $tal_new, $tal_canon] as $ta) {
+                        $ta = trim((string)$ta);
+                        if ($ta !== '') $talento_alias_to_canon_reai[$ta] = $tal_canon;
+                    }
+                    $talento_aliases_reai[$tal_canon] = array_values(array_unique(array_filter(array_merge(
+                        $talento_aliases_reai[$tal_canon] ?? [], [$tal_ant, $tal_new, $tal_canon]
+                    ))));
+                }
+
+                $id_canon = $id_new !== '' ? $id_new : $id_ant;
+                if ($id_canon !== '') {
+                    foreach ([$id_ant, $id_new, $id_canon] as $ia) {
+                        $ia = trim((string)$ia);
+                        if ($ia !== '') $id_alias_to_canon_reai[$ia] = $id_canon;
+                    }
+                    $id_aliases_reai[$id_canon] = array_values(array_unique(array_filter(array_merge(
+                        $id_aliases_reai[$id_canon] ?? [], [$id_ant, $id_new, $id_canon]
+                    ))));
+                }
+            }
+        }
+    }
+
+    // Reconstruye índices y árbol jerárquico ya con identidad canónica.
+    $hc_rows_raw = $hc_rows;
+    $hc_rows = [];
+    $children_by_lr = [];
+    $by_id_posicion = [];
+    $by_talento = [];
+    $seen_identidad_reai = [];
+    foreach ($hc_rows_raw as $r) {
+        $tal_original = trim((string)($r['numero_talento_gs'] ?? ''));
+        $id_original  = trim((string)($r['id_posicion'] ?? ''));
+        $lr_original  = trim((string)($r['posicion_lr'] ?? ''));
+
+        $tal_canon = $talento_alias_to_canon_reai[$tal_original] ?? $tal_original;
+        $id_canon  = $id_alias_to_canon_reai[$id_original] ?? $id_original;
+        $lr_canon  = $id_alias_to_canon_reai[$lr_original] ?? $lr_original;
+
+        $tal_aliases = $talento_aliases_reai[$tal_canon] ?? [$tal_canon, $tal_original];
+        $id_aliases  = $id_aliases_reai[$id_canon] ?? [$id_canon, $id_original];
+        $tal_aliases = array_values(array_unique(array_filter(array_map('strval', $tal_aliases))));
+        $id_aliases  = array_values(array_unique(array_filter(array_map('strval', $id_aliases))));
+
+        $r['numero_talento_gs'] = $tal_canon;
+        $r['id_posicion'] = $id_canon;
+        $r['posicion_lr'] = $lr_canon;
+        $r['numero_talento_aliases'] = $tal_aliases;
+        $r['id_posicion_aliases'] = $id_aliases;
+
+        $dedup_key = ($id_canon !== '' ? $id_canon : $tal_canon) . '|' . normaliza_key($r['nombre_colaborador'] ?? '');
+        if ($dedup_key !== '|' && isset($seen_identidad_reai[$dedup_key])) continue;
+        $seen_identidad_reai[$dedup_key] = true;
+
+        $hc_rows[] = $r;
+        if ($id_canon !== '') {
+            $by_id_posicion[$id_canon] = $r;
+            foreach ($id_aliases as $ia) $by_id_posicion[$ia] = $r;
+        }
+        if ($tal_canon !== '') {
+            $by_talento[$tal_canon] = $r;
+            foreach ($tal_aliases as $ta) $by_talento[$ta] = $r;
+        }
+        $children_by_lr[$lr_canon][] = $r;
+    }
+
+    $id_posicion = $id_alias_to_canon_reai[(string)$id_posicion] ?? $id_posicion;
+    $talento_gs_coach = $talento_alias_to_canon_reai[(string)$talento_gs_coach] ?? $talento_gs_coach;
 
     $memo_desc = [];
     $agregar_fila = function($row, $nivel) use (&$vendedores, &$children_by_lr, $puestos_comerciales, &$memo_desc) {
@@ -811,45 +836,6 @@ if ($semana_hc && $anio_hc) {
     } else {
         if (isset($by_talento[(string)$talento_gs_coach])) $agregar_fila($by_talento[(string)$talento_gs_coach], inferir_nivel_reai($by_talento[(string)$talento_gs_coach], $puestos_comerciales));
     }
-
-    // Respaldo estable para colaboradores migrados de nómina:
-    // Si la cadena posicion_lr queda rota, agregamos los puestos visibles por alcance
-    // desde HC normalizado, deduplicando. Así no se pierden coaches/líderes/vendedores
-    // migrados aunque la jerarquía padre-hijo no haya quedado perfecta.
-    $seen_reai = [];
-    $vendedores_ok = [];
-    foreach ($vendedores as $fila) {
-        $k = ($fila['nivel_reai'] ?? '') . '|' . (($fila['id_posicion'] ?? '') !== '' ? ($fila['id_posicion'] ?? '') : ($fila['numero_talento_gs'] ?? ''));
-        if ($k === '|') continue;
-        if (isset($seen_reai[$k])) continue;
-        $seen_reai[$k] = true;
-        $vendedores_ok[] = $fila;
-    }
-    $vendedores = $vendedores_ok;
-
-    $agregar_respaldo_reai = function($row, $nivel) use (&$vendedores, &$seen_reai, &$children_by_lr, $puestos_comerciales, &$memo_desc) {
-        if (empty($row['numero_talento_gs'])) return;
-        $k = (string)$nivel . '|' . (((string)($row['id_posicion'] ?? '') !== '') ? (string)$row['id_posicion'] : (string)$row['numero_talento_gs']);
-        if (isset($seen_reai[$k])) return;
-        $seen_reai[$k] = true;
-        $childs = ($nivel === 'VENDEDOR') ? [(string)$row['numero_talento_gs']] : obtener_vendedores_descendientes_reai($row['id_posicion'] ?? '', $children_by_lr, $puestos_comerciales, $memo_desc);
-        $vendedores[] = crear_fila_reai($row, $nivel, $childs);
-    };
-
-    if ($rol === 'admin' || $rol === 'director_regional') {
-        foreach ($hc_rows as $rfx) {
-            $nivel_fx = inferir_nivel_reai($rfx, $puestos_comerciales);
-            if (in_array($nivel_fx, ['DIRECTOR DISTRITAL','LÍDER','COACH','VENDEDOR'], true)) $agregar_respaldo_reai($rfx, $nivel_fx);
-        }
-    } elseif ($rol === 'director_distrital') {
-        $dist_sesion = '';
-        if (isset($by_id_posicion[(string)$id_posicion])) $dist_sesion = normaliza_key($by_id_posicion[(string)$id_posicion]['distrito'] ?? '');
-        foreach ($hc_rows as $rfx) {
-            if ($dist_sesion !== '' && normaliza_key($rfx['distrito'] ?? '') !== $dist_sesion) continue;
-            $nivel_fx = inferir_nivel_reai($rfx, $puestos_comerciales);
-            if (in_array($nivel_fx, ['LÍDER','COACH','VENDEDOR'], true)) $agregar_respaldo_reai($rfx, $nivel_fx);
-        }
-    }
 }
 
 
@@ -928,34 +914,33 @@ if (!empty($vendedores)) {
     }
     $talentos_metricas = array_values(array_unique(array_filter($talentos_metricas)));
 
-    // Aliases para métricas e historial REAI de colaboradores migrados.
+    // Expande folios migrados para cruzar instalaciones/REAI con folio anterior o nuevo,
+    // pero acumula todo en el folio canónico visible.
     $talentos_metricas_aliases = [];
-    $metric_alias_to_canon = [];
-    foreach ($talentos_metricas as $canon_t) {
-        $aliases = $identidad_talento_aliases[(string)$canon_t] ?? [(string)$canon_t];
-        $aliases[] = (string)$canon_t;
-        foreach (array_unique($aliases) as $alias_t) {
-            $alias_t = (string)$alias_t;
-            if ($alias_t === '') continue;
-            $talentos_metricas_aliases[] = $alias_t;
-            $metric_alias_to_canon[$alias_t] = (string)$canon_t;
+    $metric_alias_to_canon_reai = [];
+    foreach ($talentos_metricas as $tm) {
+        $aliases = $talento_aliases_reai[$tm] ?? [$tm];
+        foreach ($aliases as $alias_tm) {
+            $alias_tm = (string)$alias_tm;
+            if ($alias_tm === '') continue;
+            $talentos_metricas_aliases[] = $alias_tm;
+            $metric_alias_to_canon_reai[$alias_tm] = $tm;
         }
     }
-    $talentos_metricas_aliases = array_values(array_unique($talentos_metricas_aliases));
+    $talentos_metricas_aliases = array_values(array_unique(array_filter($talentos_metricas_aliases)));
 
     $talentos_reai_aliases = [];
-    $reai_alias_to_canon = [];
-    foreach ($talentos_reai as $canon_t) {
-        $aliases = $identidad_talento_aliases[(string)$canon_t] ?? [(string)$canon_t];
-        $aliases[] = (string)$canon_t;
-        foreach (array_unique($aliases) as $alias_t) {
-            $alias_t = (string)$alias_t;
-            if ($alias_t === '') continue;
-            $talentos_reai_aliases[] = $alias_t;
-            $reai_alias_to_canon[$alias_t] = (string)$canon_t;
+    $reai_alias_to_canon_reai = [];
+    foreach ($talentos_reai as $tr) {
+        $aliases = $talento_aliases_reai[$tr] ?? [$tr];
+        foreach ($aliases as $alias_tr) {
+            $alias_tr = (string)$alias_tr;
+            if ($alias_tr === '') continue;
+            $talentos_reai_aliases[] = $alias_tr;
+            $reai_alias_to_canon_reai[$alias_tr] = $tr;
         }
     }
-    $talentos_reai_aliases = array_values(array_unique($talentos_reai_aliases));
+    $talentos_reai_aliases = array_values(array_unique(array_filter($talentos_reai_aliases)));
 
     $fi_base = $periodo_base['inicio'];
     $ff_base = $periodo_base['fin'];
@@ -971,21 +956,21 @@ if (!empty($vendedores)) {
         mysqli_stmt_bind_param($stmt_ib, 'ss'.$tiposm, $fi_base, $ff_base, ...array_values($talentos_metricas_aliases));
         mysqli_stmt_execute($stmt_ib);
         $res_ib = mysqli_stmt_get_result($stmt_ib);
-        while ($r = mysqli_fetch_assoc($res_ib)) { $canon = $metric_alias_to_canon[(string)$r['folio_empleado']] ?? (string)$r['folio_empleado']; $metricas_vendedor[$canon]['inst_base'] = ($metricas_vendedor[$canon]['inst_base'] ?? 0) + (int)$r['total']; }
+        while ($r = mysqli_fetch_assoc($res_ib)) { $canon = $metric_alias_to_canon_reai[(string)$r['folio_empleado']] ?? (string)$r['folio_empleado']; $metricas_vendedor[$canon]['inst_base'] = ($metricas_vendedor[$canon]['inst_base'] ?? 0) + (int)$r['total']; }
         mysqli_stmt_close($stmt_ib);
 
         $stmt_ia = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($phm) GROUP BY folio_empleado");
         mysqli_stmt_bind_param($stmt_ia, 'ss'.$tiposm, $fi_act, $ff_act, ...array_values($talentos_metricas_aliases));
         mysqli_stmt_execute($stmt_ia);
         $res_ia = mysqli_stmt_get_result($stmt_ia);
-        while ($r = mysqli_fetch_assoc($res_ia)) { $canon = $metric_alias_to_canon[(string)$r['folio_empleado']] ?? (string)$r['folio_empleado']; $metricas_vendedor[$canon]['inst_actual'] = ($metricas_vendedor[$canon]['inst_actual'] ?? 0) + (int)$r['total']; }
+        while ($r = mysqli_fetch_assoc($res_ia)) { $canon = $metric_alias_to_canon_reai[(string)$r['folio_empleado']] ?? (string)$r['folio_empleado']; $metricas_vendedor[$canon]['inst_actual'] = ($metricas_vendedor[$canon]['inst_actual'] ?? 0) + (int)$r['total']; }
         mysqli_stmt_close($stmt_ia);
 
         $stmt_i3m = mysqli_prepare($conexion, "SELECT folio_empleado, COUNT(cuenta) AS total FROM instalaciones WHERE fecha BETWEEN ? AND ? AND folio_empleado IN ($phm) GROUP BY folio_empleado");
         mysqli_stmt_bind_param($stmt_i3m, 'ss'.$tiposm, $fecha_3m_inicio, $fecha_3m_fin, ...array_values($talentos_metricas_aliases));
         mysqli_stmt_execute($stmt_i3m);
         $res_i3m = mysqli_stmt_get_result($stmt_i3m);
-        while ($r = mysqli_fetch_assoc($res_i3m)) { $canon = $metric_alias_to_canon[(string)$r['folio_empleado']] ?? (string)$r['folio_empleado']; $metricas_vendedor[$canon]['inst_3m'] = ($metricas_vendedor[$canon]['inst_3m'] ?? 0) + (int)$r['total']; }
+        while ($r = mysqli_fetch_assoc($res_i3m)) { $canon = $metric_alias_to_canon_reai[(string)$r['folio_empleado']] ?? (string)$r['folio_empleado']; $metricas_vendedor[$canon]['inst_3m'] = ($metricas_vendedor[$canon]['inst_3m'] ?? 0) + (int)$r['total']; }
         mysqli_stmt_close($stmt_i3m);
     }
 
@@ -998,7 +983,7 @@ if (!empty($vendedores)) {
         mysqli_stmt_execute($stmt_rc);
         $res_rc = mysqli_stmt_get_result($stmt_rc);
         while ($r = mysqli_fetch_assoc($res_rc)) {
-            $t = $reai_alias_to_canon[(string)$r['numero_talento_gs']] ?? (string)$r['numero_talento_gs'];
+            $t = $reai_alias_to_canon_reai[(string)$r['numero_talento_gs']] ?? (string)$r['numero_talento_gs'];
             $stats[$t]['reai'][$r['asunto']] = ($stats[$t]['reai'][$r['asunto']] ?? 0) + (int)$r['total'];
             $stats[$t]['reai_total'] = ($stats[$t]['reai_total'] ?? 0) + (int)$r['total'];
             if (empty($stats[$t]['ultima_reai']) || $r['ultima_fecha'] > $stats[$t]['ultima_reai']) $stats[$t]['ultima_reai'] = $r['ultima_fecha'];
@@ -1039,9 +1024,9 @@ if (!empty($vendedores)) {
             while ($r = mysqli_fetch_assoc($res_meta)) {
                 $meta_val = (int)($r['meta_asignada'] ?? 0);
                 $id_sub = (string)($r['id_subordinado'] ?? '');
-                if ($id_sub !== '' && isset($metric_alias_to_canon[$id_sub])) {
-                    $canon_sub = $metric_alias_to_canon[$id_sub];
-                    $metas_eo_vendedor[$canon_sub] = max($metas_eo_vendedor[$canon_sub] ?? 0, $meta_val);
+                if ($id_sub !== '' && isset($metric_alias_to_canon_reai[$id_sub])) {
+                    $canon_sub_meta = $metric_alias_to_canon_reai[$id_sub];
+                    $metas_eo_vendedor[$canon_sub_meta] = max($metas_eo_vendedor[$canon_sub_meta] ?? 0, $meta_val);
                     continue;
                 }
                 $nom_sub = normaliza_key($r['nombre_subordinado'] ?? '');
