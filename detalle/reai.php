@@ -575,7 +575,11 @@ function es_director_distrital_reai($row) {
 function inferir_nivel_reai($row, $puestos_comerciales) {
     if (es_puesto_vendedor_reai($row['posicion'] ?? '', $puestos_comerciales)) return 'VENDEDOR';
     if (es_director_distrital_reai($row)) return 'DIRECTOR DISTRITAL';
-    $p = normaliza_key($row['posicion'] ?? '');
+
+    // La migración de nómina puede dejar desalineado id_posicion/posicion_lr.
+    // Por eso el nivel se infiere con posicion + puesto_lr para no perder Coaches
+    // como CEFERINO LUGO PATRICIA CONCEPCION.
+    $p = normaliza_key(($row['posicion'] ?? '') . ' ' . ($row['puesto_lr'] ?? ''));
     if (strpos($p, 'COACH') !== false) return 'COACH';
     if (strpos($p, 'LIDER') !== false || strpos($p, 'GERENTE') !== false) return 'LÍDER';
     return 'COLABORADOR';
@@ -611,6 +615,8 @@ function crear_fila_reai($row, $nivel, $child_talentos = []) {
         'id_posicion'        => (string)($row['id_posicion'] ?? ''),
         'id_posicion_aliases'=> $row['id_posicion_aliases'] ?? [(string)($row['id_posicion'] ?? '')],
         'posicion_lr'        => (string)($row['posicion_lr'] ?? ''),
+        'puesto_lr'          => $row['puesto_lr'] ?? '',
+        'nombre_linea_reporte' => $row['nombre_linea_reporte'] ?? '',
         'fecha_alta'         => $row['fecha_alta'] ?? null,
         'distrito'           => $row['distrito'] ?? '',
         'canal_venta'        => $row['posicion'] ?? '',
@@ -629,7 +635,7 @@ if ($semana_hc && $anio_hc) {
     // usando historial_identidad_colaborador. Esto evita que colaboradores migrados
     // se pierdan en la jerarquía o en los cruces contra instalaciones / REAI.
     if (table_exists($conexion, 'historial_identidad_colaborador')) {
-        $sql_hc = "SELECT h.nombre_colaborador, h.numero_talento_gs, h.id_posicion, h.posicion_lr, h.posicion, h.distrito, h.fecha_alta,
+        $sql_hc = "SELECT h.nombre_colaborador, h.numero_talento_gs, h.id_posicion, h.posicion_lr, h.posicion, h.puesto_lr, h.nombre_linea_reporte, h.distrito, h.fecha_alta,
                           h.numero_talento_gs AS numero_talento_original,
                           h.id_posicion AS id_posicion_original,
                           h.posicion_lr AS posicion_lr_original,
@@ -656,7 +662,7 @@ if ($semana_hc && $anio_hc) {
                      AND h.numero_talento_gs NOT LIKE '%VACANTE%'
                      AND h.nombre_colaborador NOT LIKE '%VACANTE%'";
     } else {
-        $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, distrito, fecha_alta,
+        $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, puesto_lr, nombre_linea_reporte, distrito, fecha_alta,
                           numero_talento_gs AS numero_talento_original,
                           id_posicion AS id_posicion_original,
                           posicion_lr AS posicion_lr_original,
@@ -733,6 +739,37 @@ if ($semana_hc && $anio_hc) {
             foreach (($r['numero_talento_aliases'] ?? []) as $alias_t) $by_talento[(string)$alias_t] = $r;
         }
         $children_by_lr[$r['posicion_lr']][] = $r;
+    }
+
+    // FIX adicional identidad/jerarquía:
+    // Algunos colaboradores migrados conservan nombre_linea_reporte correcto,
+    // pero posicion_lr ya no empata con el id_posicion vigente. Se agrega una
+    // arista de respaldo por nombre del jefe + distrito para reconstruir la línea.
+    $edge_seen_reai = [];
+    foreach ($children_by_lr as $parent_key => $arr_children) {
+        foreach ($arr_children as $child_tmp) {
+            $edge_seen_reai[(string)$parent_key . '|' . (string)($child_tmp['id_posicion'] ?? '') . '|' . (string)($child_tmp['numero_talento_gs'] ?? '')] = true;
+        }
+    }
+    foreach ($hc_rows as $parent_row) {
+        $parent_id = (string)($parent_row['id_posicion'] ?? '');
+        $parent_name = normaliza_key($parent_row['nombre_colaborador'] ?? '');
+        $parent_dist = normaliza_key($parent_row['distrito'] ?? '');
+        if ($parent_id === '' || $parent_name === '') continue;
+
+        foreach ($hc_rows as $child_row) {
+            if (($child_row['id_posicion'] ?? '') === $parent_id) continue;
+            $child_lr_name = normaliza_key($child_row['nombre_linea_reporte'] ?? '');
+            $child_dist = normaliza_key($child_row['distrito'] ?? '');
+            if ($child_lr_name === '' || $child_lr_name !== $parent_name) continue;
+            if ($parent_dist !== '' && $child_dist !== '' && $parent_dist !== $child_dist) continue;
+
+            $edge_key = $parent_id . '|' . (string)($child_row['id_posicion'] ?? '') . '|' . (string)($child_row['numero_talento_gs'] ?? '');
+            if (!isset($edge_seen_reai[$edge_key])) {
+                $children_by_lr[$parent_id][] = $child_row;
+                $edge_seen_reai[$edge_key] = true;
+            }
+        }
     }
 
     $id_posicion = $identidad_id_alias_to_canon[(string)$id_posicion] ?? $id_posicion;
@@ -835,6 +872,54 @@ if ($semana_hc && $anio_hc) {
     } else {
         if (isset($by_talento[(string)$talento_gs_coach])) $agregar_fila($by_talento[(string)$talento_gs_coach], inferir_nivel_reai($by_talento[(string)$talento_gs_coach], $puestos_comerciales));
     }
+
+    // Fallback de cobertura por alcance del rol.
+    // Evita que un Coach/Líder migrado desaparezca si la arista jerárquica quedó rota.
+    $scope_rows_reai = [];
+    if ($rol === 'admin' || $rol === 'director_regional') {
+        $scope_rows_reai = $hc_rows;
+    } elseif ($rol === 'director_distrital') {
+        $dist_scope = '';
+        if (isset($by_id_posicion[(string)$id_posicion])) $dist_scope = normaliza_key($by_id_posicion[(string)$id_posicion]['distrito'] ?? '');
+        foreach ($hc_rows as $r_scope) {
+            if ($dist_scope !== '' && normaliza_key($r_scope['distrito'] ?? '') !== $dist_scope) continue;
+            $scope_rows_reai[] = $r_scope;
+        }
+    } elseif ($rol === 'lider') {
+        $ids_scope = $identidad_id_aliases[(string)$id_posicion] ?? [(string)$id_posicion];
+        $name_scope = isset($by_id_posicion[(string)$id_posicion]) ? normaliza_key($by_id_posicion[(string)$id_posicion]['nombre_colaborador'] ?? '') : '';
+        foreach ($hc_rows as $r_scope) {
+            $lr = (string)($r_scope['posicion_lr_original'] ?? $r_scope['posicion_lr'] ?? '');
+            $lr_name = normaliza_key($r_scope['nombre_linea_reporte'] ?? '');
+            if (in_array($lr, $ids_scope, true) || ($name_scope !== '' && $lr_name === $name_scope)) $scope_rows_reai[] = $r_scope;
+        }
+    } elseif ($rol === 'coach') {
+        $ids_scope = $identidad_id_aliases[(string)$id_posicion] ?? [(string)$id_posicion];
+        $name_scope = isset($by_id_posicion[(string)$id_posicion]) ? normaliza_key($by_id_posicion[(string)$id_posicion]['nombre_colaborador'] ?? '') : '';
+        foreach ($hc_rows as $r_scope) {
+            $lr = (string)($r_scope['posicion_lr_original'] ?? $r_scope['posicion_lr'] ?? '');
+            $lr_name = normaliza_key($r_scope['nombre_linea_reporte'] ?? '');
+            if (in_array($lr, $ids_scope, true) || ($name_scope !== '' && $lr_name === $name_scope)) $scope_rows_reai[] = $r_scope;
+        }
+    }
+
+    foreach ($scope_rows_reai as $r_scope) {
+        $nivel_scope = inferir_nivel_reai($r_scope, $puestos_comerciales);
+        if (!in_array($nivel_scope, ['DIRECTOR DISTRITAL','LÍDER','COACH','VENDEDOR'], true)) continue;
+        if ($rol === 'director_distrital' && $nivel_scope === 'DIRECTOR DISTRITAL') continue;
+        if ($rol === 'lider' && !in_array($nivel_scope, ['COACH','VENDEDOR'], true)) continue;
+        if ($rol === 'coach' && $nivel_scope !== 'VENDEDOR') continue;
+        $agregar_fila($r_scope, $nivel_scope);
+    }
+
+    // De-duplicado final por nivel + identidad canónica.
+    $dedup_vendedores_reai = [];
+    $vendedores = array_values(array_filter($vendedores, function($row) use (&$dedup_vendedores_reai) {
+        $key = ($row['nivel_reai'] ?? '') . '|' . (($row['id_posicion'] ?? '') ?: ($row['numero_talento_gs'] ?? '') ?: normaliza_key($row['nombre_colaborador'] ?? ''));
+        if (isset($dedup_vendedores_reai[$key])) return false;
+        $dedup_vendedores_reai[$key] = true;
+        return true;
+    }));
 }
 
 
