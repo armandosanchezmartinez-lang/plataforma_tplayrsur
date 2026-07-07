@@ -22,85 +22,6 @@ if (!$tgs) {
 
 function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 
-function table_exists_detalle_reai($conexion, $table) {
-    $table = mysqli_real_escape_string($conexion, $table);
-    $res = mysqli_query($conexion, "SHOW TABLES LIKE '$table'");
-    return $res && mysqli_num_rows($res) > 0;
-}
-function table_columns_detalle_reai($conexion, $table) {
-    $cols = [];
-    $table_esc = str_replace('`', '', (string)$table);
-    $res = mysqli_query($conexion, "SHOW COLUMNS FROM `$table_esc`");
-    while ($res && $row = mysqli_fetch_assoc($res)) $cols[] = $row['Field'];
-    return $cols;
-}
-function pick_column_detalle_reai($cols, $candidates) {
-    $lookup = [];
-    foreach ($cols as $c) $lookup[strtolower($c)] = $c;
-    foreach ($candidates as $cand) {
-        $key = strtolower($cand);
-        if (isset($lookup[$key])) return $lookup[$key];
-    }
-    return null;
-}
-function bt_detalle_reai($identifier) {
-    return '`' . str_replace('`', '', (string)$identifier) . '`';
-}
-function cargar_hic_fallback_detalle_reai($conexion) {
-    $data = [
-        'talento_aliases' => [],
-        'id_aliases' => [],
-        'talento_alias_to_canon' => [],
-        'id_alias_to_canon' => [],
-    ];
-    if (!table_exists_detalle_reai($conexion, 'historial_identidad_colaborador')) return $data;
-
-    $cols = table_columns_detalle_reai($conexion, 'historial_identidad_colaborador');
-    $col_tal_ant = pick_column_detalle_reai($cols, ['numero_talento_anterior','talento_anterior','folio_anterior','numero_talento_gs_anterior']);
-    $col_tal_new = pick_column_detalle_reai($cols, ['numero_talento_nuevo','talento_nuevo','folio_nuevo','numero_talento_gs_nuevo']);
-    $col_id_ant  = pick_column_detalle_reai($cols, ['id_posicion_anterior','posicion_anterior','id_anterior']);
-    $col_id_new  = pick_column_detalle_reai($cols, ['id_posicion_nueva','id_posicion_nuevo','posicion_nueva','id_nuevo']);
-    if (!$col_tal_ant && !$col_tal_new && !$col_id_ant && !$col_id_new) return $data;
-
-    $sel = [];
-    $sel[] = $col_tal_ant ? bt_detalle_reai($col_tal_ant) . " AS tal_ant" : "'' AS tal_ant";
-    $sel[] = $col_tal_new ? bt_detalle_reai($col_tal_new) . " AS tal_new" : "'' AS tal_new";
-    $sel[] = $col_id_ant  ? bt_detalle_reai($col_id_ant)  . " AS id_ant"  : "'' AS id_ant";
-    $sel[] = $col_id_new  ? bt_detalle_reai($col_id_new)  . " AS id_new"  : "'' AS id_new";
-    $res = mysqli_query($conexion, "SELECT " . implode(',', $sel) . " FROM historial_identidad_colaborador");
-    while ($res && $row = mysqli_fetch_assoc($res)) {
-        $tal_ant = trim((string)($row['tal_ant'] ?? ''));
-        $tal_new = trim((string)($row['tal_new'] ?? ''));
-        $id_ant  = trim((string)($row['id_ant'] ?? ''));
-        $id_new  = trim((string)($row['id_new'] ?? ''));
-
-        $tal_canon = $tal_new !== '' ? $tal_new : $tal_ant;
-        if ($tal_canon !== '') {
-            $aliases = array_values(array_unique(array_filter([$tal_ant, $tal_new, $tal_canon], fn($x) => trim((string)$x) !== '')));
-            foreach ($aliases as $a) $data['talento_alias_to_canon'][(string)$a] = (string)$tal_canon;
-            $data['talento_aliases'][(string)$tal_canon] = array_values(array_unique(array_merge($data['talento_aliases'][(string)$tal_canon] ?? [], array_map('strval', $aliases))));
-        }
-
-        $id_canon = $id_new !== '' ? $id_new : $id_ant;
-        if ($id_canon !== '') {
-            $aliases = array_values(array_unique(array_filter([$id_ant, $id_new, $id_canon], fn($x) => trim((string)$x) !== '')));
-            foreach ($aliases as $a) $data['id_alias_to_canon'][(string)$a] = (string)$id_canon;
-            $data['id_aliases'][(string)$id_canon] = array_values(array_unique(array_merge($data['id_aliases'][(string)$id_canon] ?? [], array_map('strval', $aliases))));
-        }
-    }
-    return $data;
-}
-function aliases_talento_detalle_reai($talento, $talento_alias_to_canon, $talento_aliases) {
-    $talento = trim((string)$talento);
-    $canon = $talento_alias_to_canon[$talento] ?? $talento;
-    $aliases = $talento_aliases[$canon] ?? [$canon, $talento];
-    return array_values(array_unique(array_filter(array_map('strval', $aliases), fn($x) => trim($x) !== '')));
-}
-function canon_id_detalle_reai($id, $id_alias_to_canon) {
-    $id = trim((string)$id);
-    return $id_alias_to_canon[$id] ?? $id;
-}
-
 function normaliza_detalle_reai($v) {
     $v = strtoupper(trim((string)$v));
     $v = str_replace(['Á','É','Í','Ó','Ú','Ñ'], ['A','E','I','O','U','N'], $v);
@@ -140,18 +61,13 @@ function es_vendedor_detalle_reai($posicion) {
     return in_array($p, ['PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGOCIOS','VENDEDOR NEGOCIO'], true);
 }
 
-function obtener_folios_vendedores_descendientes_detalle_reai($conexion, $id_posicion_root, $semana, $anio, $hic = []) {
+function obtener_folios_vendedores_descendientes_detalle_reai($conexion, $id_posicion_root, $semana, $anio) {
     $out = [];
     if (trim((string)$id_posicion_root) === '' || !$semana || !$anio) return $out;
 
-    $talento_aliases = $hic['talento_aliases'] ?? [];
-    $talento_alias_to_canon = $hic['talento_alias_to_canon'] ?? [];
-    $id_alias_to_canon = $hic['id_alias_to_canon'] ?? [];
-    $id_aliases = $hic['id_aliases'] ?? [];
-
+    $rows = [];
     $children = [];
-    $by_id = [];
-    $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, posicion, nombre_colaborador, distrito, nombre_linea_reporte
+    $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, posicion, nombre_colaborador
             FROM hc
             WHERE semana = ? AND anio = ?
               AND numero_talento_gs NOT LIKE '%VACANTE%'
@@ -162,71 +78,25 @@ function obtener_folios_vendedores_descendientes_detalle_reai($conexion, $id_pos
     mysqli_stmt_execute($stmt);
     $res = mysqli_stmt_get_result($stmt);
     while ($res && $r = mysqli_fetch_assoc($res)) {
-        $id_original = trim((string)($r['id_posicion'] ?? ''));
-        $lr_original = trim((string)($r['posicion_lr'] ?? ''));
-        $tal_original = trim((string)($r['numero_talento_gs'] ?? ''));
-
-        $id_canon = $id_alias_to_canon[$id_original] ?? $id_original;
-        $lr_canon = $id_alias_to_canon[$lr_original] ?? $lr_original;
-        $tal_canon = $talento_alias_to_canon[$tal_original] ?? $tal_original;
-
-        $r['id_posicion'] = (string)$id_canon;
-        $r['posicion_lr'] = (string)$lr_canon;
-        $r['numero_talento_gs'] = (string)$tal_canon;
-        $r['numero_talento_aliases'] = $talento_aliases[(string)$tal_canon] ?? [$tal_canon, $tal_original];
-
-        if ($id_canon !== '') {
-            $by_id[(string)$id_canon] = $r;
-            foreach (($id_aliases[(string)$id_canon] ?? [$id_original]) as $ia) $by_id[(string)$ia] = $r;
-        }
-        $children[(string)$lr_canon][] = $r;
+        $r['id_posicion'] = (string)($r['id_posicion'] ?? '');
+        $r['posicion_lr'] = (string)($r['posicion_lr'] ?? '');
+        $rows[] = $r;
+        $children[$r['posicion_lr']][] = $r;
     }
     mysqli_stmt_close($stmt);
 
-    $root = canon_id_detalle_reai($id_posicion_root, $id_alias_to_canon);
-    $visited = [];
-    $walk = function($id_pos) use (&$walk, &$children, &$out, &$visited, $talento_aliases) {
-        $id_pos = (string)$id_pos;
-        if ($id_pos === '' || isset($visited[$id_pos])) return;
-        $visited[$id_pos] = true;
-        foreach ($children[$id_pos] ?? [] as $child) {
-            $child_id = (string)($child['id_posicion'] ?? '');
-            $is_self_ref = ($child_id !== '' && $child_id === $id_pos);
+    $walk = function($id_pos) use (&$walk, &$children, &$out) {
+        foreach ($children[(string)$id_pos] ?? [] as $child) {
             if (es_vendedor_detalle_reai($child['posicion'] ?? '')) {
-                $tal = (string)($child['numero_talento_gs'] ?? '');
-                foreach (($child['numero_talento_aliases'] ?? ($talento_aliases[$tal] ?? [$tal])) as $alias) {
-                    if (trim((string)$alias) !== '') $out[] = (string)$alias;
-                }
-            } elseif (!$is_self_ref) {
-                $walk($child_id);
+                if (!empty($child['numero_talento_gs'])) $out[] = (string)$child['numero_talento_gs'];
+            } else {
+                $walk($child['id_posicion'] ?? '');
             }
         }
     };
-    $walk($root);
-
-    // Fallback HIC-Fallback v1.0: si el root es coach/líder autorreferenciado, rescatar vendedores que reportan directo a su id.
-    foreach ($children[$root] ?? [] as $child) {
-        if (es_vendedor_detalle_reai($child['posicion'] ?? '')) {
-            $tal = (string)($child['numero_talento_gs'] ?? '');
-            foreach (($child['numero_talento_aliases'] ?? ($talento_aliases[$tal] ?? [$tal])) as $alias) {
-                if (trim((string)$alias) !== '') $out[] = (string)$alias;
-            }
-        }
-    }
-
+    $walk((string)$id_posicion_root);
     return array_values(array_unique(array_filter($out)));
 }
-
-// ── PARCHE HIC-FALLBACK v1.0 ────────────────────────────────────────────────
-$hic_detalle = cargar_hic_fallback_detalle_reai($conexion);
-$talento_aliases_detalle = $hic_detalle['talento_aliases'] ?? [];
-$talento_alias_to_canon_detalle = $hic_detalle['talento_alias_to_canon'] ?? [];
-$id_alias_to_canon_detalle = $hic_detalle['id_alias_to_canon'] ?? [];
-$tgs_original = (string)$tgs;
-$tgs_canon = $talento_alias_to_canon_detalle[$tgs_original] ?? $tgs_original;
-$tgs_aliases = aliases_talento_detalle_reai($tgs_original, $talento_alias_to_canon_detalle, $talento_aliases_detalle);
-$tgs_sql = sql_in_escaped_detalle_reai($conexion, $tgs_aliases);
-$tgs = mysqli_real_escape_string($conexion, $tgs_canon);
 
 // ── DATOS DEL COLABORADOR / DIRECTOR ─────────────────────────────────────────
 $info = null;
@@ -236,8 +106,8 @@ $res_info = mysqli_query($conexion,
             TIMESTAMPDIFF(MONTH, fecha_alta, CURDATE()) as antiguedad_meses,
             TIMESTAMPDIFF(YEAR,  fecha_alta, CURDATE()) as antiguedad_anios
      FROM hc
-     WHERE numero_talento_gs IN ($tgs_sql)
-     ORDER BY anio DESC, semana DESC, FIELD(numero_talento_gs, '$tgs') DESC
+     WHERE numero_talento_gs = '$tgs'
+     ORDER BY anio DESC, semana DESC
      LIMIT 1");
 if ($res_info) $info = mysqli_fetch_assoc($res_info);
 
@@ -251,14 +121,14 @@ $distrito    = $info['distrito'] ?? '';
 $fecha_alta  = $info['fecha_alta'] ?? null;
 $coach       = $info['nombre_linea_reporte'] ?? '';
 $posicion    = $info['posicion'] ?? '';
-$id_posicion_info = canon_id_detalle_reai((string)($info['id_posicion'] ?? ''), $id_alias_to_canon_detalle);
+$id_posicion_info = (string)($info['id_posicion'] ?? '');
 $semana_info = (int)($info['semana'] ?? 0);
 $anio_info = (int)($info['anio'] ?? 0);
 $es_director = es_director_distrital_detalle_reai($posicion);
 $es_lider = es_lider_detalle_reai($posicion);
 $es_coach = es_coach_detalle_reai($posicion);
 $es_equipo = (!$es_director && ($es_lider || $es_coach));
-$folios_equipo = $es_equipo ? obtener_folios_vendedores_descendientes_detalle_reai($conexion, $id_posicion_info, $semana_info, $anio_info, $hic_detalle) : [];
+$folios_equipo = $es_equipo ? obtener_folios_vendedores_descendientes_detalle_reai($conexion, $id_posicion_info, $semana_info, $anio_info) : [];
 $folios_equipo_sql = $es_equipo ? sql_in_escaped_detalle_reai($conexion, $folios_equipo) : "''";
 $ant_meses   = (int)($info['antiguedad_meses'] ?? 0);
 $ant_anios   = (int)($info['antiguedad_anios'] ?? 0);
@@ -364,7 +234,7 @@ if ($periodo === 'mensual') {
             "SELECT id_cuenta_brm, fecha_cierre,
                     DATE_FORMAT(fecha_cierre, '%Y-%m') as mes_key
              FROM ventas
-             WHERE folio_empleado IN ($tgs_sql)
+             WHERE folio_empleado = '$tgs'
                AND fecha_cierre BETWEEN '$fecha_inicio' AND '$fecha_fin'
              ORDER BY fecha_cierre");
 
@@ -492,7 +362,7 @@ if ($periodo === 'mensual') {
             "SELECT id_cuenta_brm, fecha_cierre,
                     YEARWEEK(fecha_cierre, 3) as yw
              FROM ventas
-             WHERE folio_empleado IN ($tgs_sql)
+             WHERE folio_empleado = '$tgs'
                AND fecha_cierre >= '$fecha_inicio'
              ORDER BY fecha_cierre");
 
