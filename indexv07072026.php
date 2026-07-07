@@ -2017,157 +2017,6 @@ function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
 
 
 
-/*
-|--------------------------------------------------------------------------
-| TOTALXPEDIENT - Parche HIC-Fallback v1.0 para TOP/BOTTOM
-|--------------------------------------------------------------------------
-|
-| Alcance intencional:
-|   Sólo se usa en las tarjetas:
-|   - TOP Five Coaches
-|   - BOTTOM Five Coaches
-|   - TOP Regional Vendedor
-|   - BOTTOM Regional Vendedor
-|
-| Objetivo:
-|   Unificar ventas/instalaciones históricas cuando un colaborador cambió
-|   de número de talento o se conserva compatibilidad por id_posicion.
-|
-| Diseño defensivo:
-|   El parche detecta columnas disponibles en historial_identidad_colaborador.
-|   Si la tabla no existe o no contiene datos compatibles, regresa el folio
-|   original y el dashboard sigue funcionando igual que antes.
-|--------------------------------------------------------------------------
-*/
-function tx_hic_cols_dashboard($conexion) {
-    static $cache = null;
-    if ($cache !== null) return $cache;
-
-    $cache = ['existe'=>false, 'folio_cols'=>[], 'pos_cols'=>[]];
-    if (!tx_tabla_existe_dashboard($conexion, 'historial_identidad_colaborador')) {
-        return $cache;
-    }
-
-    $r = mysqli_query($conexion, "SHOW COLUMNS FROM historial_identidad_colaborador");
-    if (!$r) return $cache;
-
-    $cache['existe'] = true;
-    while ($row = mysqli_fetch_assoc($r)) {
-        $field = (string)($row['Field'] ?? '');
-        $f = strtolower($field);
-
-        // Columnas de número de talento / folio.
-        if (
-            strpos($f, 'talento') !== false ||
-            strpos($f, 'folio') !== false ||
-            $f === 'numero_empleado' ||
-            $f === 'num_empleado'
-        ) {
-            $cache['folio_cols'][] = $field;
-        }
-
-        // Columnas de posición.
-        if (strpos($f, 'posicion') !== false || strpos($f, 'posición') !== false) {
-            $cache['pos_cols'][] = $field;
-        }
-    }
-
-    $cache['folio_cols'] = array_values(array_unique($cache['folio_cols']));
-    $cache['pos_cols'] = array_values(array_unique($cache['pos_cols']));
-    return $cache;
-}
-
-function tx_hic_clean_folio_dashboard($folio) {
-    $folio = trim((string)$folio);
-    if ($folio === '') return '';
-    if (stripos($folio, 'VACANTE') !== false) return '';
-    return $folio;
-}
-
-function tx_hic_aliases_por_identidad_dashboard($conexion, $identidades) {
-    /*
-     * Entrada:
-     *   [ key => ['folio'=>'...', 'id_posicion'=>'...'] ]
-     * Salida:
-     *   [ key => ['folio_actual', 'folio_historico_1', ...] ]
-     */
-    $out = [];
-    foreach ($identidades as $key => $id) {
-        $folio = tx_hic_clean_folio_dashboard($id['folio'] ?? '');
-        $out[$key] = $folio !== '' ? [$folio] : [];
-    }
-
-    $cfg = tx_hic_cols_dashboard($conexion);
-    if (!$cfg['existe'] || (empty($cfg['folio_cols']) && empty($cfg['pos_cols']))) {
-        return $out;
-    }
-
-    foreach ($identidades as $key => $id) {
-        $folio = tx_hic_clean_folio_dashboard($id['folio'] ?? '');
-        $pos = trim((string)($id['id_posicion'] ?? ''));
-        $where = [];
-
-        if ($folio !== '' && !empty($cfg['folio_cols'])) {
-            $folio_esc = mysqli_real_escape_string($conexion, $folio);
-            foreach ($cfg['folio_cols'] as $col) {
-                $col_sql = "`" . str_replace("`", "", $col) . "`";
-                $where[] = "UPPER(TRIM(COALESCE($col_sql,''))) = UPPER('$folio_esc')";
-            }
-        }
-
-        if ($pos !== '' && !empty($cfg['pos_cols'])) {
-            $pos_esc = mysqli_real_escape_string($conexion, $pos);
-            foreach ($cfg['pos_cols'] as $col) {
-                $col_sql = "`" . str_replace("`", "", $col) . "`";
-                $where[] = "UPPER(TRIM(COALESCE($col_sql,''))) = UPPER('$pos_esc')";
-            }
-        }
-
-        if (empty($where)) continue;
-
-        $cols = array_values(array_unique(array_merge($cfg['folio_cols'], $cfg['pos_cols'])));
-        $select_cols = implode(', ', array_map(function($c) {
-            return "`" . str_replace("`", "", $c) . "`";
-        }, $cols));
-
-        $sql = "SELECT $select_cols FROM historial_identidad_colaborador WHERE " . implode(' OR ', $where);
-        $r = mysqli_query($conexion, $sql);
-        while ($r && $row = mysqli_fetch_assoc($r)) {
-            foreach ($cfg['folio_cols'] as $col) {
-                $alias = tx_hic_clean_folio_dashboard($row[$col] ?? '');
-                if ($alias !== '') $out[$key][] = $alias;
-            }
-        }
-
-        $out[$key] = array_values(array_unique(array_filter($out[$key], function($v) {
-            return tx_hic_clean_folio_dashboard($v) !== '';
-        })));
-    }
-
-    return $out;
-}
-
-function tx_hic_aliases_folios_dashboard($conexion, $folios, $posiciones = []) {
-    $identidades = [];
-    foreach (array_values($folios) as $i => $folio) {
-        $identidades[$i] = [
-            'folio' => $folio,
-            'id_posicion' => $posiciones[$i] ?? ''
-        ];
-    }
-    $aliases = tx_hic_aliases_por_identidad_dashboard($conexion, $identidades);
-    $out = [];
-    foreach ($aliases as $arr) {
-        foreach ($arr as $folio_alias) {
-            $folio_alias = tx_hic_clean_folio_dashboard($folio_alias);
-            if ($folio_alias !== '') $out[] = $folio_alias;
-        }
-    }
-    return array_values(array_unique($out));
-}
-
-
-
 // ── TOP REGIONAL PRODUCTIVIDAD VENDEDORES ───────────────────────────────────
 // Estas tablas son regionales y se muestran a todos los niveles para incentivar
 // mejora y permanencia. No dependen del scope jerárquico del tablero actual.
@@ -2198,7 +2047,6 @@ function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puesto
 
     $sql = "
         SELECT DISTINCT
-            h.id_posicion AS id_posicion,
             h.numero_talento_gs AS folio,
             h.nombre_colaborador AS vendedor,
             h.distrito,
@@ -2235,8 +2083,6 @@ function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puesto
 
         $out[$folio] = [
             'folio' => $folio,
-            'id_posicion' => $row['id_posicion'] ?? '',
-            'folios' => [$folio],
             'vendedor' => $row['vendedor'] ?? '',
             'distrito' => $row['distrito'] ?? '',
             'coach' => $row['coach'] ?? '',
@@ -2248,42 +2094,21 @@ function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puesto
         ];
     }
 
-    // Parche HIC-Fallback v1.0: agrega folios históricos equivalentes a cada vendedor.
-    $identidades_hic = [];
-    foreach ($out as $key => $v) {
-        $identidades_hic[$key] = [
-            'folio' => $v['folio'] ?? '',
-            'id_posicion' => $v['id_posicion'] ?? ''
-        ];
-    }
-    $aliases_hic = tx_hic_aliases_por_identidad_dashboard($conexion, $identidades_hic);
-    foreach ($aliases_hic as $key => $aliases) {
-        if (isset($out[$key])) {
-            $out[$key]['folios'] = !empty($aliases) ? $aliases : [$out[$key]['folio']];
-        }
-    }
-
     return $out;
 }
 
 function tx_sparkline_vendedor_dashboard($conexion, $folio, $fecha_corte_timestamp) {
     // Mini tendencia: instalaciones de las últimas 6 semanas calendario.
-    // Parche HIC-Fallback v1.0: $folio puede ser folio único o arreglo de folios equivalentes.
     $out = array_fill(0, 6, 0);
     $fecha_fin = date('Y-m-d', $fecha_corte_timestamp);
     $fecha_ini = date('Y-m-d', strtotime('-5 weeks', strtotime('monday this week', $fecha_corte_timestamp)));
-    $folios = is_array($folio) ? $folio : [$folio];
-    $folios = array_values(array_filter(array_unique($folios), function($f) {
-        return tx_hic_clean_folio_dashboard($f) !== '';
-    }));
-    if (empty($folios)) return $out;
-    $folios_sql = tx_sql_in_escaped($conexion, $folios);
+    $folio_esc = mysqli_real_escape_string($conexion, (string)$folio);
 
     $sql = "
         SELECT YEARWEEK(fecha, 3) AS yw, COUNT(cuenta) AS total
         FROM instalaciones
         WHERE fecha BETWEEN '$fecha_ini' AND '$fecha_fin'
-          AND folio_empleado IN ($folios_sql)
+          AND folio_empleado = '$folio_esc'
           AND origen_prospecto <> '-'
         GROUP BY YEARWEEK(fecha, 3)
         ORDER BY yw
@@ -2320,20 +2145,7 @@ function tx_dias_habiles_ultimos_3_meses_dashboard($conexion, $fecha_corte_times
 function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $mes, $anio, $cond_dia_fecha, $dias_productividad, $fecha_corte_timestamp) {
     if (empty($vendedores)) return [[], []];
 
-    // Parche HIC-Fallback v1.0: cada vendedor puede tener folios históricos equivalentes.
-    $folio_to_key = [];
-    $folios = [];
-    foreach ($vendedores as $key => $v) {
-        $aliases = $v['folios'] ?? [$key];
-        foreach ($aliases as $alias) {
-            $alias = tx_hic_clean_folio_dashboard($alias);
-            if ($alias === '') continue;
-            $folios[] = $alias;
-            if (!isset($folio_to_key[$alias])) $folio_to_key[$alias] = $key;
-        }
-    }
-    $folios = array_values(array_unique($folios));
-    if (empty($folios)) return [[], []];
+    $folios = array_keys($vendedores);
     $folios_sql = tx_sql_in_escaped($conexion, $folios);
 
     // Desempeño del rango seleccionado.
@@ -2353,19 +2165,16 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
     ";
     $res = mysqli_query($conexion, $sql);
     while ($res && $row = mysqli_fetch_assoc($res)) {
-        $folio = tx_hic_clean_folio_dashboard($row['folio'] ?? '');
-        $key = $folio_to_key[$folio] ?? '';
-        if ($key === '' || !isset($vendedores[$key])) continue;
+        $folio = (string)($row['folio'] ?? '');
+        if (!isset($vendedores[$folio])) continue;
 
         $inst = (int)($row['instalaciones'] ?? 0);
         $ingreso = (float)($row['ingreso'] ?? 0);
         $inst_arpu = (int)($row['inst_arpu'] ?? 0);
 
-        $vendedores[$key]['instalaciones'] += $inst;
-        $vendedores[$key]['ingreso_hic'] = (float)($vendedores[$key]['ingreso_hic'] ?? 0) + $ingreso;
-        $vendedores[$key]['inst_arpu_hic'] = (int)($vendedores[$key]['inst_arpu_hic'] ?? 0) + $inst_arpu;
-        $vendedores[$key]['productividad'] = $dias_productividad > 0 ? round($vendedores[$key]['instalaciones'] / $dias_productividad, 2) : 0;
-        $vendedores[$key]['arpu'] = ((int)$vendedores[$key]['inst_arpu_hic'] > 0) ? round(((float)$vendedores[$key]['ingreso_hic']) / ((int)$vendedores[$key]['inst_arpu_hic']), 2) : 0;
+        $vendedores[$folio]['instalaciones'] = $inst;
+        $vendedores[$folio]['productividad'] = $dias_productividad > 0 ? round($inst / $dias_productividad, 2) : 0;
+        $vendedores[$folio]['arpu'] = $inst_arpu > 0 ? round($ingreso / $inst_arpu, 2) : 0;
     }
 
     // Productividad 3M: instalaciones de los 3 meses completos anteriores / días hábiles de esos 3 meses.
@@ -2385,17 +2194,15 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
     ";
     $res3 = mysqli_query($conexion, $sql3);
     while ($res3 && $row = mysqli_fetch_assoc($res3)) {
-        $folio = tx_hic_clean_folio_dashboard($row['folio'] ?? '');
-        $key = $folio_to_key[$folio] ?? '';
-        if ($key === '' || !isset($vendedores[$key])) continue;
+        $folio = (string)($row['folio'] ?? '');
+        if (!isset($vendedores[$folio])) continue;
 
         $inst3m = (int)($row['instalaciones_3m'] ?? 0);
-        $vendedores[$key]['inst3m_hic'] = (int)($vendedores[$key]['inst3m_hic'] ?? 0) + $inst3m;
-        $vendedores[$key]['prod3m'] = $dias_3m > 0 ? round(((int)$vendedores[$key]['inst3m_hic']) / $dias_3m, 2) : 0;
+        $vendedores[$folio]['prod3m'] = $dias_3m > 0 ? round($inst3m / $dias_3m, 2) : 0;
     }
 
     foreach ($vendedores as $folio => &$v) {
-        $v['spark'] = tx_sparkline_vendedor_dashboard($conexion, $v['folios'] ?? [$folio], $fecha_corte_timestamp);
+        $v['spark'] = tx_sparkline_vendedor_dashboard($conexion, $folio, $fecha_corte_timestamp);
     }
     unset($v);
 
@@ -2553,8 +2360,6 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
             if ($folio !== '') $folios[] = $folio;
         }
         $folios = array_unique(array_values($folios));
-        // Parche HIC-Fallback v1.0: agrega folios históricos de los vendedores a cargo del coach.
-        $folios = tx_hic_aliases_folios_dashboard($conexion, $folios);
 
         $out[$id_pos] = [
             'id_posicion' => $id_pos,
