@@ -562,20 +562,22 @@ $by_id_posicion = [];
 $by_talento = [];
 $talento_aliases_reai = [];
 $id_aliases_reai = [];
+$talento_alias_to_canon_reai = [];
+$id_alias_to_canon_reai = [];
 
 function es_puesto_vendedor_reai($posicion, $puestos_comerciales) {
     return in_array(trim((string)$posicion), $puestos_comerciales, true);
 }
 function es_director_distrital_reai($row) {
-    $p = normaliza_key(($row['posicion'] ?? '') . ' ' . ($row['puesto_lr'] ?? ''));
+    $p = normaliza_key($row['posicion'] ?? '');
     return strpos($p, 'DIRECTOR DISTRITAL') !== false;
 }
 function inferir_nivel_reai($row, $puestos_comerciales) {
     if (es_puesto_vendedor_reai($row['posicion'] ?? '', $puestos_comerciales)) return 'VENDEDOR';
     if (es_director_distrital_reai($row)) return 'DIRECTOR DISTRITAL';
-    $p = normaliza_key(($row['posicion'] ?? '') . ' ' . ($row['puesto_lr'] ?? ''));
+    $p = normaliza_key($row['posicion'] ?? '');
     if (strpos($p, 'COACH') !== false) return 'COACH';
-    if (strpos($p, 'LIDER') !== false || strpos($p, 'GERENTE') !== false || strpos($p, 'JEFE') !== false) return 'LÍDER';
+    if (strpos($p, 'LIDER') !== false || strpos($p, 'GERENTE') !== false) return 'LÍDER';
     return 'COLABORADOR';
 }
 function obtener_vendedores_descendientes_reai($id_posicion, &$children_by_lr, $puestos_comerciales, &$memo = []) {
@@ -609,12 +611,10 @@ function crear_fila_reai($row, $nivel, $child_talentos = []) {
         'id_posicion'        => (string)($row['id_posicion'] ?? ''),
         'id_posicion_aliases'=> $row['id_posicion_aliases'] ?? [(string)($row['id_posicion'] ?? '')],
         'posicion_lr'        => (string)($row['posicion_lr'] ?? ''),
-        'nombre_linea_reporte' => (string)($row['nombre_linea_reporte'] ?? ''),
         'fecha_alta'         => $row['fecha_alta'] ?? null,
         'distrito'           => $row['distrito'] ?? '',
         'canal_venta'        => $row['posicion'] ?? '',
         'posicion'           => $row['posicion'] ?? '',
-        'puesto_lr'          => $row['puesto_lr'] ?? '',
         'antiguedad'         => $antig,
         'nivel_reai'         => $nivel,
         'child_talentos'     => array_values(array_unique(array_filter($child_talentos))),
@@ -625,7 +625,7 @@ function ordenar_por_nombre_reai(&$arr) {
 }
 
 if ($semana_hc && $anio_hc) {
-    $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, distrito, fecha_alta, nombre_linea_reporte, puesto_lr
+    $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, distrito, fecha_alta
                FROM hc
                WHERE semana = ? AND anio = ?
                  AND numero_talento_gs NOT LIKE '%VACANTE%'
@@ -643,13 +643,10 @@ if ($semana_hc && $anio_hc) {
     mysqli_stmt_close($stmt_hc);
 
     /*
-     * FIX REAI · Migración de nómina Elektra → Grupo Salinas
-     * Se normalizan numero_talento_gs, id_posicion y posicion_lr usando la tabla puente.
-     * Importante: este bloque no hace JOIN directo contra HC; primero lee HC productivo
-     * y después aplica equivalencias en memoria para evitar SQL 500 si la tabla cambia.
+     * FIX controlado REAI · Migración de nómina Elektra → Grupo Salinas
+     * Base: reai.php productivo. Se conserva estructura y sólo se amplían
+     * identidades con historial_identidad_colaborador en memoria.
      */
-    $talento_alias_to_canon_reai = [];
-    $id_alias_to_canon_reai = [];
     if (table_exists($conexion, 'historial_identidad_colaborador')) {
         $cols_hic = table_columns_reai($conexion, 'historial_identidad_colaborador');
         $col_tal_ant = pick_column_reai($cols_hic, ['numero_talento_anterior','talento_anterior','folio_anterior','numero_talento_gs_anterior']);
@@ -657,13 +654,12 @@ if ($semana_hc && $anio_hc) {
         $col_id_ant  = pick_column_reai($cols_hic, ['id_posicion_anterior','posicion_anterior','id_anterior']);
         $col_id_new  = pick_column_reai($cols_hic, ['id_posicion_nueva','id_posicion_nuevo','posicion_nueva','id_nuevo']);
         if ($col_tal_ant || $col_tal_new || $col_id_ant || $col_id_new) {
-            $selects_hic = [];
-            $selects_hic[] = $col_tal_ant ? bt_reai($col_tal_ant) . " AS tal_ant" : "'' AS tal_ant";
-            $selects_hic[] = $col_tal_new ? bt_reai($col_tal_new) . " AS tal_new" : "'' AS tal_new";
-            $selects_hic[] = $col_id_ant  ? bt_reai($col_id_ant)  . " AS id_ant"  : "'' AS id_ant";
-            $selects_hic[] = $col_id_new  ? bt_reai($col_id_new)  . " AS id_new"  : "'' AS id_new";
-            $sql_hic = "SELECT " . implode(',', $selects_hic) . " FROM historial_identidad_colaborador";
-            $res_hic = mysqli_query($conexion, $sql_hic);
+            $sel = [];
+            $sel[] = $col_tal_ant ? bt_reai($col_tal_ant) . " AS tal_ant" : "'' AS tal_ant";
+            $sel[] = $col_tal_new ? bt_reai($col_tal_new) . " AS tal_new" : "'' AS tal_new";
+            $sel[] = $col_id_ant  ? bt_reai($col_id_ant)  . " AS id_ant"  : "'' AS id_ant";
+            $sel[] = $col_id_new  ? bt_reai($col_id_new)  . " AS id_new"  : "'' AS id_new";
+            $res_hic = mysqli_query($conexion, "SELECT " . implode(',', $sel) . " FROM historial_identidad_colaborador");
             while ($res_hic && $hic = mysqli_fetch_assoc($res_hic)) {
                 $tal_ant = trim((string)($hic['tal_ant'] ?? ''));
                 $tal_new = trim((string)($hic['tal_new'] ?? ''));
@@ -672,36 +668,29 @@ if ($semana_hc && $anio_hc) {
 
                 $tal_canon = $tal_new !== '' ? $tal_new : $tal_ant;
                 if ($tal_canon !== '') {
-                    foreach ([$tal_ant, $tal_new, $tal_canon] as $ta) {
-                        $ta = trim((string)$ta);
-                        if ($ta !== '') $talento_alias_to_canon_reai[$ta] = $tal_canon;
-                    }
-                    $talento_aliases_reai[$tal_canon] = array_values(array_unique(array_filter(array_merge(
-                        $talento_aliases_reai[$tal_canon] ?? [], [$tal_ant, $tal_new, $tal_canon]
-                    ))));
+                    $aliases = array_values(array_unique(array_filter([$tal_ant, $tal_new, $tal_canon])));
+                    foreach ($aliases as $a) $talento_alias_to_canon_reai[$a] = $tal_canon;
+                    $talento_aliases_reai[$tal_canon] = array_values(array_unique(array_merge($talento_aliases_reai[$tal_canon] ?? [], $aliases)));
                 }
 
                 $id_canon = $id_new !== '' ? $id_new : $id_ant;
                 if ($id_canon !== '') {
-                    foreach ([$id_ant, $id_new, $id_canon] as $ia) {
-                        $ia = trim((string)$ia);
-                        if ($ia !== '') $id_alias_to_canon_reai[$ia] = $id_canon;
-                    }
-                    $id_aliases_reai[$id_canon] = array_values(array_unique(array_filter(array_merge(
-                        $id_aliases_reai[$id_canon] ?? [], [$id_ant, $id_new, $id_canon]
-                    ))));
+                    $aliases = array_values(array_unique(array_filter([$id_ant, $id_new, $id_canon])));
+                    foreach ($aliases as $a) $id_alias_to_canon_reai[$a] = $id_canon;
+                    $id_aliases_reai[$id_canon] = array_values(array_unique(array_merge($id_aliases_reai[$id_canon] ?? [], $aliases)));
                 }
             }
         }
     }
 
-    // Reconstruye índices y árbol jerárquico ya con identidad canónica.
+    // Reindexar HC con identidad canónica. Esto mantiene la lógica productiva,
+    // pero permite que posicion_lr anterior apunte al id_posicion nuevo.
     $hc_rows_raw = $hc_rows;
     $hc_rows = [];
     $children_by_lr = [];
     $by_id_posicion = [];
     $by_talento = [];
-    $seen_identidad_reai = [];
+    $seen_hc_reai = [];
     foreach ($hc_rows_raw as $r) {
         $tal_original = trim((string)($r['numero_talento_gs'] ?? ''));
         $id_original  = trim((string)($r['id_posicion'] ?? ''));
@@ -722,9 +711,9 @@ if ($semana_hc && $anio_hc) {
         $r['numero_talento_aliases'] = $tal_aliases;
         $r['id_posicion_aliases'] = $id_aliases;
 
-        $dedup_key = ($id_canon !== '' ? $id_canon : $tal_canon) . '|' . normaliza_key($r['nombre_colaborador'] ?? '');
-        if ($dedup_key !== '|' && isset($seen_identidad_reai[$dedup_key])) continue;
-        $seen_identidad_reai[$dedup_key] = true;
+        $dedup_key = (($id_canon !== '') ? $id_canon : $tal_canon) . '|' . normaliza_key($r['nombre_colaborador'] ?? '');
+        if ($dedup_key !== '|' && isset($seen_hc_reai[$dedup_key])) continue;
+        $seen_hc_reai[$dedup_key] = true;
 
         $hc_rows[] = $r;
         if ($id_canon !== '') {
@@ -753,106 +742,90 @@ if ($semana_hc && $anio_hc) {
         $vendedores[] = crear_fila_reai($row, $nivel, $childs);
     };
 
-    /*
-     * REAI identidad nómina:
-     * Para vistas globales se deja de depender únicamente del árbol posicion_lr.
-     * La migración de nómina puede romper id_posicion/posicion_lr; por eso para ADMIN/DR
-     * se arma cada nivel desde HC completo ya normalizado, usando posicion/puesto_lr.
-     * Para roles operativos se usa primero el árbol y se agregan respaldos por
-     * distrito y nombre_linea_reporte cuando la relación de posición venga rota.
-     */
     $directores = array_values(array_filter($hc_rows, function($r) { return es_director_distrital_reai($r); }));
-    $lideres_all = array_values(array_filter($hc_rows, function($r) use ($puestos_comerciales) {
-        return inferir_nivel_reai($r, $puestos_comerciales) === 'LÍDER';
-    }));
-    $coaches_all = array_values(array_filter($hc_rows, function($r) use ($puestos_comerciales) {
-        return inferir_nivel_reai($r, $puestos_comerciales) === 'COACH';
-    }));
-    $vendedores_all = array_values(array_filter($hc_rows, function($r) use ($puestos_comerciales) {
-        return inferir_nivel_reai($r, $puestos_comerciales) === 'VENDEDOR';
-    }));
-
     ordenar_por_nombre_reai($directores);
-    ordenar_por_nombre_reai($lideres_all);
-    ordenar_por_nombre_reai($coaches_all);
-    ordenar_por_nombre_reai($vendedores_all);
-
-    $dedup_filas_reai = [];
-    $agregar_fila_segura = function($row, $nivel) use (&$dedup_filas_reai, $agregar_fila) {
-        $key = $nivel . '|' . (($row['id_posicion'] ?? '') ?: ($row['numero_talento_gs'] ?? '')) . '|' . normaliza_key($row['nombre_colaborador'] ?? '');
-        if (isset($dedup_filas_reai[$key])) return;
-        $dedup_filas_reai[$key] = true;
-        $agregar_fila($row, $nivel);
-    };
-
-    $session_row = $by_id_posicion[(string)$id_posicion] ?? ($by_talento[(string)$talento_gs_coach] ?? null);
-    $session_nombre = normaliza_key($session_row['nombre_colaborador'] ?? '');
-    $session_distrito = normaliza_key($session_row['distrito'] ?? '');
 
     if ($rol === 'admin' || $rol === 'director_regional') {
-        foreach ($directores as $dd) $agregar_fila_segura($dd, 'DIRECTOR DISTRITAL');
-        foreach ($lideres_all as $l) $agregar_fila_segura($l, 'LÍDER');
-        foreach ($coaches_all as $c) $agregar_fila_segura($c, 'COACH');
-        foreach ($vendedores_all as $v) $agregar_fila_segura($v, 'VENDEDOR');
+        // 1) Línea directa: Directores Distritales.
+        foreach ($directores as $dd) $agregar_fila($dd, 'DIRECTOR DISTRITAL');
 
+        // 2) Línea indirecta: Líderes, Coaches y Vendedores.
+        $lideres = [];
+        foreach ($directores as $dd) {
+            foreach ($children_by_lr[(string)$dd['id_posicion']] ?? [] as $l) {
+                if (!es_puesto_vendedor_reai($l['posicion'] ?? '', $puestos_comerciales)) $lideres[] = $l;
+            }
+        }
+        ordenar_por_nombre_reai($lideres);
+        foreach ($lideres as $l) $agregar_fila($l, 'LÍDER');
+
+        $coaches = [];
+        foreach ($lideres as $l) {
+            foreach ($children_by_lr[(string)$l['id_posicion']] ?? [] as $c) {
+                if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
+            }
+        }
+        ordenar_por_nombre_reai($coaches);
+        foreach ($coaches as $c) $agregar_fila($c, 'COACH');
+
+        $vend_rows = [];
+        foreach ($coaches as $c) {
+            foreach ($children_by_lr[(string)$c['id_posicion']] ?? [] as $v) {
+                if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+            }
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
     } elseif ($rol === 'director_distrital') {
-        // Vista por distrito completo como respaldo cuando la jerarquía de id_posicion se rompe.
-        foreach ($lideres_all as $l) {
-            if ($session_distrito === '' || normaliza_key($l['distrito'] ?? '') === $session_distrito) $agregar_fila_segura($l, 'LÍDER');
+        $lideres = [];
+        foreach ($children_by_lr[(string)$id_posicion] ?? [] as $l) {
+            if (!es_puesto_vendedor_reai($l['posicion'] ?? '', $puestos_comerciales)) $lideres[] = $l;
         }
-        foreach ($coaches_all as $c) {
-            if ($session_distrito === '' || normaliza_key($c['distrito'] ?? '') === $session_distrito) $agregar_fila_segura($c, 'COACH');
-        }
-        foreach ($vendedores_all as $v) {
-            if ($session_distrito === '' || normaliza_key($v['distrito'] ?? '') === $session_distrito) $agregar_fila_segura($v, 'VENDEDOR');
-        }
+        ordenar_por_nombre_reai($lideres);
+        foreach ($lideres as $l) $agregar_fila($l, 'LÍDER');
 
+        $coaches = [];
+        foreach ($lideres as $l) {
+            foreach ($children_by_lr[(string)$l['id_posicion']] ?? [] as $c) {
+                if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
+            }
+        }
+        ordenar_por_nombre_reai($coaches);
+        foreach ($coaches as $c) $agregar_fila($c, 'COACH');
+
+        $vend_rows = [];
+        foreach ($coaches as $c) {
+            foreach ($children_by_lr[(string)$c['id_posicion']] ?? [] as $v) {
+                if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+            }
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
     } elseif ($rol === 'lider') {
-        $leader_ids = [];
-        if ($session_row) {
-            foreach (($session_row['id_posicion_aliases'] ?? [$id_posicion]) as $ia) {
-                if ((string)$ia !== '') $leader_ids[(string)$ia] = true;
-            }
+        $coaches = [];
+        foreach ($children_by_lr[(string)$id_posicion] ?? [] as $c) {
+            if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
         }
-        $coaches_scope = [];
-        foreach ($coaches_all as $c) {
-            $match_id = isset($leader_ids[(string)($c['posicion_lr'] ?? '')]);
-            $match_name = ($session_nombre !== '' && normaliza_key($c['nombre_linea_reporte'] ?? '') === $session_nombre);
-            if ($match_id || $match_name) {
-                $coaches_scope[] = $c;
-                $agregar_fila_segura($c, 'COACH');
-            }
-        }
-        foreach ($vendedores_all as $v) {
-            $lr = (string)($v['posicion_lr'] ?? '');
-            $nrep = normaliza_key($v['nombre_linea_reporte'] ?? '');
-            $incl = false;
-            foreach ($coaches_scope as $c) {
-                $coach_nombre = normaliza_key($c['nombre_colaborador'] ?? '');
-                $coach_ids = [];
-                foreach (($c['id_posicion_aliases'] ?? [$c['id_posicion'] ?? '']) as $ia) {
-                    if ((string)$ia !== '') $coach_ids[(string)$ia] = true;
-                }
-                if (isset($coach_ids[$lr]) || ($coach_nombre !== '' && $nrep === $coach_nombre)) { $incl = true; break; }
-            }
-            if ($incl) $agregar_fila_segura($v, 'VENDEDOR');
-        }
+        ordenar_por_nombre_reai($coaches);
+        foreach ($coaches as $c) $agregar_fila($c, 'COACH');
 
+        $vend_rows = [];
+        foreach ($coaches as $c) {
+            foreach ($children_by_lr[(string)$c['id_posicion']] ?? [] as $v) {
+                if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
+            }
+        }
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
     } elseif ($rol === 'coach') {
-        $coach_ids = [];
-        if ($session_row) {
-            foreach (($session_row['id_posicion_aliases'] ?? [$id_posicion]) as $ia) {
-                if ((string)$ia !== '') $coach_ids[(string)$ia] = true;
-            }
+        $vend_rows = [];
+        foreach ($children_by_lr[(string)$id_posicion] ?? [] as $v) {
+            if (es_puesto_vendedor_reai($v['posicion'] ?? '', $puestos_comerciales)) $vend_rows[] = $v;
         }
-        foreach ($vendedores_all as $v) {
-            $match_id = isset($coach_ids[(string)($v['posicion_lr'] ?? '')]);
-            $match_name = ($session_nombre !== '' && normaliza_key($v['nombre_linea_reporte'] ?? '') === $session_nombre);
-            if ($match_id || $match_name) $agregar_fila_segura($v, 'VENDEDOR');
-        }
-
+        ordenar_por_nombre_reai($vend_rows);
+        foreach ($vend_rows as $v) $agregar_fila($v, 'VENDEDOR');
     } else {
-        if (isset($by_talento[(string)$talento_gs_coach])) $agregar_fila_segura($by_talento[(string)$talento_gs_coach], inferir_nivel_reai($by_talento[(string)$talento_gs_coach], $puestos_comerciales));
+        if (isset($by_talento[(string)$talento_gs_coach])) $agregar_fila($by_talento[(string)$talento_gs_coach], inferir_nivel_reai($by_talento[(string)$talento_gs_coach], $puestos_comerciales));
     }
 }
 
@@ -932,8 +905,7 @@ if (!empty($vendedores)) {
     }
     $talentos_metricas = array_values(array_unique(array_filter($talentos_metricas)));
 
-    // Expande folios migrados para cruzar instalaciones/REAI con folio anterior o nuevo,
-    // pero acumula todo en el folio canónico visible.
+    // Expandir folios históricos para instalaciones/metas y acumular en talento canónico.
     $talentos_metricas_aliases = [];
     $metric_alias_to_canon_reai = [];
     foreach ($talentos_metricas as $tm) {
