@@ -738,10 +738,6 @@ vendedores AS (
         c.distrito,
         c.lider,
         h.numero_talento_gs AS folio_empleado,
-        COALESCE(NULLIF(hic.numero_talento_nuevo,''), NULLIF(hic.numero_talento_anterior,''), h.numero_talento_gs) AS folio_unificado,
-        hic.numero_talento_anterior AS folio_anterior,
-        hic.numero_talento_nuevo AS folio_nuevo,
-        COALESCE(NULLIF(hic.id_posicion_nueva,''), NULLIF(hic.id_posicion_anterior,''), h.id_posicion) AS id_posicion_unificado,
         h.nombre_colaborador,
         h.id_posicion,
         h.posicion_lr,
@@ -758,32 +754,20 @@ vendedores AS (
        AND h.semana = c.semana
        AND h.anio = c.anio
        AND h.puesto_lr LIKE '%COACH%'
-    LEFT JOIN historial_identidad_colaborador hic
-        ON (
-            h.numero_talento_gs = hic.numero_talento_anterior
-            OR h.numero_talento_gs = hic.numero_talento_nuevo
-            OR h.id_posicion = hic.id_posicion_anterior
-            OR h.id_posicion = hic.id_posicion_nueva
-        )
-       AND (
-            hic.nombre_colaborador IS NULL
-            OR hic.nombre_colaborador = ''
-            OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
-        )
 ),
 hc_resumen AS (
     SELECT
         v.distrito,
         v.lider,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_actual
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual
     FROM vendedores v
-    LEFT JOIN instalaciones ibase ON (ibase.folio_empleado = v.folio_empleado OR ibase.folio_empleado = v.folio_unificado OR ibase.folio_empleado = v.folio_anterior OR ibase.folio_empleado = v.folio_nuevo) AND {$cond_ibase}
-    LEFT JOIN instalaciones iactual ON (iactual.folio_empleado = v.folio_empleado OR iactual.folio_empleado = v.folio_unificado OR iactual.folio_empleado = v.folio_anterior OR iactual.folio_empleado = v.folio_nuevo) AND {$cond_iactual}
+    LEFT JOIN instalaciones ibase ON v.folio_empleado = ibase.folio_empleado AND {$cond_ibase}
+    LEFT JOIN instalaciones iactual ON v.folio_empleado = iactual.folio_empleado AND {$cond_iactual}
     GROUP BY v.distrito, v.lider
 )
 SELECT
@@ -866,10 +850,6 @@ vendedores AS (
         c.coach_pos,
         c.coach_key,
         h.numero_talento_gs AS folio_empleado,
-        COALESCE(NULLIF(hic.numero_talento_nuevo,''), NULLIF(hic.numero_talento_anterior,''), h.numero_talento_gs) AS folio_unificado,
-        hic.numero_talento_anterior AS folio_anterior,
-        hic.numero_talento_nuevo AS folio_nuevo,
-        COALESCE(NULLIF(hic.id_posicion_nueva,''), NULLIF(hic.id_posicion_anterior,''), h.id_posicion) AS id_posicion_unificado,
         h.nombre_colaborador,
         h.id_posicion,
         h.posicion_lr,
@@ -886,18 +866,6 @@ vendedores AS (
        AND h.semana = c.semana
        AND h.anio = c.anio
        AND h.puesto_lr LIKE '%COACH%'
-    LEFT JOIN historial_identidad_colaborador hic
-        ON (
-            h.numero_talento_gs = hic.numero_talento_anterior
-            OR h.numero_talento_gs = hic.numero_talento_nuevo
-            OR h.id_posicion = hic.id_posicion_anterior
-            OR h.id_posicion = hic.id_posicion_nueva
-        )
-       AND (
-            hic.nombre_colaborador IS NULL
-            OR hic.nombre_colaborador = ''
-            OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
-        )
 ),
 ventas_base AS (
     SELECT
@@ -937,22 +905,22 @@ hc_resumen AS (
         c.coach,
         c.coach_pos,
         c.coach_key,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_actual
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual
     FROM coaches_base c
     LEFT JOIN vendedores v
         ON c.coach_key = v.coach_key
     LEFT JOIN instalaciones ibase
-        ON (ibase.folio_empleado = v.folio_empleado OR ibase.folio_empleado = v.folio_unificado OR ibase.folio_empleado = v.folio_anterior OR ibase.folio_empleado = v.folio_nuevo)
+        ON v.folio_empleado = ibase.folio_empleado
        AND {$cond_ibase}
        AND v.anio={$hc_anio_base}
        AND v.semana={$hc_semana_base}
     LEFT JOIN instalaciones iactual
-        ON (iactual.folio_empleado = v.folio_empleado OR iactual.folio_empleado = v.folio_unificado OR iactual.folio_empleado = v.folio_anterior OR iactual.folio_empleado = v.folio_nuevo)
+        ON v.folio_empleado = iactual.folio_empleado
        AND {$cond_iactual}
        AND v.anio={$hc_anio_actual}
        AND v.semana={$hc_semana_actual}
@@ -1062,10 +1030,6 @@ vendedores AS (
         c.coach_pos,
         c.coach_key,
         h.numero_talento_gs AS folio_empleado,
-        COALESCE(NULLIF(hic.numero_talento_nuevo,''), NULLIF(hic.numero_talento_anterior,''), h.numero_talento_gs) AS folio_unificado,
-        hic.numero_talento_anterior AS folio_anterior,
-        hic.numero_talento_nuevo AS folio_nuevo,
-        COALESCE(NULLIF(hic.id_posicion_nueva,''), NULLIF(hic.id_posicion_anterior,''), h.id_posicion) AS id_posicion_unificado,
         h.nombre_colaborador,
         h.id_posicion,
         h.posicion_lr,
@@ -1082,18 +1046,6 @@ vendedores AS (
        AND h.semana = c.semana
        AND h.anio = c.anio
        AND h.puesto_lr LIKE '%COACH%'
-    LEFT JOIN historial_identidad_colaborador hic
-        ON (
-            h.numero_talento_gs = hic.numero_talento_anterior
-            OR h.numero_talento_gs = hic.numero_talento_nuevo
-            OR h.id_posicion = hic.id_posicion_anterior
-            OR h.id_posicion = hic.id_posicion_nueva
-        )
-       AND (
-            hic.nombre_colaborador IS NULL
-            OR hic.nombre_colaborador = ''
-            OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
-        )
 ),
 resumen AS (
     SELECT
@@ -1103,23 +1055,23 @@ resumen AS (
         c.coach,
         c.coach_pos,
         c.coach_key,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_empleado END) AS hc_activo_actual,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
         COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_actual,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_base,
+        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_empleado END) AS hc_con_ins_actual,
         COUNT(DISTINCT ibase_coach.cuenta) AS ins_sem_base,
         COUNT(DISTINCT iactual_coach.cuenta) AS ins_sem_actual
     FROM coaches_base c
     LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
     LEFT JOIN instalaciones ibase
-        ON (ibase.folio_empleado = v.folio_empleado OR ibase.folio_empleado = v.folio_unificado OR ibase.folio_empleado = v.folio_anterior OR ibase.folio_empleado = v.folio_nuevo)
+        ON v.folio_empleado = ibase.folio_empleado
        AND {$cond_ibase}
        AND v.anio={$hc_anio_base}
        AND v.semana={$hc_semana_base}
     LEFT JOIN instalaciones iactual
-        ON (iactual.folio_empleado = v.folio_empleado OR iactual.folio_empleado = v.folio_unificado OR iactual.folio_empleado = v.folio_anterior OR iactual.folio_empleado = v.folio_nuevo)
+        ON v.folio_empleado = iactual.folio_empleado
        AND {$cond_iactual}
        AND v.anio={$hc_anio_actual}
        AND v.semana={$hc_semana_actual}
@@ -1305,25 +1257,9 @@ WITH vendedores_base AS (
         '{$coach_sql}' AS coach,
         '{$coach_pos_sql}' AS coach_pos,
         h.nombre_colaborador AS vendedor,
-        COALESCE(NULLIF(hic.numero_talento_nuevo,''), NULLIF(hic.numero_talento_anterior,''), h.numero_talento_gs) AS folio_empleado,
-        h.numero_talento_gs AS folio_original,
-        hic.numero_talento_anterior AS folio_anterior,
-        hic.numero_talento_nuevo AS folio_nuevo,
-        COALESCE(NULLIF(hic.id_posicion_nueva,''), NULLIF(hic.id_posicion_anterior,''), h.id_posicion) AS id_posicion_unificado,
+        h.numero_talento_gs AS folio_empleado,
         {$antiguedad_expr} AS antiguedad
     FROM hc h
-    LEFT JOIN historial_identidad_colaborador hic
-        ON (
-            h.numero_talento_gs = hic.numero_talento_anterior
-            OR h.numero_talento_gs = hic.numero_talento_nuevo
-            OR h.id_posicion = hic.id_posicion_anterior
-            OR h.id_posicion = hic.id_posicion_nueva
-        )
-       AND (
-            hic.nombre_colaborador IS NULL
-            OR hic.nombre_colaborador = ''
-            OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
-        )
     WHERE h.distrito = '{$distrito_hc_sql}'
       AND h.puesto_lr LIKE '%COACH%'
       AND h.numero_talento_gs <> 'VACANTE'
@@ -1348,7 +1284,7 @@ ventas_vendedor AS (
         vb.folio_empleado,
         vb.antiguedad,
         CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END AS semana,
-        COUNT(DISTINCT i.cuenta) AS ventas,
+        COUNT(i.cuenta) AS ventas,
         SUM(CASE
                 WHEN {$cond_mix_actual}
                  AND cp.play = 'TRIPLE PLAY'
@@ -1368,7 +1304,7 @@ ventas_vendedor AS (
 
     FROM vendedores_base vb
     LEFT JOIN instalaciones i
-        ON (i.folio_empleado = vb.folio_empleado OR i.folio_empleado = vb.folio_original OR i.folio_empleado = vb.folio_anterior OR i.folio_empleado = vb.folio_nuevo)
+        ON i.folio_empleado = vb.folio_empleado
        AND (
             ({$cond_i_base})
          OR ({$cond_i_actual})
