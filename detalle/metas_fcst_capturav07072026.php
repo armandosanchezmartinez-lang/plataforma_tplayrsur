@@ -79,162 +79,6 @@ function semana_anterior_calc($semana, $anio) {
     return [$sem_ant, $anio_ant];
 }
 
-/*
- * Parche HIC-Fallback v1.0
- * - Para semana corriente usa HC de semana N-1 como base operativa.
- * - Si la persona no aparece por id_posicion directo, consulta historial_identidad_colaborador
- *   y busca equivalencias por id_posicion / número de talento.
- * - El historial se interpreta de forma flexible para soportar columnas históricas/actuales.
- */
-function tabla_existe($conexion, $tabla) {
-    $tabla = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$tabla);
-    $res = mysqli_query($conexion, "SHOW TABLES LIKE '" . mysqli_real_escape_string($conexion, $tabla) . "'");
-    return $res && mysqli_num_rows($res) > 0;
-}
-
-function cargar_hic_equivalencias($conexion) {
-    static $cache = null;
-    if ($cache !== null) return $cache;
-
-    $cache = ['ids' => [], 'talentos' => []];
-
-    if (!tabla_existe($conexion, 'historial_identidad_colaborador')) {
-        return $cache;
-    }
-
-    $cols = [];
-    $res_cols = mysqli_query($conexion, "SHOW COLUMNS FROM historial_identidad_colaborador");
-    if ($res_cols) {
-        while ($c = mysqli_fetch_assoc($res_cols)) {
-            $cols[] = $c['Field'];
-        }
-    }
-
-    if (empty($cols)) return $cache;
-
-    $id_cols = [];
-    $talento_cols = [];
-    foreach ($cols as $c) {
-        $lc = strtolower($c);
-        if (strpos($lc, 'id_posicion') !== false || strpos($lc, 'posicion') !== false) {
-            $id_cols[] = $c;
-        }
-        if (strpos($lc, 'talento') !== false || strpos($lc, 'numero_talento') !== false) {
-            $talento_cols[] = $c;
-        }
-    }
-
-    if (empty($id_cols) && empty($talento_cols)) return $cache;
-
-    $sql = "SELECT * FROM historial_identidad_colaborador";
-    $res = mysqli_query($conexion, $sql);
-    if (!$res) return $cache;
-
-    while ($row = mysqli_fetch_assoc($res)) {
-        $ids = [];
-        $talentos = [];
-
-        foreach ($id_cols as $c) {
-            $v = trim((string)($row[$c] ?? ''));
-            if ($v !== '' && $v !== '-' && strtoupper($v) !== 'NULL') $ids[] = $v;
-        }
-        foreach ($talento_cols as $c) {
-            $v = trim((string)($row[$c] ?? ''));
-            if ($v !== '' && $v !== '-' && strtoupper($v) !== 'NULL') $talentos[] = $v;
-        }
-
-        $ids = array_values(array_unique($ids));
-        $talentos = array_values(array_unique($talentos));
-
-        foreach ($ids as $id) {
-            if (!isset($cache['ids'][$id])) $cache['ids'][$id] = ['ids'=>[], 'talentos'=>[]];
-            $cache['ids'][$id]['ids'] = array_values(array_unique(array_merge($cache['ids'][$id]['ids'], $ids)));
-            $cache['ids'][$id]['talentos'] = array_values(array_unique(array_merge($cache['ids'][$id]['talentos'], $talentos)));
-        }
-
-        foreach ($talentos as $tal) {
-            if (!isset($cache['talentos'][$tal])) $cache['talentos'][$tal] = ['ids'=>[], 'talentos'=>[]];
-            $cache['talentos'][$tal]['ids'] = array_values(array_unique(array_merge($cache['talentos'][$tal]['ids'], $ids)));
-            $cache['talentos'][$tal]['talentos'] = array_values(array_unique(array_merge($cache['talentos'][$tal]['talentos'], $talentos)));
-        }
-    }
-
-    return $cache;
-}
-
-function hic_expandir_identidad($conexion, $id_posicion, $numero_talento) {
-    $equiv = cargar_hic_equivalencias($conexion);
-
-    $ids = [];
-    $talentos = [];
-
-    $id_posicion = trim((string)$id_posicion);
-    $numero_talento = trim((string)$numero_talento);
-
-    if ($id_posicion !== '') $ids[] = $id_posicion;
-    if ($numero_talento !== '') $talentos[] = $numero_talento;
-
-    if ($id_posicion !== '' && isset($equiv['ids'][$id_posicion])) {
-        $ids = array_merge($ids, $equiv['ids'][$id_posicion]['ids']);
-        $talentos = array_merge($talentos, $equiv['ids'][$id_posicion]['talentos']);
-    }
-
-    if ($numero_talento !== '' && isset($equiv['talentos'][$numero_talento])) {
-        $ids = array_merge($ids, $equiv['talentos'][$numero_talento]['ids']);
-        $talentos = array_merge($talentos, $equiv['talentos'][$numero_talento]['talentos']);
-    }
-
-    return [
-        'ids' => array_values(array_unique(array_filter($ids, fn($v) => trim((string)$v) !== ''))),
-        'talentos' => array_values(array_unique(array_filter($talentos, fn($v) => trim((string)$v) !== '')))
-    ];
-}
-
-function placeholders($arr) {
-    return implode(',', array_fill(0, count($arr), '?'));
-}
-
-function buscar_responsable_hc_por_identidad($conexion, $anio, $semana, $ids, $talentos, $solo_semana = true) {
-    $where = [];
-    $params = [];
-    $types = "";
-
-    if (!empty($ids)) {
-        $where[] = "id_posicion IN (" . placeholders($ids) . ")";
-        foreach ($ids as $v) { $params[] = $v; $types .= "s"; }
-    }
-
-    if (!empty($talentos)) {
-        $where[] = "numero_talento_gs IN (" . placeholders($talentos) . ")";
-        foreach ($talentos as $v) { $params[] = $v; $types .= "s"; }
-    }
-
-    if (empty($where)) return null;
-
-    $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, nombre_colaborador, posicion AS puesto_responsable, distrito, anio, semana
-            FROM hc
-            WHERE (" . implode(" OR ", $where) . ")
-              AND nombre_colaborador NOT LIKE '%VACANTE%'";
-
-    if ($solo_semana) {
-        $sql .= " AND anio = ? AND semana = ?";
-        $params[] = (int)$anio; $types .= "i";
-        $params[] = (int)$semana; $types .= "i";
-    }
-
-    $sql .= " ORDER BY anio DESC, semana DESC LIMIT 1";
-
-    $stmt = mysqli_prepare($conexion, $sql);
-    if (!$stmt) return null;
-    mysqli_stmt_bind_param($stmt, $types, ...$params);
-    mysqli_stmt_execute($stmt);
-    $res = mysqli_stmt_get_result($stmt);
-    $row = mysqli_fetch_assoc($res);
-    mysqli_stmt_close($stmt);
-
-    return $row ?: null;
-}
-
 function color_semaforo($pct) {
     if ($pct === null || $pct <= 0) return 'gris';
     if ($pct < 90) return 'rojo';
@@ -273,40 +117,41 @@ function cargar_compromiso_actual($conexion, $anio, $semana, $id_posicion) {
 }
 
 function buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol) {
-    /*
-     * HIC-Fallback v1.0:
-     * 1) Busca la identidad exacta en el HC operativo recibido.
-     * 2) Si no aparece, expande id_posicion / talento con historial_identidad_colaborador.
-     * 3) Si aún no aparece en esa semana, usa el último HC disponible de esa identidad.
-     */
-    $identidad = hic_expandir_identidad($conexion, $id_posicion_sesion, $numero_talento_sesion);
-    $ids = $identidad['ids'];
-    $talentos = $identidad['talentos'];
+    $responsable = null;
 
-    $responsable = buscar_responsable_hc_por_identidad($conexion, $anio_actual, $semana_actual, $ids, $talentos, true);
-
-    if (!$responsable) {
-        $responsable = buscar_responsable_hc_por_identidad($conexion, $anio_actual, $semana_actual, $ids, $talentos, false);
-    }
-
-    if (!$responsable && $id_posicion_sesion !== '') {
-        $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, nombre_colaborador, posicion AS puesto_responsable, distrito, anio, semana
+    if ($id_posicion_sesion !== '') {
+        $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, nombre_colaborador, posicion AS puesto_responsable, distrito
                 FROM hc
-                WHERE id_posicion = ? AND nombre_colaborador NOT LIKE '%VACANTE%'
-                ORDER BY anio DESC, semana DESC
+                WHERE id_posicion = ? AND anio = ? AND semana = ? AND nombre_colaborador NOT LIKE '%VACANTE%'
                 LIMIT 1";
         $stmt = mysqli_prepare($conexion, $sql);
         if ($stmt) {
-            mysqli_stmt_bind_param($stmt, "s", $id_posicion_sesion);
+            mysqli_stmt_bind_param($stmt, "sii", $id_posicion_sesion, $anio_actual, $semana_actual);
             mysqli_stmt_execute($stmt);
             $res = mysqli_stmt_get_result($stmt);
             $responsable = mysqli_fetch_assoc($res);
             mysqli_stmt_close($stmt);
         }
+
+        if (!$responsable) {
+            $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, nombre_colaborador, posicion AS puesto_responsable, distrito
+                    FROM hc
+                    WHERE id_posicion = ? AND nombre_colaborador NOT LIKE '%VACANTE%'
+                    ORDER BY anio DESC, semana DESC
+                    LIMIT 1";
+            $stmt = mysqli_prepare($conexion, $sql);
+            if ($stmt) {
+                mysqli_stmt_bind_param($stmt, "s", $id_posicion_sesion);
+                mysqli_stmt_execute($stmt);
+                $res = mysqli_stmt_get_result($stmt);
+                $responsable = mysqli_fetch_assoc($res);
+                mysqli_stmt_close($stmt);
+            }
+        }
     }
 
     if (!$responsable && $numero_talento_sesion !== '') {
-        $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, nombre_colaborador, posicion AS puesto_responsable, distrito, anio, semana
+        $sql = "SELECT id_posicion, posicion_lr, numero_talento_gs, nombre_colaborador, posicion AS puesto_responsable, distrito
                 FROM hc
                 WHERE numero_talento_gs = ? AND nombre_colaborador NOT LIKE '%VACANTE%'
                 ORDER BY anio DESC, semana DESC
@@ -328,9 +173,7 @@ function buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_
             'numero_talento_gs' => $numero_talento_sesion,
             'nombre_colaborador' => $usuario,
             'puesto_responsable' => strtoupper($rol),
-            'distrito' => '',
-            'anio' => $anio_actual,
-            'semana' => $semana_actual
+            'distrito' => ''
         ];
     }
 
@@ -431,15 +274,7 @@ $anio_actual = (int)date('Y');
 $semana_actual = (int)date('W');
 list($semana_anterior, $anio_semana_anterior) = semana_anterior_calc($semana_actual, $anio_actual);
 
-/*
- * METAS-FCST captura semana corriente:
- * La captura corresponde a la semana actual, pero la estructura HC disponible suele ser N-1.
- * Por eso se resuelve responsable con HC semana anterior y HIC-Fallback.
- */
-$anio_hc_responsable = $anio_semana_anterior;
-$semana_hc_responsable = $semana_anterior;
-
-$responsable = buscar_responsable_sesion($conexion, $anio_hc_responsable, $semana_hc_responsable, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
+$responsable = buscar_responsable_sesion($conexion, $anio_actual, $semana_actual, $id_posicion_sesion, $numero_talento_sesion, $usuario, $rol);
 
 $id_posicion = (string)$responsable['id_posicion'];
 $posicion_lr = $responsable['posicion_lr'];
@@ -583,7 +418,7 @@ $real_series = array_map(function($d){ return (int)($d['real'] ?? 0); }, $datos_
 <head>
     <meta charset="UTF-8">
     <title>METAS-FCST - TOTALXPEDIENT</title>
-    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=180">
+    <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=163">
     <style>
         :root {
             --tx-purple:#00BFFF; --tx-pink:#FF1493; --tx-blue:#8A2BE2;
@@ -663,7 +498,7 @@ include __DIR__ . '/../includes/sidebar.php';
             <div class="status-main">
                 <div>
                     <strong>SEM <?= h($semana_actual) ?> · <?= h($anio_actual) ?></strong><br>
-                    <span style="font-size:.78rem;color:var(--tx-muted);font-weight:800;">Semana anterior: SEM <?= h($semana_anterior) ?> · HC SEM <?= h($semana_hc_responsable) ?></span>
+                    <span style="font-size:.78rem;color:var(--tx-muted);font-weight:800;">Semana anterior: SEM <?= h($semana_anterior) ?></span>
                 </div>
                 <span class="badge <?= strtolower($estatus) ?>"><?= $estatus === 'CERRADO' ? '🔒 CERRADO' : '✏️ BORRADOR' ?></span>
             </div>
