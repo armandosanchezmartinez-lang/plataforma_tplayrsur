@@ -591,28 +591,25 @@ $label_periodo_actual = $periodo === 'mensual'
 $label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' '.$dia_inicio_base.'-'.$dia_fin_base : 'SEM'.$semana_base;
 $label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' '.$dia_inicio_actual.'-'.$dia_fin_actual : 'SEM'.$semana_actual;
 
-// Condiciones sargables por rango de fecha.
-// FIX performance: la vista mensual estaba usando YEAR()/MONTH()/DAY() sobre instalaciones.fecha,
-// lo que fuerza full scan y puede terminar en 504 Gateway Time-out.
-$fecha_inicio_base_sql = esc($conexion, $fecha_inicio_base_calc);
-$fecha_fin_base_sql = esc($conexion, $fecha_fin_base_calc);
-$fecha_inicio_actual_sql = esc($conexion, $fecha_inicio_actual_calc);
-$fecha_fin_actual_sql = esc($conexion, $fecha_fin_actual_calc);
+$cond_i_base = $periodo === 'mensual'
+    ? "YEAR(i.fecha) = {$anio_mes_base} AND MONTH(i.fecha) = {$mes_base} AND DAY(i.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
+    : "YEAR(i.fecha) = {$anio_base} AND WEEK(i.fecha,1) = {$semana_base} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
 
-$cond_i_base = "i.fecha BETWEEN '{$fecha_inicio_base_sql}' AND '{$fecha_fin_base_sql}'"
-    . ($periodo === 'semanal' ? " AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})" : "");
+$cond_i_actual = $periodo === 'mensual'
+    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
+    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
 
-$cond_i_actual = "i.fecha BETWEEN '{$fecha_inicio_actual_sql}' AND '{$fecha_fin_actual_sql}'"
-    . ($periodo === 'semanal' ? " AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})" : "");
+$cond_ibase = $periodo === 'mensual'
+    ? "YEAR(ibase.fecha) = {$anio_mes_base} AND MONTH(ibase.fecha) = {$mes_base} AND DAY(ibase.fecha) BETWEEN {$dia_inicio_base} AND {$dia_fin_base}"
+    : "YEAR(ibase.fecha) = {$anio_base} AND WEEK(ibase.fecha,1) = {$semana_base} AND DAYOFWEEK(ibase.fecha) IN ({$dias_semana_mysql_in})";
 
-$cond_ibase = "ibase.fecha BETWEEN '{$fecha_inicio_base_sql}' AND '{$fecha_fin_base_sql}'"
-    . ($periodo === 'semanal' ? " AND DAYOFWEEK(ibase.fecha) IN ({$dias_semana_mysql_in})" : "");
+$cond_iactual = $periodo === 'mensual'
+    ? "YEAR(iactual.fecha) = {$anio_mes_actual} AND MONTH(iactual.fecha) = {$mes_actual} AND DAY(iactual.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
+    : "YEAR(iactual.fecha) = {$anio_actual} AND WEEK(iactual.fecha,1) = {$semana_actual} AND DAYOFWEEK(iactual.fecha) IN ({$dias_semana_mysql_in})";
 
-$cond_iactual = "iactual.fecha BETWEEN '{$fecha_inicio_actual_sql}' AND '{$fecha_fin_actual_sql}'"
-    . ($periodo === 'semanal' ? " AND DAYOFWEEK(iactual.fecha) IN ({$dias_semana_mysql_in})" : "");
-
-$cond_mix_actual = "i.fecha BETWEEN '{$fecha_inicio_actual_sql}' AND '{$fecha_fin_actual_sql}'"
-    . ($periodo === 'semanal' ? " AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})" : "");
+$cond_mix_actual = $periodo === 'mensual'
+    ? "YEAR(i.fecha) = {$anio_mes_actual} AND MONTH(i.fecha) = {$mes_actual} AND DAY(i.fecha) BETWEEN {$dia_inicio_actual} AND {$dia_fin_actual}"
+    : "YEAR(i.fecha) = {$anio_actual} AND WEEK(i.fecha,1) = {$semana_actual} AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})";
 
 // Condiciones específicas para conteos por coach histórico del evento.
 // Evita usar el alias incorrecto dentro de JOINs adicionales.
