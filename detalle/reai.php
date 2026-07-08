@@ -636,7 +636,7 @@ function ordenar_por_nombre_reai(&$arr) {
 }
 
 if ($semana_hc && $anio_hc) {
-    $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, posicion, distrito, fecha_alta
+    $sql_hc = "SELECT nombre_colaborador, numero_talento_gs, id_posicion, posicion_lr, nombre_linea_reporte, posicion, distrito, fecha_alta
                FROM hc
                WHERE semana = ? AND anio = ?
                  AND numero_talento_gs NOT LIKE '%VACANTE%'
@@ -759,7 +759,7 @@ if ($semana_hc && $anio_hc) {
      * Si tienen vendedores reportando a su id_posicion, deben aparecer como COACH aunque no cuelguen
      * correctamente del líder/director en HC.
      */
-    $agregar_coaches_indirectos = function($coaches_base, $distritos_permitidos = null) use (&$hc_rows, &$children_by_lr, $puestos_comerciales) {
+    $agregar_coaches_indirectos = function($coaches_base, $distritos_permitidos = null, $lideres_permitidos = null) use (&$hc_rows, &$children_by_lr, $puestos_comerciales) {
         $out = $coaches_base;
         $ya = [];
         foreach ($out as $c0) {
@@ -776,6 +776,28 @@ if ($semana_hc && $anio_hc) {
             }
         }
 
+        // Alcance opcional por líder. Esto evita que un usuario LÍDER vea todos
+        // los coaches de su distrito cuando aplicamos el fallback jerárquico.
+        // Se acepta el coach si reporta directamente al líder por id_posicion
+        // o si HC trae el nombre_linea_reporte con el nombre del líder.
+        $lider_ids_ok = null;
+        $lider_nombres_ok = null;
+        if (is_array($lideres_permitidos)) {
+            $lider_ids_ok = [];
+            $lider_nombres_ok = [];
+            foreach ($lideres_permitidos as $lp) {
+                if (is_array($lp)) {
+                    $lid = trim((string)($lp['id_posicion'] ?? ''));
+                    $lnom = normaliza_key($lp['nombre_colaborador'] ?? '');
+                } else {
+                    $lid = trim((string)$lp);
+                    $lnom = '';
+                }
+                if ($lid !== '') $lider_ids_ok[$lid] = true;
+                if ($lnom !== '') $lider_nombres_ok[$lnom] = true;
+            }
+        }
+
         foreach ($hc_rows as $cand) {
             $pos_key = normaliza_key($cand['posicion'] ?? '');
             if (strpos($pos_key, 'COACH') === false) continue;
@@ -784,6 +806,15 @@ if ($semana_hc && $anio_hc) {
             if ($idc === '' || isset($ya[$idc])) continue;
 
             if ($dist_ok !== null && !isset($dist_ok[normaliza_key($cand['distrito'] ?? '')])) continue;
+
+            if ($lider_ids_ok !== null || $lider_nombres_ok !== null) {
+                $lr_cand = trim((string)($cand['posicion_lr'] ?? ''));
+                $nombre_lr_cand = normaliza_key($cand['nombre_linea_reporte'] ?? '');
+                $pertenece_lider = false;
+                if ($lr_cand !== '' && isset($lider_ids_ok[$lr_cand])) $pertenece_lider = true;
+                if (!$pertenece_lider && $nombre_lr_cand !== '' && isset($lider_nombres_ok[$nombre_lr_cand])) $pertenece_lider = true;
+                if (!$pertenece_lider) continue;
+            }
 
             $tiene_vendedores = false;
             foreach ($children_by_lr[$idc] ?? [] as $hijo) {
@@ -871,7 +902,7 @@ if ($semana_hc && $anio_hc) {
             if (!es_puesto_vendedor_reai($c['posicion'] ?? '', $puestos_comerciales)) $coaches[] = $c;
         }
         $dist_lider_reai = isset($by_id_posicion[(string)$id_posicion]) ? [($by_id_posicion[(string)$id_posicion]['distrito'] ?? '')] : null;
-        $coaches = $agregar_coaches_indirectos($coaches, $dist_lider_reai);
+        $coaches = $agregar_coaches_indirectos($coaches, $dist_lider_reai, [($by_id_posicion[(string)$id_posicion] ?? ['id_posicion'=>$id_posicion])]);
         foreach ($coaches as $c) $agregar_fila($c, 'COACH');
 
         $vend_rows = [];
