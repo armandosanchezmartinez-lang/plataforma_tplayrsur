@@ -1276,6 +1276,30 @@ ventas_actual AS (
        )
     GROUP BY c.coach_key
 ),
+ventas_base_hc AS (
+    SELECT
+        v.coach_key,
+        COUNT(DISTINCT ibase.cuenta) AS ins_sem_base_hc
+    FROM vendedores v
+    INNER JOIN instalaciones ibase
+        ON (ibase.folio_empleado = v.folio_empleado OR ibase.folio_empleado = v.folio_unificado OR ibase.folio_empleado = v.folio_anterior OR ibase.folio_empleado = v.folio_nuevo)
+       AND {$cond_ibase}
+    WHERE v.anio={$hc_anio_base}
+      AND v.semana={$hc_semana_base}
+    GROUP BY v.coach_key
+),
+ventas_actual_hc AS (
+    SELECT
+        v.coach_key,
+        COUNT(DISTINCT iactual.cuenta) AS ins_sem_actual_hc
+    FROM vendedores v
+    INNER JOIN instalaciones iactual
+        ON (iactual.folio_empleado = v.folio_empleado OR iactual.folio_empleado = v.folio_unificado OR iactual.folio_empleado = v.folio_anterior OR iactual.folio_empleado = v.folio_nuevo)
+       AND {$cond_iactual}
+    WHERE v.anio={$hc_anio_actual}
+      AND v.semana={$hc_semana_actual}
+    GROUP BY v.coach_key
+),
 resumen AS (
     SELECT
         c.distrito,
@@ -1314,8 +1338,13 @@ total_lider AS (
 ),
 matched_lider AS (
     SELECT
-        COALESCE((SELECT SUM(ins_sem_base) FROM ventas_base), 0) AS matched_base,
-        COALESCE((SELECT SUM(ins_sem_actual) FROM ventas_actual), 0) AS matched_actual
+        COALESCE(SUM(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))), 0) AS matched_base,
+        COALESCE(SUM(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0))), 0) AS matched_actual
+    FROM resumen r
+    LEFT JOIN ventas_base vb ON r.coach_key = vb.coach_key
+    LEFT JOIN ventas_actual va ON r.coach_key = va.coach_key
+    LEFT JOIN ventas_base_hc vbh ON r.coach_key = vbh.coach_key
+    LEFT JOIN ventas_actual_hc vah ON r.coach_key = vah.coach_key
 ),
 sin_coach AS (
     SELECT
@@ -1335,10 +1364,10 @@ FROM (
         r.coach,
         r.coach_pos,
         '' AS folio_empleado,
-        COALESCE(vb.ins_sem_base,0) AS ins_sem_base,
-        COALESCE(va.ins_sem_actual,0) AS ins_sem_actual,
-        COALESCE(va.ins_sem_actual,0) - COALESCE(vb.ins_sem_base,0) AS dif,
-        ROUND(((COALESCE(va.ins_sem_actual,0) - COALESCE(vb.ins_sem_base,0)) / NULLIF(vb.ins_sem_base,0)) * 100,0) AS pct_dif,
+        GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) AS ins_sem_base,
+        GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) AS ins_sem_actual,
+        GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) - GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) AS dif,
+        ROUND(((GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) - GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))) / NULLIF(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)),0)) * 100,0) AS pct_dif,
         r.hc_activo_base,
         r.hc_activo_actual,
         r.hc_con_ins_base,
@@ -1347,8 +1376,8 @@ FROM (
         r.hc_activo_actual - r.hc_con_ins_actual AS hc_sin_venta_actual,
         ROUND(((r.hc_activo_base - r.hc_con_ins_base) / NULLIF(r.hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
         ROUND(((r.hc_activo_actual - r.hc_con_ins_actual) / NULLIF(r.hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
-        ROUND(COALESCE(vb.ins_sem_base,0) / NULLIF(r.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
-        ROUND(COALESCE(va.ins_sem_actual,0) / NULLIF(r.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
+        ROUND(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) / NULLIF(r.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
+        ROUND(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) / NULLIF(r.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
         r.hc_activo_base AS activo_base,
         r.vacante_base,
         r.hc_activo_base + r.vacante_base AS hc_total_base,
@@ -1358,6 +1387,8 @@ FROM (
     FROM resumen r
     LEFT JOIN ventas_base vb ON r.coach_key = vb.coach_key
     LEFT JOIN ventas_actual va ON r.coach_key = va.coach_key
+    LEFT JOIN ventas_base_hc vbh ON r.coach_key = vbh.coach_key
+    LEFT JOIN ventas_actual_hc vah ON r.coach_key = vah.coach_key
 
     UNION ALL
 
