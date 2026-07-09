@@ -24,18 +24,47 @@ $puestos_comerciales = "'PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','VENDEDOR NEGO
 // --- FUNCIONES DE JERARQUÍA ---
 function getSubordinados($conexion, $id_pos, $semana = null, $anio = null) {
     $ids = [];
-    if ($semana && $anio) {
-        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr = ? AND numero_talento_gs NOT LIKE '%VACANTE%' AND semana = ? AND anio = ?");
-        mysqli_stmt_bind_param($stmt, "sii", $id_pos, $semana, $anio);
-    } else {
-        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr = ? AND numero_talento_gs NOT LIKE '%VACANTE%'");
-        mysqli_stmt_bind_param($stmt, "s", $id_pos);
+
+    /*
+    |--------------------------------------------------------------------------
+    | HIC-Fallback v1.0 en jerarquía
+    |--------------------------------------------------------------------------
+    | Cuando un Coach/Líder migra de nómina, algunos vendedores pueden conservar
+    | en HC una referencia de posicion_lr anterior/nueva. Por eso la búsqueda de
+    | subordinados no debe limitarse únicamente al id_posicion vigente: debe
+    | considerar también las posiciones equivalentes en historial_identidad_colaborador.
+    |
+    | Esto corrige casos como CARRILLO CAMACHO FRANCISCO MAURICIO, donde el
+    | Ranking Coach sí trae sus vendedores/instalaciones, pero el Dashboard dejaba
+    | el renglón en 0 al reconstruir la jerarquía sólo por posicion_lr exacta.
+    |--------------------------------------------------------------------------
+    */
+    $posiciones_lr = [$id_pos];
+    if (function_exists('tx_hic_aliases_posiciones_dashboard')) {
+        $aliases_pos = tx_hic_aliases_posiciones_dashboard($conexion, [$id_pos]);
+        if (!empty($aliases_pos)) {
+            $posiciones_lr = array_values(array_unique(array_merge($posiciones_lr, $aliases_pos)));
+        }
     }
+
+    $ph = implode(',', array_fill(0, count($posiciones_lr), '?'));
+
+    if ($semana && $anio) {
+        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr IN ($ph) AND numero_talento_gs NOT LIKE '%VACANTE%' AND semana = ? AND anio = ?");
+        $tipos = str_repeat('s', count($posiciones_lr)) . 'ii';
+        $bind = array_merge(array_values($posiciones_lr), [(int)$semana, (int)$anio]);
+        mysqli_stmt_bind_param($stmt, $tipos, ...$bind);
+    } else {
+        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr IN ($ph) AND numero_talento_gs NOT LIKE '%VACANTE%'");
+        $tipos = str_repeat('s', count($posiciones_lr));
+        mysqli_stmt_bind_param($stmt, $tipos, ...array_values($posiciones_lr));
+    }
+    if (!$stmt) return $ids;
     mysqli_stmt_execute($stmt);
     $res = mysqli_stmt_get_result($stmt);
     while ($row = mysqli_fetch_assoc($res)) $ids[] = $row['id_posicion'];
     mysqli_stmt_close($stmt);
-    return $ids;
+    return array_unique(array_values($ids));
 }
 
 function getTodosSubordinados($conexion, $id_pos, $niveles_restantes, $semana = null, $anio = null) {
@@ -238,6 +267,18 @@ if ($rol !== 'admin') {
         while ($row_f = mysqli_fetch_assoc($res_folios)) $folio_ids[] = $row_f['numero_talento_gs'];
         mysqli_stmt_close($stmt_folios);
     }
+
+    // Parche HIC-Fallback v1.0 global:
+    // A partir de aquí, los KPIs y tarjetas del dashboard que consultan por folio
+    // deben incluir folios históricos equivalentes. El HC se sigue calculando por
+    // id_posicion vigente para no inflar plantilla/productividad.
+    if (!empty($subordinados_ids)) {
+        // HIC-Fallback v1.0: tomar folios vigentes + históricos desde las posiciones
+        // autorizadas para que KPIs y tarjetas cuadren con ranking_productividad.php.
+        $folio_ids = tx_hic_folios_por_posiciones_dashboard($conexion, $subordinados_ids);
+    } elseif (!empty($folio_ids)) {
+        $folio_ids = tx_hic_aliases_folios_dashboard($conexion, $folio_ids);
+    }
 }
 
 // ── VISTA JERÁRQUICA DEL DASHBOARD ───────────────────────────────────────────
@@ -316,7 +357,12 @@ if ($scope_pos !== '') {
             $scope_ids[] = $row_scope['id_posicion'];
             $scope_ids = array_unique(array_values($scope_ids));
 
-            $folio_ids = getFoliosPorPosiciones($conexion, $scope_ids);
+            $folio_ids = tx_hic_folios_por_posiciones_dashboard($conexion, $scope_ids);
+            // Parche HIC-Fallback v1.0 global para scope jerárquico:
+            // suma instalaciones/ventas históricas por folios equivalentes sin alterar HC.
+            if (!empty($folio_ids)) {
+                $folio_ids = tx_hic_aliases_folios_dashboard($conexion, $folio_ids);
+            }
             $subordinados_ids = $scope_ids;
 
             $nombre_completo_scope = $row_scope['nombre_colaborador'] ?? '';
@@ -1564,7 +1610,12 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $child_ids = getTodosSubordinados($conexion, $child['id_posicion'], 6, $semana_actual, $anio_actual);
             $child_ids[] = $child['id_posicion'];
             $child_ids = array_unique(array_values($child_ids));
-            $child_folios = getFoliosPorPosiciones($conexion, $child_ids);
+            $child_folios = tx_hic_folios_por_posiciones_dashboard($conexion, $child_ids);
+            // Parche HIC-Fallback v1.0 en cumplimiento inferior:
+            // reales por folios actuales + históricos; HC/meta permanecen con plantilla vigente.
+            if (!empty($child_folios)) {
+                $child_folios = tx_hic_aliases_folios_dashboard($conexion, $child_folios);
+            }
             $child_hc = tx_hc_activo_posiciones($conexion, $child_ids, $semana_actual, $anio_actual, $puestos_comerciales);
             if ($target_nivel_inferior === 'vendedor' && $child_hc === 0) $child_hc = 1;
             $hc_total_children += $child_hc;
@@ -1866,8 +1917,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_inst .= " AND folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_inst .= " AND folio_empleado IN ($ph)";
 }
 $query_inst .= " GROUP BY anio, mes, origen_prospecto";
 
@@ -1891,8 +1942,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_vent .= " AND folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_vent .= " AND folio_empleado IN ($ph)";
 }
 $query_vent .= " GROUP BY anio, mes, canal_venta";
 
@@ -1918,8 +1969,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_inst_oferta .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_inst_oferta .= " AND folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_inst_oferta .= " AND folio_empleado IN ($ph)";
 }
 $query_inst_oferta .= " GROUP BY anio, mes, oferta";
 
@@ -1942,8 +1993,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_vent_oferta .= " AND v.distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_vent_oferta .= " AND v.folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_vent_oferta .= " AND v.folio_empleado IN ($ph)";
 }
 $query_vent_oferta .= " GROUP BY anio, mes, oferta";
 
@@ -2019,15 +2070,12 @@ function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
 
 /*
 |--------------------------------------------------------------------------
-| TOTALXPEDIENT - Parche HIC-Fallback v1.0 para TOP/BOTTOM
+| TOTALXPEDIENT - Parche HIC-Fallback v1.0 global + TOP/BOTTOM
 |--------------------------------------------------------------------------
 |
-| Alcance intencional:
-|   Sólo se usa en las tarjetas:
-|   - TOP Five Coaches
-|   - BOTTOM Five Coaches
-|   - TOP Regional Vendedor
-|   - BOTTOM Regional Vendedor
+| Alcance:
+|   - Global para KPIs, scope jerárquico, cumplimiento inferior, evolución, ARPU, mix y georreferencia.
+|   - TOP/BOTTOM ya usan el mismo helper HIC, conservando HC vigente como denominador.
 |
 | Objetivo:
 |   Unificar ventas/instalaciones históricas cuando un colaborador cambió
@@ -2164,6 +2212,117 @@ function tx_hic_aliases_folios_dashboard($conexion, $folios, $posiciones = []) {
         }
     }
     return array_values(array_unique($out));
+}
+
+function tx_hic_aliases_posiciones_dashboard($conexion, $posiciones) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - HIC-Fallback de posiciones
+    |--------------------------------------------------------------------------
+    | Devuelve id_posicion anterior/nueva equivalentes desde
+    | historial_identidad_colaborador. Se usa para reconstruir jerarquía por
+    | posicion_lr, no para contar HC.
+    |--------------------------------------------------------------------------
+    */
+    $out = [];
+    $posiciones = array_values(array_filter(array_unique(array_map('trim', array_map('strval', $posiciones))), function($v) {
+        return $v !== '';
+    }));
+    if (empty($posiciones)) return [];
+
+    foreach ($posiciones as $p) $out[] = $p;
+
+    $cfg = tx_hic_cols_dashboard($conexion);
+    if (!$cfg['existe'] || empty($cfg['pos_cols'])) {
+        return array_values(array_unique($out));
+    }
+
+    foreach ($posiciones as $pos) {
+        $pos_esc = mysqli_real_escape_string($conexion, $pos);
+        $where = [];
+        foreach ($cfg['pos_cols'] as $col) {
+            $col_sql = "`" . str_replace("`", "", $col) . "`";
+            $where[] = "UPPER(TRIM(COALESCE($col_sql,''))) = UPPER('$pos_esc')";
+        }
+        if (empty($where)) continue;
+
+        $select_cols = implode(', ', array_map(function($c) {
+            return "`" . str_replace("`", "", $c) . "`";
+        }, $cfg['pos_cols']));
+
+        $sql = "SELECT $select_cols FROM historial_identidad_colaborador WHERE " . implode(' OR ', $where);
+        $r = mysqli_query($conexion, $sql);
+        while ($r && $row = mysqli_fetch_assoc($r)) {
+            foreach ($cfg['pos_cols'] as $col) {
+                $alias = trim((string)($row[$col] ?? ''));
+                if ($alias !== '') $out[] = $alias;
+            }
+        }
+    }
+
+    return array_values(array_unique($out));
+}
+
+
+function tx_hic_folios_por_posiciones_dashboard($conexion, $posiciones_ids) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - HIC-Fallback por id_posicion
+    |--------------------------------------------------------------------------
+    | Recupera los folios vigentes de HC y agrega folios históricos usando
+    | numero_talento_gs + id_posicion. Este punto corrige los casos donde el
+    | cambio de nominera conserva la posición, pero el folio vigente no empata
+    | por sí solo contra instalaciones históricas.
+    |
+    | Importante:
+    |   Sólo se usa para sumar ventas/instalaciones por folio.
+    |   El HC activo se sigue calculando por id_posicion vigente.
+    |--------------------------------------------------------------------------
+    */
+    $folios = [];
+    if (empty($posiciones_ids)) return $folios;
+
+    // HIC-Fallback v1.0: ampliar posiciones antes de leer HC.
+    // Si un vendedor aún reporta a una posición histórica del Coach, se incluye.
+    $posiciones_ids = tx_hic_aliases_posiciones_dashboard($conexion, $posiciones_ids);
+
+    $ids_sql = tx_sql_in_escaped($conexion, $posiciones_ids);
+    $sql = "
+        SELECT DISTINCT
+            numero_talento_gs AS folio,
+            id_posicion
+        FROM hc
+        WHERE id_posicion IN ($ids_sql)
+          AND numero_talento_gs IS NOT NULL
+          AND numero_talento_gs <> ''
+          AND numero_talento_gs NOT LIKE '%VACANTE%'
+    ";
+    $res = mysqli_query($conexion, $sql);
+
+    $identidades = [];
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $folio = tx_hic_clean_folio_dashboard($row['folio'] ?? '');
+        $pos = trim((string)($row['id_posicion'] ?? ''));
+        if ($folio === '' && $pos === '') continue;
+
+        $key = $pos !== '' ? $pos . '|' . $folio : $folio;
+        $identidades[$key] = [
+            'folio' => $folio,
+            'id_posicion' => $pos
+        ];
+    }
+
+    if (empty($identidades)) return [];
+
+    $aliases = tx_hic_aliases_por_identidad_dashboard($conexion, $identidades);
+    foreach ($aliases as $arr) {
+        foreach ($arr as $folio_alias) {
+            $folio_alias = tx_hic_clean_folio_dashboard($folio_alias);
+            if ($folio_alias !== '') $folios[] = $folio_alias;
+        }
+    }
+
+    return array_values(array_unique($folios));
 }
 
 
@@ -2553,8 +2712,17 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
             if ($folio !== '') $folios[] = $folio;
         }
         $folios = array_unique(array_values($folios));
-        // Parche HIC-Fallback v1.0: agrega folios históricos de los vendedores a cargo del coach.
-        $folios = tx_hic_aliases_folios_dashboard($conexion, $folios);
+        $hc_activo_real = count($folios);
+
+        // Parche HIC-Fallback v1.0:
+        // - Para instalaciones/ARPU/spark se agregan folios históricos equivalentes.
+        // - Para productividad Coach, el denominador debe conservar el HC activo real
+        //   de la semana vigente, NO el total de aliases HIC. Si se cuenta cada alias
+        //   como HC adicional, la productividad se subestima (caso Carrillo Camacho).
+        $folios_hic = tx_hic_aliases_folios_dashboard($conexion, $folios);
+        if (!empty($folios_hic)) {
+            $folios = $folios_hic;
+        }
 
         $out[$id_pos] = [
             'id_posicion' => $id_pos,
@@ -2562,7 +2730,7 @@ function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_c
             'distrito' => $row['distrito'] ?? '',
             'lider' => $row['lider'] ?? '',
             'folios' => $folios,
-            'hc_activo' => count($folios),
+            'hc_activo' => $hc_activo_real,
             'instalaciones' => 0,
             'arpu' => 0,
             'productividad' => 0,
