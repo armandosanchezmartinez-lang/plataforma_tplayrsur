@@ -238,6 +238,14 @@ if ($rol !== 'admin') {
         while ($row_f = mysqli_fetch_assoc($res_folios)) $folio_ids[] = $row_f['numero_talento_gs'];
         mysqli_stmt_close($stmt_folios);
     }
+
+    // Parche HIC-Fallback v1.0 global:
+    // A partir de aquí, los KPIs y tarjetas del dashboard que consultan por folio
+    // deben incluir folios históricos equivalentes. El HC se sigue calculando por
+    // id_posicion vigente para no inflar plantilla/productividad.
+    if (!empty($folio_ids)) {
+        $folio_ids = tx_hic_aliases_folios_dashboard($conexion, $folio_ids);
+    }
 }
 
 // ── VISTA JERÁRQUICA DEL DASHBOARD ───────────────────────────────────────────
@@ -317,6 +325,11 @@ if ($scope_pos !== '') {
             $scope_ids = array_unique(array_values($scope_ids));
 
             $folio_ids = getFoliosPorPosiciones($conexion, $scope_ids);
+            // Parche HIC-Fallback v1.0 global para scope jerárquico:
+            // suma instalaciones/ventas históricas por folios equivalentes sin alterar HC.
+            if (!empty($folio_ids)) {
+                $folio_ids = tx_hic_aliases_folios_dashboard($conexion, $folio_ids);
+            }
             $subordinados_ids = $scope_ids;
 
             $nombre_completo_scope = $row_scope['nombre_colaborador'] ?? '';
@@ -1565,6 +1578,11 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $child_ids[] = $child['id_posicion'];
             $child_ids = array_unique(array_values($child_ids));
             $child_folios = getFoliosPorPosiciones($conexion, $child_ids);
+            // Parche HIC-Fallback v1.0 en cumplimiento inferior:
+            // reales por folios actuales + históricos; HC/meta permanecen con plantilla vigente.
+            if (!empty($child_folios)) {
+                $child_folios = tx_hic_aliases_folios_dashboard($conexion, $child_folios);
+            }
             $child_hc = tx_hc_activo_posiciones($conexion, $child_ids, $semana_actual, $anio_actual, $puestos_comerciales);
             if ($target_nivel_inferior === 'vendedor' && $child_hc === 0) $child_hc = 1;
             $hc_total_children += $child_hc;
@@ -1866,8 +1884,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_inst .= " AND folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_inst .= " AND folio_empleado IN ($ph)";
 }
 $query_inst .= " GROUP BY anio, mes, origen_prospecto";
 
@@ -1891,8 +1909,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_vent .= " AND folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_vent .= " AND folio_empleado IN ($ph)";
 }
 $query_vent .= " GROUP BY anio, mes, canal_venta";
 
@@ -1918,8 +1936,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_inst_oferta .= " AND distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_inst_oferta .= " AND folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_inst_oferta .= " AND folio_empleado IN ($ph)";
 }
 $query_inst_oferta .= " GROUP BY anio, mes, oferta";
 
@@ -1942,8 +1960,8 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
     $query_vent_oferta .= " AND v.distrito IN ($distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = implode("','", array_values($folio_ids));
-    $query_vent_oferta .= " AND v.folio_empleado IN ('$ph')";
+    $ph = tx_sql_in_escaped($conexion, $folio_ids);
+    $query_vent_oferta .= " AND v.folio_empleado IN ($ph)";
 }
 $query_vent_oferta .= " GROUP BY anio, mes, oferta";
 
@@ -2019,15 +2037,12 @@ function dashboard_sort_arrow($idx, $current_idx, $current_dir) {
 
 /*
 |--------------------------------------------------------------------------
-| TOTALXPEDIENT - Parche HIC-Fallback v1.0 para TOP/BOTTOM
+| TOTALXPEDIENT - Parche HIC-Fallback v1.0 global + TOP/BOTTOM
 |--------------------------------------------------------------------------
 |
-| Alcance intencional:
-|   Sólo se usa en las tarjetas:
-|   - TOP Five Coaches
-|   - BOTTOM Five Coaches
-|   - TOP Regional Vendedor
-|   - BOTTOM Regional Vendedor
+| Alcance:
+|   - Global para KPIs, scope jerárquico, cumplimiento inferior, evolución, ARPU, mix y georreferencia.
+|   - TOP/BOTTOM ya usan el mismo helper HIC, conservando HC vigente como denominador.
 |
 | Objetivo:
 |   Unificar ventas/instalaciones históricas cuando un colaborador cambió
