@@ -1654,8 +1654,8 @@ include __DIR__ . '/../includes/sidebar.php';
         <p><?= h($subtitle) ?> · Días hábiles: <?= h($label_col_base) ?> <?= h($dias_habiles_base) ?> / <?= h($label_col_actual) ?> <?= h($dias_habiles_actual) ?></p>
     </div>
     <div class="week-nav">
-        <a class="week-btn <?= $periodo === 'semanal' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal'])) ?>">Semanal</a>
-        <a class="week-btn <?= $periodo === 'mensual' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual'])) ?>">Mensual</a>
+        <a class="week-btn <?= $periodo === 'semanal' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','view'=>'lideres','distrito'=>null,'lider'=>null,'coach'=>null,'coach_pos'=>null,'vendedor'=>null,'folio'=>null])) ?>">Semanal</a>
+        <a class="week-btn <?= $periodo === 'mensual' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','view'=>'lideres','distrito'=>null,'lider'=>null,'coach'=>null,'coach_pos'=>null,'vendedor'=>null,'folio'=>null])) ?>">Mensual</a>
         <?php if ($periodo === 'semanal'): ?>
             <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
             <div class="range-dropdown week-range-dropdown">
