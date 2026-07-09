@@ -324,7 +324,7 @@ if ($scope_pos !== '') {
             $scope_ids[] = $row_scope['id_posicion'];
             $scope_ids = array_unique(array_values($scope_ids));
 
-            $folio_ids = getFoliosPorPosiciones($conexion, $scope_ids);
+            $folio_ids = tx_hic_folios_por_posiciones_dashboard($conexion, $scope_ids);
             // Parche HIC-Fallback v1.0 global para scope jerárquico:
             // suma instalaciones/ventas históricas por folios equivalentes sin alterar HC.
             if (!empty($folio_ids)) {
@@ -1577,7 +1577,7 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $child_ids = getTodosSubordinados($conexion, $child['id_posicion'], 6, $semana_actual, $anio_actual);
             $child_ids[] = $child['id_posicion'];
             $child_ids = array_unique(array_values($child_ids));
-            $child_folios = getFoliosPorPosiciones($conexion, $child_ids);
+            $child_folios = tx_hic_folios_por_posiciones_dashboard($conexion, $child_ids);
             // Parche HIC-Fallback v1.0 en cumplimiento inferior:
             // reales por folios actuales + históricos; HC/meta permanecen con plantilla vigente.
             if (!empty($child_folios)) {
@@ -2179,6 +2179,64 @@ function tx_hic_aliases_folios_dashboard($conexion, $folios, $posiciones = []) {
         }
     }
     return array_values(array_unique($out));
+}
+
+
+function tx_hic_folios_por_posiciones_dashboard($conexion, $posiciones_ids) {
+    /*
+    |--------------------------------------------------------------------------
+    | TOTALXPEDIENT - HIC-Fallback por id_posicion
+    |--------------------------------------------------------------------------
+    | Recupera los folios vigentes de HC y agrega folios históricos usando
+    | numero_talento_gs + id_posicion. Este punto corrige los casos donde el
+    | cambio de nominera conserva la posición, pero el folio vigente no empata
+    | por sí solo contra instalaciones históricas.
+    |
+    | Importante:
+    |   Sólo se usa para sumar ventas/instalaciones por folio.
+    |   El HC activo se sigue calculando por id_posicion vigente.
+    |--------------------------------------------------------------------------
+    */
+    $folios = [];
+    if (empty($posiciones_ids)) return $folios;
+
+    $ids_sql = tx_sql_in_escaped($conexion, $posiciones_ids);
+    $sql = "
+        SELECT DISTINCT
+            numero_talento_gs AS folio,
+            id_posicion
+        FROM hc
+        WHERE id_posicion IN ($ids_sql)
+          AND numero_talento_gs IS NOT NULL
+          AND numero_talento_gs <> ''
+          AND numero_talento_gs NOT LIKE '%VACANTE%'
+    ";
+    $res = mysqli_query($conexion, $sql);
+
+    $identidades = [];
+    while ($res && $row = mysqli_fetch_assoc($res)) {
+        $folio = tx_hic_clean_folio_dashboard($row['folio'] ?? '');
+        $pos = trim((string)($row['id_posicion'] ?? ''));
+        if ($folio === '' && $pos === '') continue;
+
+        $key = $pos !== '' ? $pos . '|' . $folio : $folio;
+        $identidades[$key] = [
+            'folio' => $folio,
+            'id_posicion' => $pos
+        ];
+    }
+
+    if (empty($identidades)) return [];
+
+    $aliases = tx_hic_aliases_por_identidad_dashboard($conexion, $identidades);
+    foreach ($aliases as $arr) {
+        foreach ($arr as $folio_alias) {
+            $folio_alias = tx_hic_clean_folio_dashboard($folio_alias);
+            if ($folio_alias !== '') $folios[] = $folio_alias;
+        }
+    }
+
+    return array_values(array_unique($folios));
 }
 
 
