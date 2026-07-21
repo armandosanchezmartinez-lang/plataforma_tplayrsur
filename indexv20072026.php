@@ -2361,48 +2361,18 @@ function tx_get_vendedores_regional_dashboard($conexion, $semana, $anio, $puesto
             h.numero_talento_gs AS folio,
             h.nombre_colaborador AS vendedor,
             h.distrito,
-            COALESCE(
-                NULLIF(TRIM(c.nombre_colaborador), ''),
-                NULLIF(TRIM(c_nombre.nombre_colaborador), ''),
-                NULLIF(TRIM(h.nombre_linea_reporte), ''),
-                ''
-            ) AS coach,
-            COALESCE(
-                NULLIF(TRIM(l.nombre_colaborador), ''),
-                NULLIF(TRIM(l_nombre.nombre_colaborador), ''),
-                ''
-            ) AS lider,
+            COALESCE(c.nombre_colaborador, '') AS coach,
+            COALESCE(l.nombre_colaborador, '') AS lider,
             COALESCE(d.nombre_colaborador, '') AS director
         FROM hc h
-        /*
-         * FIX Coach vendedor:
-         * 1) Match principal por posicion_lr -> id_posicion.
-         * 2) Fallback por nombre_linea_reporte dentro de la misma semana/distrito.
-         * Esto cubre vendedores cuya posicion_lr quedó desfasada tras una migración,
-         * pero conservan correctamente el nombre del Coach en HC.
-         */
         LEFT JOIN hc c
             ON c.id_posicion = h.posicion_lr
            AND c.semana = h.semana
            AND c.anio = h.anio
-        LEFT JOIN hc c_nombre
-            ON UPPER(TRIM(c_nombre.nombre_colaborador)) = UPPER(TRIM(h.nombre_linea_reporte))
-           AND c_nombre.distrito = h.distrito
-           AND c_nombre.semana = h.semana
-           AND c_nombre.anio = h.anio
-           AND c_nombre.numero_talento_gs NOT LIKE '%VACANTE%'
-           AND UPPER(TRIM(COALESCE(c_nombre.nombre_colaborador,''))) <> 'VACANTE'
         LEFT JOIN hc l
-            ON l.id_posicion = COALESCE(NULLIF(c.posicion_lr,''), NULLIF(c_nombre.posicion_lr,''))
+            ON l.id_posicion = c.posicion_lr
            AND l.semana = h.semana
            AND l.anio = h.anio
-        LEFT JOIN hc l_nombre
-            ON UPPER(TRIM(l_nombre.nombre_colaborador)) = UPPER(TRIM(COALESCE(c.nombre_linea_reporte, c_nombre.nombre_linea_reporte)))
-           AND l_nombre.distrito = h.distrito
-           AND l_nombre.semana = h.semana
-           AND l_nombre.anio = h.anio
-           AND l_nombre.numero_talento_gs NOT LIKE '%VACANTE%'
-           AND UPPER(TRIM(COALESCE(l_nombre.nombre_colaborador,''))) <> 'VACANTE'
         LEFT JOIN hc d
             ON d.id_posicion = l.posicion_lr
            AND d.semana = h.semana
