@@ -1235,6 +1235,18 @@ coaches_base AS (
        )
        AND h.puesto_lr LIKE '%LIDER%'
 ),
+coaches_match AS (
+    SELECT
+        distrito,
+        distrito_hc,
+        lider,
+        lider_instalaciones,
+        coach,
+        MAX(coach_pos) AS coach_pos,
+        coach_key
+    FROM coaches_base
+    GROUP BY distrito, distrito_hc, lider, lider_instalaciones, coach, coach_key
+),
 vendedores AS (
     SELECT DISTINCT
         c.distrito,
@@ -1335,7 +1347,7 @@ ventas_base AS (
     SELECT
         c.coach_key,
         SUM(ib.ins_sem_base) AS ins_sem_base
-    FROM coaches_base c
+    FROM coaches_match c
     INNER JOIN install_base ib
         ON ib.distrito = c.distrito
        AND ib.lider = c.lider
@@ -1356,7 +1368,7 @@ ventas_actual AS (
     SELECT
         c.coach_key,
         SUM(ia.ins_sem_actual) AS ins_sem_actual
-    FROM coaches_base c
+    FROM coaches_match c
     INNER JOIN install_actual ia
         ON ia.distrito = c.distrito
        AND ia.lider = c.lider
