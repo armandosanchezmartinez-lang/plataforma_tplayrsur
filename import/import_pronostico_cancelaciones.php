@@ -2,6 +2,8 @@
 set_time_limit(0);
 ini_set('memory_limit', '512M');
 session_start();
+$usuarioSesion = $_SESSION['usuario'] ?? $_SESSION['username'] ?? 'sistema';
+session_write_close();
 
 include $_SERVER['DOCUMENT_ROOT'] . '/plataforma/includes/conexion.php';
 
@@ -105,6 +107,28 @@ function carga_por_id(mysqli $conexion, int $cargaId): ?array {
     return $row;
 }
 
+function count_carga(mysqli $conexion, int $cargaId): int {
+    $stmt = mysqli_prepare($conexion, "SELECT COUNT(*) AS total FROM pronostico_cancelaciones WHERE carga_id=?");
+    if (!$stmt) throw new RuntimeException(mysqli_error($conexion));
+    mysqli_stmt_bind_param($stmt, 'i', $cargaId);
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    $row = mysqli_fetch_assoc($res);
+    mysqli_stmt_close($stmt);
+    return (int)($row['total'] ?? 0);
+}
+
+function asegurar_vista_sur(mysqli $conexion): ?string {
+    $sql = "CREATE OR REPLACE VIEW vw_pronostico_cancelaciones_sur_actual AS
+            SELECT *
+            FROM vw_pronostico_cancelaciones_actual
+            WHERE UPPER(TRIM(region)) = 'SUR'";
+    if (!mysqli_query($conexion, $sql)) {
+        return mysqli_error($conexion);
+    }
+    return null;
+}
+
 // API por lotes.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
     $action = (string)$_GET['action'];
@@ -123,7 +147,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             if ($total > PC_TOTAL_MAX) throw new RuntimeException('El archivo excede el límite de seguridad de ' . number_format(PC_TOTAL_MAX) . ' registros.');
             if ($hash !== '' && strlen($hash) !== 64) throw new RuntimeException('El hash SHA-256 del archivo no es válido.');
 
-            // Si ya existe el mismo archivo, reutiliza la carga para permitir reanudación segura.
+            // Si ya existe el mismo archivo, reutiliza la carga. Si proviene de una versión
+            // anterior con otro universo (p. ej. SUR-only), reinicia el mismo hash de forma segura.
             if ($hash !== '') {
                 $stmt = mysqli_prepare($conexion, "SELECT id, estado, registros_recibidos, registros_importados FROM pronostico_cancelaciones_cargas WHERE hash_archivo=? LIMIT 1");
                 if (!$stmt) throw new RuntimeException(mysqli_error($conexion));
@@ -135,43 +160,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
 
                 if ($existente) {
                     $cargaId = (int)$existente['id'];
-                    if ($existente['estado'] === 'OK') {
+                    $esperadoAnterior = (int)$existente['registros_recibidos'];
+                    $actualFisico = count_carga($conexion, $cargaId);
+
+                    if ($existente['estado'] === 'OK' && $esperadoAnterior === $total && $actualFisico === $total) {
                         json_out([
                             'ok' => true,
                             'repetido' => true,
                             'carga_id' => $cargaId,
-                            'resume_from' => (int)$existente['registros_importados'],
-                            'mensaje' => 'Este archivo ya fue importado correctamente.'
+                            'resume_from' => $total,
+                            'mensaje' => 'Este archivo nacional ya fue importado correctamente.'
                         ]);
                     }
 
-                    $resume = (int)$existente['registros_importados'];
-                    if ($resume > $total) {
-                        throw new RuntimeException('La carga previa tiene más registros de los que contiene el archivo actual.');
+                    // Si cambió el universo esperado (ej. una carga SUR-only con el mismo XLSB),
+                    // se limpia esa carga y se reutiliza el mismo hash para iniciar NACIONAL.
+                    if ($esperadoAnterior !== $total || $actualFisico > $total) {
+                        mysqli_begin_transaction($conexion);
+                        $stmtDel = mysqli_prepare($conexion, "DELETE FROM pronostico_cancelaciones WHERE carga_id=?");
+                        if (!$stmtDel) throw new RuntimeException(mysqli_error($conexion));
+                        mysqli_stmt_bind_param($stmtDel, 'i', $cargaId);
+                        if (!mysqli_stmt_execute($stmtDel)) throw new RuntimeException(mysqli_stmt_error($stmtDel));
+                        mysqli_stmt_close($stmtDel);
+
+                        $msgReset = 'Reinicio NACIONAL por cambio de universo del importador';
+                        $stmtReset = mysqli_prepare($conexion, "UPDATE pronostico_cancelaciones_cargas SET archivo_origen=?, hoja_origen='Pronóstico', registros_recibidos=?, registros_importados=0, usuario=?, estado='PROCESANDO', mensaje=?, creado_en=CURRENT_TIMESTAMP, finalizado_en=NULL WHERE id=?");
+                        if (!$stmtReset) throw new RuntimeException(mysqli_error($conexion));
+                        mysqli_stmt_bind_param($stmtReset, 'sissi', $archivo, $total, $usuarioSesion, $msgReset, $cargaId);
+                        if (!mysqli_stmt_execute($stmtReset)) throw new RuntimeException(mysqli_stmt_error($stmtReset));
+                        mysqli_stmt_close($stmtReset);
+                        mysqli_commit($conexion);
+
+                        json_out([
+                            'ok'=>true,
+                            'repetido'=>false,
+                            'reanudando'=>false,
+                            'carga_id'=>$cargaId,
+                            'resume_from'=>0,
+                            'mensaje'=>'Carga anterior reiniciada. Se importará el snapshot NACIONAL completo.'
+                        ]);
                     }
 
-                    $stmtUp = mysqli_prepare($conexion, "UPDATE pronostico_cancelaciones_cargas SET archivo_origen=?, registros_recibidos=?, estado='PROCESANDO', mensaje='Reanudando carga por lotes', finalizado_en=NULL WHERE id=?");
+                    // Usa el conteo físico como fuente de verdad para reanudar.
+                    $resume = $actualFisico;
+                    $stmtUp = mysqli_prepare($conexion, "UPDATE pronostico_cancelaciones_cargas SET archivo_origen=?, registros_recibidos=?, registros_importados=?, usuario=?, estado='PROCESANDO', mensaje='Reanudando carga NACIONAL por lotes', finalizado_en=NULL WHERE id=?");
                     if (!$stmtUp) throw new RuntimeException(mysqli_error($conexion));
-                    mysqli_stmt_bind_param($stmtUp, 'sii', $archivo, $total, $cargaId);
+                    mysqli_stmt_bind_param($stmtUp, 'sissi', $archivo, $total, $resume, $usuarioSesion, $cargaId);
                     mysqli_stmt_execute($stmtUp);
                     mysqli_stmt_close($stmtUp);
 
                     json_out([
                         'ok' => true,
                         'repetido' => false,
-                        'reanudando' => true,
+                        'reanudando' => $resume > 0,
                         'carga_id' => $cargaId,
                         'resume_from' => $resume,
-                        'mensaje' => 'Carga previa encontrada. Se reanudará desde el registro ' . number_format($resume + 1) . '.'
+                        'mensaje' => $resume > 0
+                            ? 'Carga nacional previa encontrada. Se reanudará desde el registro ' . number_format($resume + 1) . '.'
+                            : 'Carga nacional lista para iniciar.'
                     ]);
                 }
             }
 
-            $usuario = $_SESSION['usuario'] ?? $_SESSION['username'] ?? 'sistema';
             $hashDb = $hash !== '' ? $hash : null;
             $stmtCarga = mysqli_prepare($conexion, "INSERT INTO pronostico_cancelaciones_cargas (archivo_origen,hash_archivo,hoja_origen,registros_recibidos,registros_importados,usuario,estado,mensaje) VALUES (?,?, 'Pronóstico', ?, 0, ?, 'PROCESANDO', 'Carga iniciada por lotes')");
             if (!$stmtCarga) throw new RuntimeException(mysqli_error($conexion));
-            mysqli_stmt_bind_param($stmtCarga, 'ssis', $archivo, $hashDb, $total, $usuario);
+            mysqli_stmt_bind_param($stmtCarga, 'ssis', $archivo, $hashDb, $total, $usuarioSesion);
             if (!mysqli_stmt_execute($stmtCarga)) throw new RuntimeException(mysqli_stmt_error($stmtCarga));
             $cargaId = mysqli_insert_id($conexion);
             mysqli_stmt_close($stmtCarga);
@@ -324,7 +378,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 throw new RuntimeException("Validación final fallida: MySQL contiene $fisicos registros, pero el snapshot esperaba $esperados.");
             }
 
-            $msg = 'Importación completa: ' . number_format($fisicos) . ' registros.';
+            $errorVista = asegurar_vista_sur($conexion);
+            $msg = 'Importación NACIONAL completa: ' . number_format($fisicos) . ' registros.';
+            if ($errorVista !== null) {
+                $msg .= ' Advertencia: no fue posible crear/actualizar la vista operativa SUR: ' . $errorVista;
+            } else {
+                $msg .= ' Vista operativa SUR lista: vw_pronostico_cancelaciones_sur_actual.';
+            }
             $stmtFin = mysqli_prepare($conexion, "UPDATE pronostico_cancelaciones_cargas SET registros_importados=?, estado='OK', mensaje=?, finalizado_en=CURRENT_TIMESTAMP WHERE id=?");
             if (!$stmtFin) throw new RuntimeException(mysqli_error($conexion));
             mysqli_stmt_bind_param($stmtFin, 'isi', $fisicos, $msg, $cargaId);
@@ -362,16 +422,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Importar Pronóstico de Cancelaciones</title>
+<title>Importar Pronóstico de Cancelaciones · Nacional por lotes</title>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <style>
-*{box-sizing:border-box}body{font-family:Segoe UI,Arial,sans-serif;background:#f4f6fb;margin:0;padding:32px;color:#17213a}.card{max-width:760px;margin:auto;background:#fff;border-radius:18px;padding:28px;box-shadow:0 14px 35px rgba(30,40,80,.10)}h2{margin:0 0 8px}.sub{color:#667085;margin:0 0 22px;line-height:1.5}.drop{border:2px dashed #8b2cff;border-radius:16px;padding:34px;text-align:center;cursor:pointer;background:#fbf8ff}.drop strong{display:block;font-size:1.05rem;margin-bottom:7px}input[type=file]{display:none}button{margin-top:16px;width:100%;border:0;border-radius:12px;padding:13px;background:linear-gradient(135deg,#7A2BFF,#FF006C);color:#fff;font-weight:800;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.msg{margin-top:18px;padding:13px;border-radius:12px;display:none}.ok{display:block;background:#ecfdf3;color:#166534}.err{display:block;background:#fef2f2;color:#991b1b}.info{display:block;background:#eff6ff;color:#1e40af}.preview{margin-top:18px;font-size:.9rem;color:#344054}.preview code{background:#f2f4f7;padding:2px 5px;border-radius:5px}.progress-wrap{display:none;margin-top:18px}.progress-track{height:16px;background:#eceff5;border-radius:999px;overflow:hidden}.progress-bar{height:100%;width:0;background:linear-gradient(90deg,#7A2BFF,#FF006C);transition:width .2s ease}.progress-meta{display:flex;justify-content:space-between;gap:16px;margin-top:8px;color:#667085;font-size:.86rem}.progress-wrap.on{display:block}.hint{margin-top:12px;color:#667085;font-size:.8rem;line-height:1.45}
+*{box-sizing:border-box}body{font-family:Segoe UI,Arial,sans-serif;background:#f4f6fb;margin:0;padding:32px;color:#17213a}.card{max-width:760px;margin:auto;background:#fff;border-radius:18px;padding:28px;box-shadow:0 14px 35px rgba(30,40,80,.10)}h2{margin:0 0 5px}.version{font-size:.78rem;font-weight:800;letter-spacing:.06em;color:#7A2BFF;margin-bottom:10px}.sub{color:#667085;margin:0 0 22px;line-height:1.5}.drop{border:2px dashed #8b2cff;border-radius:16px;padding:34px;text-align:center;cursor:pointer;background:#fbf8ff}.drop strong{display:block;font-size:1.05rem;margin-bottom:7px}input[type=file]{display:none}button{margin-top:16px;width:100%;border:0;border-radius:12px;padding:13px;background:linear-gradient(135deg,#7A2BFF,#FF006C);color:#fff;font-weight:800;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.msg{margin-top:18px;padding:13px;border-radius:12px;display:none}.ok{display:block;background:#ecfdf3;color:#166534}.err{display:block;background:#fef2f2;color:#991b1b}.info{display:block;background:#eff6ff;color:#1e40af}.preview{margin-top:18px;font-size:.9rem;color:#344054}.preview code{background:#f2f4f7;padding:2px 5px;border-radius:5px}.progress-wrap{display:none;margin-top:18px}.progress-track{height:16px;background:#eceff5;border-radius:999px;overflow:hidden}.progress-bar{height:100%;width:0;background:linear-gradient(90deg,#7A2BFF,#FF006C);transition:width .2s ease}.progress-meta{display:flex;justify-content:space-between;gap:16px;margin-top:8px;color:#667085;font-size:.86rem}.progress-wrap.on{display:block}.hint{margin-top:12px;color:#667085;font-size:.8rem;line-height:1.45}
 </style>
 </head>
 <body>
 <div class="card">
 <h2>Importar Pronóstico de Cancelaciones</h2>
-<p class="sub">Acepta directamente el archivo <b>.xlsb</b> protegido. El navegador lee la hoja <b>Pronóstico</b> y la envía a MySQL en lotes seguros, conservando el snapshot completo y auditable.</p>
+<div class="version">v2.1 · NACIONAL · CARGA POR LOTES · VISTA OPERATIVA SUR</div>
+<p class="sub">Acepta directamente el archivo <b>.xlsb</b> protegido. TalIA conserva el snapshot <b>NACIONAL</b> en MySQL mediante lotes seguros y mantiene una vista operativa de <b>Región SUR</b> para FCST Add Netas.</p>
 <label for="archivo"><div class="drop" id="drop"><strong>Selecciona el archivo .xlsb</strong><span id="nombre">Pronóstico cancelaciones...</span></div></label>
 <input type="file" id="archivo" accept=".xlsb,.xlsx">
 <button id="btn" disabled>Importar pronóstico</button>
@@ -381,13 +442,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
   <div class="progress-meta"><span id="progressText">0 / 0</span><strong id="progressPct">0%</strong></div>
 </div>
 <div id="msg" class="msg"></div>
-<div class="hint">Carga por lotes de 2,000 registros. Si la conexión se interrumpe, vuelve a seleccionar el mismo archivo: TalIA reanudará desde el último lote confirmado.</div>
+<div class="hint">Carga nacional por lotes de 2,000 registros. Si la conexión se interrumpe, vuelve a seleccionar el mismo archivo: TalIA reanudará desde el último lote confirmado. La vista operativa SUR se actualiza al finalizar correctamente el snapshot.</div>
 </div>
 <script>
 const BATCH_SIZE = 2000;
 const fileInput=document.getElementById('archivo'), btn=document.getElementById('btn'), msg=document.getElementById('msg'), preview=document.getElementById('preview'), nombre=document.getElementById('nombre');
 const progress=document.getElementById('progress'), bar=document.getElementById('bar'), progressText=document.getElementById('progressText'), progressPct=document.getElementById('progressPct');
 let file=null, rows=null, hash='';
+
+function norm(v){
+  return String(v??'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+}
 
 function show(text,cls){msg.className='msg '+cls;msg.textContent=text}
 function setProgress(done,total){
@@ -426,8 +491,33 @@ fileInput.addEventListener('change', async()=>{
     rows=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{header:1,defval:null,raw:true});
     if(rows.length<2) throw new Error('La hoja Pronóstico no contiene datos.');
     const total=rows.length-1;
-    preview.innerHTML=`Hoja: <code>${sheetName}</code> · Filas detectadas: <b>${total.toLocaleString()}</b> · Lotes estimados: <b>${Math.ceil(total/BATCH_SIZE).toLocaleString()}</b>`;
-    show('Archivo validado. Listo para importar por lotes.','ok');
+    const headers=rows[0].map(norm);
+    const idxRegion=headers.indexOf('REGION');
+    const idxCuenta=headers.indexOf('CUENTA');
+    if(idxRegion<0||idxCuenta<0) throw new Error('No se localizaron las columnas REGION y CUENTA.');
+
+    let totalSur=0, sinCuenta=0, duplicadas=0;
+    const cuentasVistas=new Set();
+    for(let i=1;i<rows.length;i++){
+      if(norm(rows[i][idxRegion])==='SUR') totalSur++;
+      const cuenta=String(rows[i][idxCuenta]??'').trim();
+      if(cuenta===''){
+        sinCuenta++;
+        continue;
+      }
+      if(cuentasVistas.has(cuenta)) duplicadas++;
+      else cuentasVistas.add(cuenta);
+    }
+    if(sinCuenta>0) throw new Error(`Se detectaron ${sinCuenta.toLocaleString()} filas sin CUENTA. Corrige el origen antes de importar.`);
+    if(duplicadas>0) throw new Error(`Se detectaron ${duplicadas.toLocaleString()} CUENTAS duplicadas en el snapshot. Corrige el origen antes de importar.`);
+
+    const pctSur=total>0?(totalSur/total*100):0;
+    preview.innerHTML=`
+      Hoja: <code>${sheetName}</code><br>
+      Snapshot NACIONAL: <b>${total.toLocaleString()}</b> registros · Lotes estimados: <b>${Math.ceil(total/BATCH_SIZE).toLocaleString()}</b><br>
+      Región SUR detectada: <b>${totalSur.toLocaleString()}</b> registros (${pctSur.toFixed(1)}%) · Se conservará mediante <code>vw_pronostico_cancelaciones_sur_actual</code>
+    `;
+    show('Archivo validado. Listo para importar el snapshot NACIONAL por lotes.','ok');
     setProgress(0,total);
     btn.disabled=false;
   }catch(e){show(e.message||String(e),'err')}
@@ -439,7 +529,7 @@ btn.addEventListener('click',async()=>{
   const total=rows.length-1;
   let cargaId=0;
   try{
-    show('Iniciando snapshot en MySQL…','info');
+    show('Iniciando snapshot NACIONAL en MySQL…','info');
     const init=await api('init',{archivo:file.name,hash,headers:rows[0],total});
     cargaId=Number(init.carga_id||0);
 
@@ -452,7 +542,7 @@ btn.addEventListener('click',async()=>{
     let offset=Number(init.resume_from||0);
     if(offset<0||offset>total) throw new Error('El servidor devolvió un punto de reanudación inválido.');
     setProgress(offset,total);
-    if(offset>0) show(`Reanudando carga desde ${offset.toLocaleString()} de ${total.toLocaleString()} registros…`,'info');
+    if(offset>0) show(`Reanudando carga NACIONAL desde ${offset.toLocaleString()} de ${total.toLocaleString()} registros…`,'info');
 
     while(offset<total){
       const end=Math.min(offset+BATCH_SIZE,total);
@@ -460,7 +550,7 @@ btn.addEventListener('click',async()=>{
       const batch=await api('batch',{carga_id:cargaId,offset,headers:rows[0],rows:chunk});
       offset=Number(batch.importados_total);
       setProgress(offset,total);
-      show(`Importando lote ${Math.ceil(offset/BATCH_SIZE).toLocaleString()} de ${Math.ceil(total/BATCH_SIZE).toLocaleString()}…`,'info');
+      show(`Importando NACIONAL · lote ${Math.ceil(offset/BATCH_SIZE).toLocaleString()} de ${Math.ceil(total/BATCH_SIZE).toLocaleString()}…`,'info');
     }
 
     show('Validando integridad final del snapshot…','info');
