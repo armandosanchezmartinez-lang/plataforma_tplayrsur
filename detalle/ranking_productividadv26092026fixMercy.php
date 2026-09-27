@@ -692,7 +692,7 @@ lideres_activos AS (
     SELECT 'CANCUN' AS distrito_reporte, 'CANCUN' AS distrito_hc, 'COTO FELIX ERICK DANIEL' AS lider_hc, 'COTO FELIX ERICK DANIEL' AS lider_instalaciones
     UNION ALL SELECT 'CANCUN', 'CANCUN', 'GAMBOA LARA LUIS ANTONIO', 'GAMBOA LARA LUIS ANTONIO'
     UNION ALL SELECT 'COATZA-MINA', 'COATZA MINA', 'HECTOR ANDRES PALMA HERNANDEZ', 'HECTOR ANDRES PALMA HERNANDEZ'
-    UNION ALL SELECT 'MERIDA', 'MERIDA', 'PARAMO AVILA JOVANY DAMIAN', 'JOVANY DAMIAN PARAMO AVILA'
+    UNION ALL SELECT 'MERIDA', 'MERIDA', 'ESTRADA MEDINA MERCY GUADALUPE', 'JOVANY DAMIAN PARAMO AVILA' /* Plaza líder 1739397: HC vigente = Mercy; instalaciones conserva alias legacy Jovany */
     UNION ALL SELECT 'MERIDA', 'MERIDA', 'PAREDES ROCHEL MARIA JOSE', 'PAREDES ROCHEL MARIA JOSE'
     UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'LOPEZ MANCILLA JOSE ALBERTO', 'JOSE ALBERTO LOPEZ MANCILLA'
     UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL', 'CHRISTIANNE MIGUEL SANCHEZ SANCHEZ'
@@ -1235,6 +1235,18 @@ coaches_base AS (
        )
        AND h.puesto_lr LIKE '%LIDER%'
 ),
+coaches_match AS (
+    SELECT
+        distrito,
+        distrito_hc,
+        lider,
+        lider_instalaciones,
+        coach,
+        MAX(coach_pos) AS coach_pos,
+        coach_key
+    FROM coaches_base
+    GROUP BY distrito, distrito_hc, lider, lider_instalaciones, coach, coach_key
+),
 vendedores AS (
     SELECT DISTINCT
         c.distrito,
@@ -1335,7 +1347,7 @@ ventas_base AS (
     SELECT
         c.coach_key,
         SUM(ib.ins_sem_base) AS ins_sem_base
-    FROM coaches_base c
+    FROM coaches_match c
     INNER JOIN install_base ib
         ON ib.distrito = c.distrito
        AND ib.lider = c.lider
@@ -1356,7 +1368,7 @@ ventas_actual AS (
     SELECT
         c.coach_key,
         SUM(ia.ins_sem_actual) AS ins_sem_actual
-    FROM coaches_base c
+    FROM coaches_match c
     INNER JOIN install_actual ia
         ON ia.distrito = c.distrito
        AND ia.lider = c.lider
