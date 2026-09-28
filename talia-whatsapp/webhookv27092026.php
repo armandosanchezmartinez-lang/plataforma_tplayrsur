@@ -5,7 +5,7 @@ declare(strict_types=1);
  * TalIA Connect WA
  * Webhook para Meta / WhatsApp Business Platform
  *
- * Versión: 0.2
+ * Versión: 0.3
  *
  * Funciones:
  * 1. GET  -> Verificación del webhook por Meta
@@ -13,6 +13,8 @@ declare(strict_types=1);
  * 3. Guarda payload crudo y parseado
  * 4. Extrae mensajes entrantes a un log limpio
  * 5. Extrae actualizaciones de estado a un log independiente
+ * 6. Persiste mensajes en wa_conversaciones / wa_mensajes
+ * 7. Actualiza estados SENT / DELIVERED / READ / FAILED en MySQL
  */
 
 date_default_timezone_set('America/Merida');
@@ -150,6 +152,501 @@ function obtenerContenidoMensaje(array $mensaje): string
     }
 }
 
+// =====================================================
+// MYSQL / TALIA
+// =====================================================
+
+function obtenerConexionTalIA(): ?mysqli
+{
+    static $conexionCache = null;
+    static $intentado = false;
+
+    if ($intentado) {
+        return $conexionCache;
+    }
+
+    $intentado = true;
+    $rutaConexion = dirname(__DIR__) . '/conexion.php';
+
+    if (!is_file($rutaConexion)) {
+        guardarLog(
+            'db_errors.log',
+            "No existe conexion.php en la ruta esperada: {$rutaConexion}"
+        );
+        return null;
+    }
+
+    $conexion = null;
+
+    try {
+        require $rutaConexion;
+    } catch (Throwable $e) {
+        guardarLog(
+            'db_errors.log',
+            "No fue posible cargar conexion.php:" . PHP_EOL . $e->getMessage()
+        );
+        return null;
+    }
+
+    if (!($conexion instanceof mysqli)) {
+        guardarLog(
+            'db_errors.log',
+            'conexion.php no dejó disponible una instancia mysqli en $conexion.'
+        );
+        return null;
+    }
+
+    if (!mysqli_set_charset($conexion, 'utf8mb4')) {
+        guardarLog(
+            'db_errors.log',
+            'No fue posible establecer utf8mb4: ' . mysqli_error($conexion)
+        );
+    }
+
+    $conexionCache = $conexion;
+    return $conexionCache;
+}
+
+function tipoMensajeBD(string $tipo): string
+{
+    $permitidos = [
+        'text',
+        'image',
+        'audio',
+        'video',
+        'document',
+        'location',
+        'contacts',
+        'interactive',
+        'button',
+        'reaction',
+    ];
+
+    return in_array($tipo, $permitidos, true) ? $tipo : 'unknown';
+}
+
+function buscarNumeroPorPhoneNumberId(mysqli $conexion, string $phoneNumberId): ?array
+{
+    $sql = "
+        SELECT
+            id,
+            telefono,
+            display_phone_number,
+            phone_number_id,
+            waba_id,
+            estado
+        FROM wa_numeros
+        WHERE phone_number_id = ?
+        LIMIT 1
+    ";
+
+    $stmt = mysqli_prepare($conexion, $sql);
+
+    if (!$stmt) {
+        throw new RuntimeException('Error preparando búsqueda de wa_numeros: ' . mysqli_error($conexion));
+    }
+
+    mysqli_stmt_bind_param($stmt, 's', $phoneNumberId);
+    mysqli_stmt_execute($stmt);
+    mysqli_stmt_bind_result(
+        $stmt,
+        $id,
+        $telefono,
+        $displayPhoneNumber,
+        $phoneNumberIdDb,
+        $wabaId,
+        $estado
+    );
+
+    $fila = null;
+
+    if (mysqli_stmt_fetch($stmt)) {
+        $fila = [
+            'id' => (int)$id,
+            'telefono' => (string)$telefono,
+            'display_phone_number' => (string)$displayPhoneNumber,
+            'phone_number_id' => (string)$phoneNumberIdDb,
+            'waba_id' => (string)$wabaId,
+            'estado' => (string)$estado,
+        ];
+    }
+
+    mysqli_stmt_close($stmt);
+    return $fila;
+}
+
+function obtenerOCrearConversacion(
+    mysqli $conexion,
+    int $idNumero,
+    string $waIdCliente,
+    string $telefonoCliente,
+    string $nombreCliente
+): int {
+    $sql = "
+        INSERT INTO wa_conversaciones (
+            id_numero,
+            wa_id_cliente,
+            telefono_cliente,
+            nombre_cliente,
+            estado,
+            fecha_inicio,
+            ultima_actividad
+        ) VALUES (
+            ?, ?, ?, ?, 'ABIERTA', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON DUPLICATE KEY UPDATE
+            id = LAST_INSERT_ID(id),
+            telefono_cliente = COALESCE(NULLIF(VALUES(telefono_cliente), ''), telefono_cliente),
+            nombre_cliente = COALESCE(NULLIF(VALUES(nombre_cliente), ''), nombre_cliente),
+            estado = 'ABIERTA',
+            fecha_cierre = NULL,
+            ultima_actividad = CURRENT_TIMESTAMP
+    ";
+
+    $stmt = mysqli_prepare($conexion, $sql);
+
+    if (!$stmt) {
+        throw new RuntimeException('Error preparando wa_conversaciones: ' . mysqli_error($conexion));
+    }
+
+    mysqli_stmt_bind_param(
+        $stmt,
+        'isss',
+        $idNumero,
+        $waIdCliente,
+        $telefonoCliente,
+        $nombreCliente
+    );
+
+    mysqli_stmt_execute($stmt);
+    mysqli_stmt_close($stmt);
+
+    $idConversacion = (int)mysqli_insert_id($conexion);
+
+    if ($idConversacion <= 0) {
+        $sqlSelect = "
+            SELECT id
+            FROM wa_conversaciones
+            WHERE id_numero = ?
+              AND wa_id_cliente = ?
+            LIMIT 1
+        ";
+
+        $stmt = mysqli_prepare($conexion, $sqlSelect);
+
+        if (!$stmt) {
+            throw new RuntimeException('Error recuperando wa_conversaciones: ' . mysqli_error($conexion));
+        }
+
+        mysqli_stmt_bind_param($stmt, 'is', $idNumero, $waIdCliente);
+        mysqli_stmt_execute($stmt);
+        mysqli_stmt_bind_result($stmt, $idConversacionDb);
+
+        if (mysqli_stmt_fetch($stmt)) {
+            $idConversacion = (int)$idConversacionDb;
+        }
+
+        mysqli_stmt_close($stmt);
+    }
+
+    if ($idConversacion <= 0) {
+        throw new RuntimeException('No fue posible obtener id de conversación.');
+    }
+
+    return $idConversacion;
+}
+
+function extraerDatosMedia(array $mensaje, string $tipo): array
+{
+    $mediaId = '';
+    $mimeType = '';
+
+    if (in_array($tipo, ['image', 'audio', 'video', 'document'], true)) {
+        $mediaId = (string)valorSeguro($mensaje, [$tipo, 'id'], '');
+        $mimeType = (string)valorSeguro($mensaje, [$tipo, 'mime_type'], '');
+    }
+
+    return [$mediaId, $mimeType];
+}
+
+function guardarMensajeEntranteBD(
+    mysqli $conexion,
+    int $idConversacion,
+    int $idNumero,
+    string $messageId,
+    string $from,
+    string $to,
+    string $tipo,
+    string $contenido,
+    string $mediaId,
+    string $mimeType,
+    string $contextMessageId,
+    string $fechaMensaje,
+    string $payloadJson
+): string {
+    $sql = "
+        INSERT INTO wa_mensajes (
+            id_conversacion,
+            id_numero,
+            message_id,
+            direccion,
+            wa_from,
+            wa_to,
+            tipo,
+            contenido,
+            media_id,
+            mime_type,
+            context_message_id,
+            estado_envio,
+            fecha_mensaje,
+            payload_json
+        ) VALUES (
+            ?, ?, ?, 'ENTRANTE', ?, ?, ?, ?,
+            NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
+            'RECEIVED', NULLIF(?, ''), ?
+        )
+        ON DUPLICATE KEY UPDATE
+            message_id = VALUES(message_id)
+    ";
+
+    $stmt = mysqli_prepare($conexion, $sql);
+
+    if (!$stmt) {
+        throw new RuntimeException('Error preparando wa_mensajes: ' . mysqli_error($conexion));
+    }
+
+    mysqli_stmt_bind_param(
+        $stmt,
+        'iissssssssss',
+        $idConversacion,
+        $idNumero,
+        $messageId,
+        $from,
+        $to,
+        $tipo,
+        $contenido,
+        $mediaId,
+        $mimeType,
+        $contextMessageId,
+        $fechaMensaje,
+        $payloadJson
+    );
+
+    mysqli_stmt_execute($stmt);
+    $afectadas = mysqli_stmt_affected_rows($stmt);
+    mysqli_stmt_close($stmt);
+
+    return $afectadas === 1 ? 'INSERTADO' : 'DUPLICADO';
+}
+
+function persistirMensajeEntrante(
+    string $phoneNumberId,
+    string $displayPhoneNumber,
+    string $from,
+    string $nombreCliente,
+    string $messageId,
+    string $tipoOriginal,
+    string $contenido,
+    string $fechaMensaje,
+    array $mensaje
+): void {
+    if ($phoneNumberId === '' || $from === '' || $messageId === '') {
+        guardarLog(
+            'db_events.log',
+            "MENSAJE_NO_PERSISTIDO | Datos incompletos" . PHP_EOL .
+            "phone_number_id={$phoneNumberId}" . PHP_EOL .
+            "from={$from}" . PHP_EOL .
+            "message_id={$messageId}"
+        );
+        return;
+    }
+
+    $conexion = obtenerConexionTalIA();
+
+    if (!$conexion) {
+        return;
+    }
+
+    $numero = buscarNumeroPorPhoneNumberId($conexion, $phoneNumberId);
+
+    if (!$numero) {
+        guardarLog(
+            'db_events.log',
+            "NUMERO_NO_REGISTRADO" . PHP_EOL .
+            "phone_number_id={$phoneNumberId}" . PHP_EOL .
+            "display_phone_number={$displayPhoneNumber}" . PHP_EOL .
+            "message_id={$messageId}"
+        );
+        return;
+    }
+
+    $idNumero = (int)$numero['id'];
+    $telefonoDestino = (string)($numero['telefono'] ?? '');
+
+    if ($telefonoDestino === '') {
+        $telefonoDestino = $displayPhoneNumber;
+    }
+
+    $idConversacion = obtenerOCrearConversacion(
+        $conexion,
+        $idNumero,
+        $from,
+        $from,
+        $nombreCliente
+    );
+
+    $tipo = tipoMensajeBD($tipoOriginal);
+    [$mediaId, $mimeType] = extraerDatosMedia($mensaje, $tipoOriginal);
+    $contextMessageId = (string)valorSeguro($mensaje, ['context', 'id'], '');
+
+    $payloadJson = json_encode(
+        $mensaje,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    ) ?: '';
+
+    $resultado = guardarMensajeEntranteBD(
+        $conexion,
+        $idConversacion,
+        $idNumero,
+        $messageId,
+        $from,
+        $telefonoDestino,
+        $tipo,
+        $contenido,
+        $mediaId,
+        $mimeType,
+        $contextMessageId,
+        $fechaMensaje,
+        $payloadJson
+    );
+
+    guardarLog(
+        'db_events.log',
+        "MENSAJE_{$resultado}" . PHP_EOL .
+        "id_numero={$idNumero}" . PHP_EOL .
+        "id_conversacion={$idConversacion}" . PHP_EOL .
+        "message_id={$messageId}" . PHP_EOL .
+        "from={$from}" . PHP_EOL .
+        "tipo={$tipo}"
+    );
+}
+
+function normalizarEstadoMeta(string $estado): string
+{
+    return match (strtolower(trim($estado))) {
+        'sent' => 'SENT',
+        'delivered' => 'DELIVERED',
+        'read' => 'READ',
+        'failed' => 'FAILED',
+        default => '',
+    };
+}
+
+function persistirEstadoMensaje(array $status): void
+{
+    $messageId = (string)($status['id'] ?? '');
+    $estadoMeta = (string)($status['status'] ?? '');
+    $estado = normalizarEstadoMeta($estadoMeta);
+    $fechaEstado = convertirTimestampWhatsApp($status['timestamp'] ?? '');
+
+    if ($messageId === '' || $estado === '') {
+        return;
+    }
+
+    $errors = $status['errors'] ?? [];
+    $errorCode = '';
+    $errorMessage = '';
+
+    if (is_array($errors) && !empty($errors) && is_array($errors[0] ?? null)) {
+        $errorCode = (string)($errors[0]['code'] ?? '');
+        $errorMessage = (string)(
+            $errors[0]['message'] ??
+            $errors[0]['title'] ??
+            $errors[0]['error_data']['details'] ??
+            ''
+        );
+    }
+
+    $conexion = obtenerConexionTalIA();
+
+    if (!$conexion) {
+        return;
+    }
+
+    $campoFecha = match ($estado) {
+        'SENT' => 'fecha_enviado',
+        'DELIVERED' => 'fecha_entregado',
+        'READ' => 'fecha_leido',
+        default => '',
+    };
+
+    if ($campoFecha !== '') {
+        $sql = "
+            UPDATE wa_mensajes
+            SET estado_envio = ?,
+                {$campoFecha} = COALESCE(NULLIF(?, ''), {$campoFecha}),
+                error_code = NULLIF(?, ''),
+                error_message = NULLIF(?, '')
+            WHERE message_id = ?
+        ";
+
+        $stmt = mysqli_prepare($conexion, $sql);
+
+        if (!$stmt) {
+            throw new RuntimeException('Error preparando actualización de estado: ' . mysqli_error($conexion));
+        }
+
+        mysqli_stmt_bind_param(
+            $stmt,
+            'sssss',
+            $estado,
+            $fechaEstado,
+            $errorCode,
+            $errorMessage,
+            $messageId
+        );
+    } else {
+        $sql = "
+            UPDATE wa_mensajes
+            SET estado_envio = ?,
+                error_code = NULLIF(?, ''),
+                error_message = NULLIF(?, '')
+            WHERE message_id = ?
+        ";
+
+        $stmt = mysqli_prepare($conexion, $sql);
+
+        if (!$stmt) {
+            throw new RuntimeException('Error preparando actualización de estado FAILED: ' . mysqli_error($conexion));
+        }
+
+        mysqli_stmt_bind_param(
+            $stmt,
+            'ssss',
+            $estado,
+            $errorCode,
+            $errorMessage,
+            $messageId
+        );
+    }
+
+    mysqli_stmt_execute($stmt);
+    $afectadas = mysqli_stmt_affected_rows($stmt);
+    mysqli_stmt_close($stmt);
+
+    guardarLog(
+        'db_events.log',
+        ($afectadas > 0 ? 'STATUS_ACTUALIZADO' : 'STATUS_SIN_MENSAJE') . PHP_EOL .
+        "message_id={$messageId}" . PHP_EOL .
+        "status={$estado}" . PHP_EOL .
+        "timestamp={$fechaEstado}"
+    );
+}
+
+// =====================================================
+// PROCESAMIENTO DEL EVENTO
+// =====================================================
+
 function procesarEventoWhatsApp(array $data): void
 {
     $object = (string)($data['object'] ?? '');
@@ -270,6 +767,27 @@ function procesarEventoWhatsApp(array $data): void
                         "CONTENIDO: {$contenido}";
 
                     guardarLog('messages_clean.log', $registro);
+
+                    try {
+                        persistirMensajeEntrante(
+                            $phoneNumberId,
+                            $displayPhoneNumber,
+                            $from,
+                            $nombreCliente,
+                            $messageId,
+                            $tipo,
+                            $contenido,
+                            $timestampLegible,
+                            $mensaje
+                        );
+                    } catch (Throwable $e) {
+                        guardarLog(
+                            'db_errors.log',
+                            "Error persistiendo mensaje:" . PHP_EOL .
+                            "message_id={$messageId}" . PHP_EOL .
+                            $e->getMessage()
+                        );
+                    }
                 }
             }
 
@@ -315,6 +833,17 @@ function procesarEventoWhatsApp(array $data): void
                         "ERRORS: {$errorText}";
 
                     guardarLog('status_clean.log', $registro);
+
+                    try {
+                        persistirEstadoMensaje($status);
+                    } catch (Throwable $e) {
+                        guardarLog(
+                            'db_errors.log',
+                            "Error actualizando estado:" . PHP_EOL .
+                            "message_id={$statusId}" . PHP_EOL .
+                            $e->getMessage()
+                        );
+                    }
                 }
             }
         }
@@ -415,7 +944,7 @@ if ($method === 'POST') {
         print_r($data, true)
     );
 
-    // 4. Extraemos mensajes y estados a logs limpios.
+    // 4. Extraemos mensajes y estados, y persistimos en MySQL.
     try {
         procesarEventoWhatsApp($data);
     } catch (Throwable $e) {
