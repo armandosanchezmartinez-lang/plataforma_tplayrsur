@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * TalIA Connect WA - Conversaciones
- * Versión 1.1 - Normalización de destinatario MX para envío Cloud API
+ * Versión 1.0
  *
  * Ruta:
  * /public_html/plataforma/talia-whatsapp/conversaciones.php
@@ -231,31 +231,6 @@ function obtenerGraphVersionWhatsApp(): string {
     }
 
     return 'v26.0';
-}
-
-/**
- * Normaliza el número usado únicamente como destinatario SALIENTE hacia Meta.
- *
- * Importante:
- * - NO modifica wa_conversaciones.wa_id_cliente.
- * - NO modifica mensajes entrantes.
- * - Conserva el WA ID original en la conversación.
- *
- * Caso México observado:
- *   WA ID entrante: 5219993463042
- *   Destino autorizado por Meta: 529993463042
- *
- * Para un identificador mexicano con patrón 521 + 10 dígitos,
- * se elimina únicamente el "1" histórico posterior al código 52.
- */
-function normalizarDestinatarioMeta(string $numero): string {
-    $numero = preg_replace('/\D+/', '', $numero) ?? '';
-
-    if (preg_match('/^521(\d{10})$/', $numero, $m)) {
-        return '52' . $m[1];
-    }
-
-    return $numero;
 }
 
 function enviarTextoWhatsApp(
@@ -602,15 +577,11 @@ if (
             $mensajeUi = 'El mensaje excede el máximo permitido de 4,096 caracteres.';
             $tipoMensajeUi = 'error';
         } else {
-            $waIdClienteOriginal = preg_replace(
+            $destinatario = preg_replace(
                 '/\D+/',
                 '',
                 (string)$conversacion['wa_id_cliente']
-            ) ?? '';
-
-            // Conservamos el WA ID de la conversación y normalizamos
-            // únicamente el destinatario que se envía a Meta.
-            $destinatario = normalizarDestinatarioMeta($waIdClienteOriginal);
+            );
 
             $phoneNumberId = trim((string)($numero['phone_number_id'] ?? ''));
 
@@ -644,8 +615,7 @@ if (
                             . "id_numero=" . $idNumeroSeleccionado . "\n"
                             . "id_conversacion=" . $idConversacionSeleccionada . "\n"
                             . "message_id=" . $resultado['message_id'] . "\n"
-                            . "wa_id_original=" . $waIdClienteOriginal . "\n"
-                            . "to_meta=" . $destinatario . "\n"
+                            . "to=" . $destinatario . "\n"
                             . "http_code=" . $resultado['http_code']
                         );
 
@@ -679,8 +649,6 @@ if (
                         "META_SEND_ERROR\n"
                         . "id_numero=" . $idNumeroSeleccionado . "\n"
                         . "id_conversacion=" . $idConversacionSeleccionada . "\n"
-                        . "wa_id_original=" . $waIdClienteOriginal . "\n"
-                        . "to_meta=" . $destinatario . "\n"
                         . "http_code=" . $resultado['http_code'] . "\n"
                         . "error=" . $resultado['error']
                     );
