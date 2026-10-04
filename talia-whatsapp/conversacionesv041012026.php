@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * TalIA Connect WA - Conversaciones
- * Versión 1.1 - Normalización de destinatario MX para envío Cloud API
+ * Versión 1.2 - Normalización MX + timestamps locales consistentes
  *
  * Ruta:
  * /public_html/plataforma/talia-whatsapp/conversaciones.php
@@ -386,6 +386,13 @@ function registrarMensajeSaliente(
     string $waTo,
     string $contenido
 ): int {
+    /*
+     * Usamos la hora generada por PHP en America/Merida y no NOW() de MySQL.
+     * El servidor de base puede operar en UTC; si usamos NOW(), la lista de
+     * conversaciones puede quedar desplazada respecto al timestamp de Meta.
+     */
+    $ahoraLocal = date('Y-m-d H:i:s');
+
     $sql = "INSERT INTO wa_mensajes (
                 id_conversacion,
                 id_numero,
@@ -397,6 +404,7 @@ function registrarMensajeSaliente(
                 contenido,
                 estado_envio,
                 fecha_mensaje,
+                fecha_recibido_webhook,
                 payload_json
             ) VALUES (
                 ?,
@@ -408,7 +416,8 @@ function registrarMensajeSaliente(
                 'text',
                 ?,
                 'QUEUED',
-                NOW(),
+                ?,
+                ?,
                 NULL
             )
             ON DUPLICATE KEY UPDATE
@@ -418,13 +427,15 @@ function registrarMensajeSaliente(
 
     mysqli_stmt_bind_param(
         $stmt,
-        'iissss',
+        'iissssss',
         $idConversacion,
         $idNumero,
         $messageId,
         $waFrom,
         $waTo,
-        $contenido
+        $contenido,
+        $ahoraLocal,
+        $ahoraLocal
     );
 
     mysqli_stmt_execute($stmt);
@@ -433,11 +444,11 @@ function registrarMensajeSaliente(
     mysqli_stmt_close($stmt);
 
     $sqlConv = "UPDATE wa_conversaciones
-                SET ultima_actividad = NOW()
+                SET ultima_actividad = ?
                 WHERE id = ?";
 
     $stmt = mysqli_prepare($conexion, $sqlConv);
-    mysqli_stmt_bind_param($stmt, 'i', $idConversacion);
+    mysqli_stmt_bind_param($stmt, 'si', $ahoraLocal, $idConversacion);
     mysqli_stmt_execute($stmt);
     mysqli_stmt_close($stmt);
 
