@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-
+// Deploy retry: 2026-10-04
 /**
  * TalIA Connect WA - Administración WA
  * Management v1.0 (solo lectura)
