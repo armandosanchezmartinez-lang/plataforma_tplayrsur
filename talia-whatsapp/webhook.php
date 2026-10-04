@@ -5,7 +5,7 @@ declare(strict_types=1);
  * TalIA Connect WA
  * Webhook para Meta / WhatsApp Business Platform
  *
- * Versión: 0.3.1
+ * Versión: 0.3.2
  *
  * Funciones:
  * 1. GET  -> Verificación del webhook por Meta
@@ -16,6 +16,7 @@ declare(strict_types=1);
  * 6. Persiste mensajes en wa_conversaciones / wa_mensajes
  * 7. Actualiza estados SENT / DELIVERED / READ / FAILED en MySQL
  * 8. Asigna modo de atención dinámico según wa_numeros.bot_activo
+ * 9. Unifica timestamps operativos en America/Merida sin depender de la zona horaria MySQL
  */
 
 date_default_timezone_set('America/Merida');
@@ -301,6 +302,12 @@ function obtenerOCrearConversacion(
     string $nombreCliente,
     string $modoAtencion
 ): int {
+    /*
+     * La aplicación trabaja en America/Merida. Generamos el timestamp en PHP
+     * para no depender de la zona horaria configurada en MariaDB/Hostinger.
+     */
+    $ahoraLocal = date('Y-m-d H:i:s');
+
     $sql = "
         INSERT INTO wa_conversaciones (
             id_numero,
@@ -312,7 +319,7 @@ function obtenerOCrearConversacion(
             fecha_inicio,
             ultima_actividad
         ) VALUES (
-            ?, ?, ?, ?, 'ABIERTA', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ?, ?, ?, ?, 'ABIERTA', ?, ?, ?
         )
         ON DUPLICATE KEY UPDATE
             id = LAST_INSERT_ID(id),
@@ -323,13 +330,13 @@ function obtenerOCrearConversacion(
                 WHEN tomada_por_numero_talento IS NOT NULL
                   OR (
                       bot_pausado_hasta IS NOT NULL
-                      AND bot_pausado_hasta > CURRENT_TIMESTAMP
+                      AND bot_pausado_hasta > ?
                   )
                 THEN modo_atencion
                 ELSE VALUES(modo_atencion)
             END,
             fecha_cierre = NULL,
-            ultima_actividad = CURRENT_TIMESTAMP
+            ultima_actividad = VALUES(ultima_actividad)
     ";
 
     $stmt = mysqli_prepare($conexion, $sql);
@@ -340,12 +347,15 @@ function obtenerOCrearConversacion(
 
     mysqli_stmt_bind_param(
         $stmt,
-        'issss',
+        'isssssss',
         $idNumero,
         $waIdCliente,
         $telefonoCliente,
         $nombreCliente,
-        $modoAtencion
+        $modoAtencion,
+        $ahoraLocal,
+        $ahoraLocal,
+        $ahoraLocal
     );
 
     mysqli_stmt_execute($stmt);
@@ -414,6 +424,8 @@ function guardarMensajeEntranteBD(
     string $fechaMensaje,
     string $payloadJson
 ): string {
+    $fechaRecepcionLocal = date('Y-m-d H:i:s');
+
     $sql = "
         INSERT INTO wa_mensajes (
             id_conversacion,
@@ -429,11 +441,12 @@ function guardarMensajeEntranteBD(
             context_message_id,
             estado_envio,
             fecha_mensaje,
+            fecha_recibido_webhook,
             payload_json
         ) VALUES (
             ?, ?, ?, 'ENTRANTE', ?, ?, ?, ?,
             NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
-            'RECEIVED', NULLIF(?, ''), ?
+            'RECEIVED', NULLIF(?, ''), ?, ?
         )
         ON DUPLICATE KEY UPDATE
             message_id = VALUES(message_id)
@@ -447,7 +460,7 @@ function guardarMensajeEntranteBD(
 
     mysqli_stmt_bind_param(
         $stmt,
-        'iissssssssss',
+        'iisssssssssss',
         $idConversacion,
         $idNumero,
         $messageId,
@@ -459,6 +472,7 @@ function guardarMensajeEntranteBD(
         $mimeType,
         $contextMessageId,
         $fechaMensaje,
+        $fechaRecepcionLocal,
         $payloadJson
     );
 

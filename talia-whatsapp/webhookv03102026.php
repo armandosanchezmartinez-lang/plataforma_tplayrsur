@@ -5,7 +5,7 @@ declare(strict_types=1);
  * TalIA Connect WA
  * Webhook para Meta / WhatsApp Business Platform
  *
- * Versión: 0.3
+ * Versión: 0.3.1
  *
  * Funciones:
  * 1. GET  -> Verificación del webhook por Meta
@@ -15,6 +15,7 @@ declare(strict_types=1);
  * 5. Extrae actualizaciones de estado a un log independiente
  * 6. Persiste mensajes en wa_conversaciones / wa_mensajes
  * 7. Actualiza estados SENT / DELIVERED / READ / FAILED en MySQL
+ * 8. Asigna modo de atención dinámico según wa_numeros.bot_activo
  */
 
 date_default_timezone_set('America/Merida');
@@ -234,6 +235,8 @@ function buscarNumeroPorPhoneNumberId(mysqli $conexion, string $phoneNumberId): 
             display_phone_number,
             phone_number_id,
             waba_id,
+            bot_activo,
+            modo_respuesta,
             estado
         FROM wa_numeros
         WHERE phone_number_id = ?
@@ -255,6 +258,8 @@ function buscarNumeroPorPhoneNumberId(mysqli $conexion, string $phoneNumberId): 
         $displayPhoneNumber,
         $phoneNumberIdDb,
         $wabaId,
+        $botActivo,
+        $modoRespuesta,
         $estado
     );
 
@@ -267,6 +272,8 @@ function buscarNumeroPorPhoneNumberId(mysqli $conexion, string $phoneNumberId): 
             'display_phone_number' => (string)$displayPhoneNumber,
             'phone_number_id' => (string)$phoneNumberIdDb,
             'waba_id' => (string)$wabaId,
+            'bot_activo' => (int)$botActivo,
+            'modo_respuesta' => (string)$modoRespuesta,
             'estado' => (string)$estado,
         ];
     }
@@ -275,12 +282,24 @@ function buscarNumeroPorPhoneNumberId(mysqli $conexion, string $phoneNumberId): 
     return $fila;
 }
 
+
+function resolverModoAtencionNumero(array $numero): string
+{
+    // Regla base TalIA Connect WA:
+    // bot_activo = 1 -> BOT
+    // bot_activo = 0 -> HUMANO
+    return ((int)($numero['bot_activo'] ?? 0) === 1)
+        ? 'BOT'
+        : 'HUMANO';
+}
+
 function obtenerOCrearConversacion(
     mysqli $conexion,
     int $idNumero,
     string $waIdCliente,
     string $telefonoCliente,
-    string $nombreCliente
+    string $nombreCliente,
+    string $modoAtencion
 ): int {
     $sql = "
         INSERT INTO wa_conversaciones (
@@ -289,16 +308,26 @@ function obtenerOCrearConversacion(
             telefono_cliente,
             nombre_cliente,
             estado,
+            modo_atencion,
             fecha_inicio,
             ultima_actividad
         ) VALUES (
-            ?, ?, ?, ?, 'ABIERTA', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ?, ?, ?, ?, 'ABIERTA', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON DUPLICATE KEY UPDATE
             id = LAST_INSERT_ID(id),
             telefono_cliente = COALESCE(NULLIF(VALUES(telefono_cliente), ''), telefono_cliente),
             nombre_cliente = COALESCE(NULLIF(VALUES(nombre_cliente), ''), nombre_cliente),
             estado = 'ABIERTA',
+            modo_atencion = CASE
+                WHEN tomada_por_numero_talento IS NOT NULL
+                  OR (
+                      bot_pausado_hasta IS NOT NULL
+                      AND bot_pausado_hasta > CURRENT_TIMESTAMP
+                  )
+                THEN modo_atencion
+                ELSE VALUES(modo_atencion)
+            END,
             fecha_cierre = NULL,
             ultima_actividad = CURRENT_TIMESTAMP
     ";
@@ -311,11 +340,12 @@ function obtenerOCrearConversacion(
 
     mysqli_stmt_bind_param(
         $stmt,
-        'isss',
+        'issss',
         $idNumero,
         $waIdCliente,
         $telefonoCliente,
-        $nombreCliente
+        $nombreCliente,
+        $modoAtencion
     );
 
     mysqli_stmt_execute($stmt);
@@ -487,12 +517,15 @@ function persistirMensajeEntrante(
         $telefonoDestino = $displayPhoneNumber;
     }
 
+    $modoAtencion = resolverModoAtencionNumero($numero);
+
     $idConversacion = obtenerOCrearConversacion(
         $conexion,
         $idNumero,
         $from,
         $from,
-        $nombreCliente
+        $nombreCliente,
+        $modoAtencion
     );
 
     $tipo = tipoMensajeBD($tipoOriginal);
@@ -527,7 +560,10 @@ function persistirMensajeEntrante(
         "id_conversacion={$idConversacion}" . PHP_EOL .
         "message_id={$messageId}" . PHP_EOL .
         "from={$from}" . PHP_EOL .
-        "tipo={$tipo}"
+        "tipo={$tipo}" . PHP_EOL .
+        "bot_activo=" . (int)($numero['bot_activo'] ?? 0) . PHP_EOL .
+        "modo_respuesta=" . (string)($numero['modo_respuesta'] ?? '') . PHP_EOL .
+        "modo_atencion={$modoAtencion}"
     );
 }
 
