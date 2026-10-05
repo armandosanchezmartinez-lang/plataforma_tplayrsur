@@ -706,22 +706,6 @@ $ventas_hist = [];
 if ($view === 'lideres') {
 $sql = "
 WITH {$lideres_cte},
-ventas_lider AS (
-    SELECT
-        la.distrito_reporte AS distrito,
-        la.lider_hc AS entidad,
-        la.lider_hc AS lider,
-        SUM(CASE WHEN {$cond_i_base} THEN 1 ELSE 0 END) AS ins_sem_base,
-        SUM(CASE WHEN {$cond_i_actual} THEN 1 ELSE 0 END) AS ins_sem_actual
-    FROM lideres_activos la
-    LEFT JOIN instalaciones i
-        ON i.lider = la.lider_instalaciones
-       AND (
-            ({$cond_i_base})
-         OR ({$cond_i_actual})
-       )
-    GROUP BY la.distrito_reporte, la.lider_hc
-),
 coaches_lider AS (
     SELECT DISTINCT
         la.distrito_reporte AS distrito,
@@ -730,6 +714,11 @@ coaches_lider AS (
         la.lider_instalaciones AS lider_instalaciones,
         h.nombre_colaborador AS coach,
         h.id_posicion AS coach_pos,
+        CASE
+            WHEN h.nombre_colaborador = 'VACANTE'
+                THEN CONCAT(la.distrito_reporte, '|', la.lider_hc, '|VACANTE|', h.id_posicion)
+            ELSE CONCAT(la.distrito_reporte, '|', la.lider_hc, '|', UPPER(TRIM(h.nombre_colaborador)))
+        END AS coach_key,
         h.semana,
         h.anio
     FROM lideres_activos la
@@ -749,6 +738,7 @@ vendedores AS (
     SELECT DISTINCT
         c.distrito,
         c.lider,
+        c.coach_key,
         h.numero_talento_gs AS folio_empleado,
         COALESCE(NULLIF(hic.numero_talento_nuevo,''), NULLIF(hic.numero_talento_anterior,''), h.numero_talento_gs) AS folio_unificado,
         hic.numero_talento_anterior AS folio_anterior,
@@ -812,6 +802,126 @@ vendedores AS (
             OR hic.nombre_colaborador = ''
             OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
         )
+),
+coaches_match AS (
+    SELECT
+        distrito,
+        distrito_hc,
+        lider,
+        lider_instalaciones,
+        coach,
+        MAX(coach_pos) AS coach_pos,
+        coach_key
+    FROM coaches_lider
+    GROUP BY distrito, distrito_hc, lider, lider_instalaciones, coach, coach_key
+),
+install_base AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS lider,
+        UPPER(TRIM(i.coach)) AS coach_inst,
+        COUNT(DISTINCT i.cuenta) AS ins_sem_base
+    FROM lideres_activos la
+    INNER JOIN instalaciones i
+        ON i.lider = la.lider_instalaciones
+       AND {$cond_i_base}
+    GROUP BY la.distrito_reporte, la.lider_hc, UPPER(TRIM(i.coach))
+),
+install_actual AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS lider,
+        UPPER(TRIM(i.coach)) AS coach_inst,
+        COUNT(DISTINCT i.cuenta) AS ins_sem_actual
+    FROM lideres_activos la
+    INNER JOIN instalaciones i
+        ON i.lider = la.lider_instalaciones
+       AND {$cond_i_actual}
+    GROUP BY la.distrito_reporte, la.lider_hc, UPPER(TRIM(i.coach))
+),
+ventas_base AS (
+    SELECT c.coach_key, SUM(ib.ins_sem_base) AS ins_sem_base
+    FROM coaches_match c
+    INNER JOIN install_base ib
+        ON ib.distrito = c.distrito
+       AND ib.lider = c.lider
+       AND (
+            ib.coach_inst = UPPER(TRIM(c.coach))
+            OR (ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
+                AND ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%'))
+            OR (ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 2), '%')
+                AND ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -2), '%'))
+       )
+    GROUP BY c.coach_key
+),
+ventas_actual AS (
+    SELECT c.coach_key, SUM(ia.ins_sem_actual) AS ins_sem_actual
+    FROM coaches_match c
+    INNER JOIN install_actual ia
+        ON ia.distrito = c.distrito
+       AND ia.lider = c.lider
+       AND (
+            ia.coach_inst = UPPER(TRIM(c.coach))
+            OR (ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
+                AND ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%'))
+            OR (ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 2), '%')
+                AND ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -2), '%'))
+       )
+    GROUP BY c.coach_key
+),
+inst_folio_base AS (
+    SELECT folio_empleado, COUNT(DISTINCT cuenta) AS ins_cnt
+    FROM instalaciones i
+    WHERE {$cond_i_base}
+      AND folio_empleado IS NOT NULL AND folio_empleado <> ''
+    GROUP BY folio_empleado
+),
+inst_folio_actual AS (
+    SELECT folio_empleado, COUNT(DISTINCT cuenta) AS ins_cnt
+    FROM instalaciones i
+    WHERE {$cond_i_actual}
+      AND folio_empleado IS NOT NULL AND folio_empleado <> ''
+    GROUP BY folio_empleado
+),
+ventas_base_hc AS (
+    SELECT v.coach_key,
+           SUM(GREATEST(COALESCE(fb1.ins_cnt,0),COALESCE(fb2.ins_cnt,0),COALESCE(fb3.ins_cnt,0),COALESCE(fb4.ins_cnt,0))) AS ins_sem_base_hc
+    FROM vendedores v
+    LEFT JOIN inst_folio_base fb1 ON fb1.folio_empleado=v.folio_empleado
+    LEFT JOIN inst_folio_base fb2 ON fb2.folio_empleado=v.folio_unificado
+    LEFT JOIN inst_folio_base fb3 ON fb3.folio_empleado=v.folio_anterior
+    LEFT JOIN inst_folio_base fb4 ON fb4.folio_empleado=v.folio_nuevo
+    WHERE v.anio={$hc_anio_base} AND v.semana={$hc_semana_base}
+      AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE'
+    GROUP BY v.coach_key
+),
+ventas_actual_hc AS (
+    SELECT v.coach_key,
+           SUM(GREATEST(COALESCE(fa1.ins_cnt,0),COALESCE(fa2.ins_cnt,0),COALESCE(fa3.ins_cnt,0),COALESCE(fa4.ins_cnt,0))) AS ins_sem_actual_hc
+    FROM vendedores v
+    LEFT JOIN inst_folio_actual fa1 ON fa1.folio_empleado=v.folio_empleado
+    LEFT JOIN inst_folio_actual fa2 ON fa2.folio_empleado=v.folio_unificado
+    LEFT JOIN inst_folio_actual fa3 ON fa3.folio_empleado=v.folio_anterior
+    LEFT JOIN inst_folio_actual fa4 ON fa4.folio_empleado=v.folio_nuevo
+    WHERE v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual}
+      AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE'
+    GROUP BY v.coach_key
+),
+ventas_lider AS (
+    SELECT
+        la.distrito_reporte AS distrito,
+        la.lider_hc AS entidad,
+        la.lider_hc AS lider,
+        COALESCE(SUM(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))),0) AS ins_sem_base,
+        COALESCE(SUM(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0))),0) AS ins_sem_actual
+    FROM lideres_activos la
+    LEFT JOIN coaches_match c
+      ON c.distrito=la.distrito_reporte AND c.lider=la.lider_hc
+    LEFT JOIN ventas_base vb ON vb.coach_key=c.coach_key
+    LEFT JOIN ventas_actual va ON va.coach_key=c.coach_key
+    LEFT JOIN ventas_base_hc vbh ON vbh.coach_key=c.coach_key
+    LEFT JOIN ventas_actual_hc vah ON vah.coach_key=c.coach_key
+    GROUP BY la.distrito_reporte, la.lider_hc
 ),
 hc_resumen AS (
     SELECT

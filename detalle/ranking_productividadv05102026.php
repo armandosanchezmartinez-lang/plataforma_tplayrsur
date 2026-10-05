@@ -689,14 +689,14 @@ $cond_negocios_actual = "{$cond_mix_actual} AND (
 
 $lideres_cte = "
 lideres_activos AS (
-    SELECT 'CANCUN' AS distrito_reporte, 'CANCUN' AS distrito_hc, 'COTO FELIX ERICK DANIEL' AS lider_hc, 'COTO FELIX ERICK DANIEL' AS lider_instalaciones
-    UNION ALL SELECT 'CANCUN', 'CANCUN', 'GAMBOA LARA LUIS ANTONIO', 'GAMBOA LARA LUIS ANTONIO'
-    UNION ALL SELECT 'COATZA-MINA', 'COATZA MINA', 'HECTOR ANDRES PALMA HERNANDEZ', 'HECTOR ANDRES PALMA HERNANDEZ'
-    UNION ALL SELECT 'MERIDA', 'MERIDA', 'ESTRADA MEDINA MERCY GUADALUPE', 'JOVANY DAMIAN PARAMO AVILA' /* Plaza líder 1739397: HC vigente = Mercy; instalaciones conserva alias legacy Jovany */
-    UNION ALL SELECT 'MERIDA', 'MERIDA', 'PAREDES ROCHEL MARIA JOSE', 'PAREDES ROCHEL MARIA JOSE'
-    UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'LOPEZ MANCILLA JOSE ALBERTO', 'JOSE ALBERTO LOPEZ MANCILLA'
-    UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL', 'CHRISTIANNE MIGUEL SANCHEZ SANCHEZ'
-    UNION ALL SELECT 'VILLAHERMOSA', 'VILLAHERMOSA', 'HERNANDEZ PALMA MIRIAN GABRIELA', 'MIRIAN GABRIELA HERNANDEZ PALMA'
+    SELECT 'CANCUN' AS distrito_reporte, 'CANCUN' AS distrito_hc, 'COTO FELIX ERICK DANIEL' AS lider_hc, 'COTO FELIX ERICK DANIEL' AS lider_instalaciones, NULL AS lider_pos
+    UNION ALL SELECT 'CANCUN', 'CANCUN', 'GAMBOA LARA LUIS ANTONIO', 'GAMBOA LARA LUIS ANTONIO', NULL
+    UNION ALL SELECT 'COATZA-MINA', 'COATZA MINA', 'HECTOR ANDRES PALMA HERNANDEZ', 'HECTOR ANDRES PALMA HERNANDEZ', NULL
+    UNION ALL SELECT 'MERIDA', 'MERIDA', 'ESTRADA MEDINA MERCY GUADALUPE', 'JOVANY DAMIAN PARAMO AVILA', '1739397' /* Plaza líder 1739397: HC vigente = Mercy; instalaciones conserva alias legacy Jovany */
+    UNION ALL SELECT 'MERIDA', 'MERIDA', 'PAREDES ROCHEL MARIA JOSE', 'PAREDES ROCHEL MARIA JOSE', NULL
+    UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'LOPEZ MANCILLA JOSE ALBERTO', 'JOSE ALBERTO LOPEZ MANCILLA', NULL
+    UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL', 'CHRISTIANNE MIGUEL SANCHEZ SANCHEZ', NULL
+    UNION ALL SELECT 'VILLAHERMOSA', 'VILLAHERMOSA', 'HERNANDEZ PALMA MIRIAN GABRIELA', 'MIRIAN GABRIELA HERNANDEZ PALMA', NULL
 )";
 
 $query_error = '';
@@ -734,7 +734,10 @@ coaches_lider AS (
         h.anio
     FROM lideres_activos la
     INNER JOIN hc h
-        ON h.nombre_linea_reporte = la.lider_hc
+        ON (
+            h.nombre_linea_reporte = la.lider_hc
+            OR (la.lider_pos IS NOT NULL AND la.lider_pos <> '' AND h.posicion_lr = la.lider_pos)
+       )
        AND h.distrito = la.distrito_hc
        AND (
             (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
@@ -888,7 +891,10 @@ coaches_raw AS (
         h.anio
     FROM lideres_activos la
     INNER JOIN hc h
-        ON h.nombre_linea_reporte = la.lider_hc
+        ON (
+            h.nombre_linea_reporte = la.lider_hc
+            OR (la.lider_pos IS NOT NULL AND la.lider_pos <> '' AND h.posicion_lr = la.lider_pos)
+       )
        AND h.distrito = la.distrito_hc
        AND (
             (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
@@ -1227,7 +1233,10 @@ coaches_base AS (
         h.anio
     FROM selected_lider la
     INNER JOIN hc h
-        ON h.nombre_linea_reporte = la.lider_hc
+        ON (
+            h.nombre_linea_reporte = la.lider_hc
+            OR (la.lider_pos IS NOT NULL AND la.lider_pos <> '' AND h.posicion_lr = la.lider_pos)
+       )
        AND h.distrito = la.distrito_hc
        AND (
             (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
