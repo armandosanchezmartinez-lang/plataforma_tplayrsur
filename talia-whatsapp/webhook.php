@@ -5,7 +5,7 @@ declare(strict_types=1);
  * TalIA Connect WA
  * Webhook para Meta / WhatsApp Business Platform
  *
- * Versión: 0.3.2
+ * Versión: 0.3.3 - Coexistence
  *
  * Funciones:
  * 1. GET  -> Verificación del webhook por Meta
@@ -17,6 +17,7 @@ declare(strict_types=1);
  * 7. Actualiza estados SENT / DELIVERED / READ / FAILED en MySQL
  * 8. Asigna modo de atención dinámico según wa_numeros.bot_activo
  * 9. Unifica timestamps operativos en America/Merida sin depender de la zona horaria MySQL
+ * 10. Procesa eventos de Coexistence: history / smb_app_state_sync / smb_message_echoes
  */
 
 date_default_timezone_set('America/Merida');
@@ -31,6 +32,12 @@ $logDir = __DIR__ . '/logs';
 
 if (!is_dir($logDir)) {
     mkdir($logDir, 0755, true);
+}
+
+// Soporte aislado para eventos de WhatsApp Coexistence.
+$rutaCoexistenceWebhook = __DIR__ . '/coexistence_webhook.php';
+if (is_file($rutaCoexistenceWebhook)) {
+    require_once $rutaCoexistenceWebhook;
 }
 
 // =====================================================
@@ -735,7 +742,32 @@ function procesarEventoWhatsApp(array $data): void
             $field = (string)($change['field'] ?? '');
             $value = $change['value'] ?? [];
 
-            if ($field !== 'messages' || !is_array($value)) {
+            if (!is_array($value)) {
+                continue;
+            }
+
+            // Los eventos exclusivos de Coexistence se desvían a un helper
+            // y nunca atraviesan la lógica estándar de mensajes/estados.
+            if ($field !== 'messages') {
+                if (
+                    function_exists('procesarEventoCoexistence')
+                    && in_array(
+                        $field,
+                        ['history', 'smb_app_state_sync', 'smb_message_echoes', 'account_update'],
+                        true
+                    )
+                ) {
+                    try {
+                        procesarEventoCoexistence($field, $value, $entryId);
+                    } catch (Throwable $e) {
+                        guardarLog(
+                            'db_errors.log',
+                            "Error procesando Coexistence:" . PHP_EOL
+                            . "field={$field}" . PHP_EOL
+                            . $e->getMessage()
+                        );
+                    }
+                }
                 continue;
             }
 
@@ -994,7 +1026,20 @@ if ($method === 'POST') {
         print_r($data, true)
     );
 
-    // 4. Extraemos mensajes y estados, y persistimos en MySQL.
+    // 4. Algunos eventos iniciales de Coexistence pueden llegar con
+    //    estructura top-level {id,event,data}; los procesamos primero.
+    if (function_exists('procesarEventoCoexistenceTopLevel')) {
+        try {
+            procesarEventoCoexistenceTopLevel($data);
+        } catch (Throwable $e) {
+            guardarLog(
+                'db_errors.log',
+                "Error procesando evento top-level Coexistence:" . PHP_EOL . $e->getMessage()
+            );
+        }
+    }
+
+    // 5. Extraemos mensajes y estados estándar, y persistimos en MySQL.
     try {
         procesarEventoWhatsApp($data);
     } catch (Throwable $e) {

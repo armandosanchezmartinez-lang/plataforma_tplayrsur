@@ -287,7 +287,12 @@ $finActual = substr((string)($numero['horario_fin'] ?? '19:00'), 0, 5);
 <div class="shell">
 <aside class="sidebar">
     <div class="brand"><div class="logo">T</div><div><h1>TalIA Connect WA</h1><small>Centro de mensajería</small></div></div>
-    <nav class="nav"><a class="active" href="index.php">Configuración</a><a href="privacidad.php" target="_blank" rel="noopener">Privacidad</a></nav>
+    <nav class="nav">
+        <a class="active" href="index.php">Configuración</a>
+        <a href="conversaciones.php">Conversaciones</a>
+        <a href="management.php">Administración WA</a>
+        <a href="privacidad.php" target="_blank" rel="noopener">Privacidad</a>
+    </nav>
     <div class="sidebar-foot">Región SUR<br>Plataforma TalIA</div>
 </aside>
 

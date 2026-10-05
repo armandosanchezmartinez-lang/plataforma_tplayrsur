@@ -1379,6 +1379,7 @@ textarea{
         <a href="index.php">Configuración</a>
         <a class="active" href="conversaciones.php">Conversaciones</a>
         <a href="management.php">Administración WA</a>
+        <a href="coexistence.php">Conectar WhatsApp</a>
         <a href="privacidad.php" target="_blank" rel="noopener">Privacidad</a>
     </nav>
 

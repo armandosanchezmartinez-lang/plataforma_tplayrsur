@@ -430,7 +430,6 @@ a{color:inherit}
         <a href="index.php">Configuración</a>
         <a href="conversaciones.php">Conversaciones</a>
         <a class="active" href="management.php">Administración WA</a>
-        <a href="coexistence.php">Conectar WhatsApp</a>
         <a href="privacidad.php" target="_blank" rel="noopener">Privacidad</a>
     </nav>
     <div class="sidebar-foot">Región SUR<br>Plataforma TalIA</div>
