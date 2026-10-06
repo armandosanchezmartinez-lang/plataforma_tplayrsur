@@ -1899,27 +1899,10 @@ $title_label = [
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
-/* Mantener el rango seleccionado al navegar entre niveles del ranking. */
-$nav_estado = [
-    'periodo'     => $periodo,
-    'anio'        => $anio_actual,
-    'semana'      => $semana_actual,
-    'anio_mes'    => $anio_mes_actual,
-    'mes'         => $mes_actual,
-    'dias_semana' => implode(',', $dias_semana_seleccionados),
-];
-if ($periodo === 'mensual') {
-    $nav_estado['rango_mode'] = $rango_mode;
-    if ($rango_mode === 'custom') {
-        $nav_estado['dia_inicio'] = $dia_inicio_actual;
-        $nav_estado['dia_fin']    = $dia_fin_actual;
-    }
-}
-
-$base_link = '?' . qs(array_merge($nav_estado, ['view'=>'lideres']));
-$ranking_coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'ranking_coach']));
-$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]));
-$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
+$base_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'lideres']);
+$ranking_coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'ranking_coach']);
+$lider_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]);
+$coach_link = '?' . qs(['periodo'=>$periodo, 'anio'=>$anio_actual, 'semana'=>$semana_actual, 'anio_mes'=>$anio_mes_actual, 'mes'=>$mes_actual, 'dias_semana'=>implode(',', $dias_semana_seleccionados), 'view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]);
 
 $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
 if ($periodo === 'semanal') $subtitle .= " · Días: {$dias_semana_label}";
@@ -2209,11 +2192,11 @@ include __DIR__ . '/../includes/sidebar.php';
                 <?php $rank=1; foreach($rows as $r):
                     $href = '';
                     if ($view === 'lideres') {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]));
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]);
                     } elseif (in_array($view, ['coaches','ranking_coach'], true)) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]);
                     } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]));
+                        $href = '?' . qs(['periodo'=>$periodo,'anio'=>$anio_actual,'semana'=>$semana_actual,'anio_mes'=>$anio_mes_actual,'mes'=>$mes_actual,'dias_semana'=>implode(',', $dias_semana_seleccionados),'view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]);
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
