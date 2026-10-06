@@ -32,10 +32,9 @@
  * Navegación mensual (Oct-2026):
  * - El calendario permite moverse al mes anterior/siguiente desde el propio
  *   selector y conservar el tipo de comparación/rango seleccionado.
- * - Un rango custom permanece dentro del mes ACTUAL. BASE inicia un mes atrás;
- *   si ese día no existe, usa el último día válido del mes BASE y conserva
- *   exactamente la misma duración del rango ACTUAL, aunque BASE cruce de mes.
- *   Ejemplo: ACTUAL 31-MAR a 05-ABR (6 días) => BASE 28-FEB a 05-MAR.
+ * - Un rango custom permanece dentro de un solo mes. BASE es automáticamente
+ *   el mismo rango de días del mes inmediato anterior, ajustado si ese mes tiene
+ *   menos días.
  * - "Mes completo" conserva la comparación mes completo vs mes completo; para
  *   el último mes con datos se limita al último día realmente cargado.
  * ============================================================================
@@ -525,38 +524,17 @@ if ($rango_mode === 'completo') {
         $dia_fin_mensual = $tmp_dia;
     }
 
+    $dia_inicio_base = min($dia_inicio_mensual, $ultimo_dia_base);
+    $dia_fin_base = min($dia_fin_mensual, $ultimo_dia_base);
+
     $dia_inicio_actual = min($dia_inicio_mensual, $ultimo_dia_actual);
     $dia_fin_actual = min($dia_fin_mensual, $ultimo_dia_actual);
-
-    // Regla canónica de rango comparable:
-    // 1) BASE inicia exactamente un mes antes del inicio ACTUAL.
-    // 2) Si ese día no existe en el mes BASE, usar su último día válido.
-    // 3) Conservar EXACTAMENTE la misma cantidad de días calendario que ACTUAL.
-    //    Ej.: ACTUAL 31-MAR a 05-ABR (6 días) => BASE 28-FEB a 05-MAR.
-    $fecha_actual_inicio_tmp = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_inicio_actual));
-    $fecha_actual_fin_tmp = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_fin_actual));
-    $duracion_rango_dias = (int)$fecha_actual_inicio_tmp->diff($fecha_actual_fin_tmp)->days + 1;
-
-    $dia_inicio_base = min($dia_inicio_actual, $ultimo_dia_base);
-    $fecha_base_inicio_tmp = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base));
-    $fecha_base_fin_tmp = clone $fecha_base_inicio_tmp;
-    if ($duracion_rango_dias > 1) {
-        $fecha_base_fin_tmp->modify('+'.($duracion_rango_dias - 1).' days');
-    }
-    $dia_fin_base = (int)$fecha_base_fin_tmp->format('j');
 }
 
 $fecha_inicio_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_inicio_actual);
 $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_fin_actual);
-
-if ($rango_mode === 'completo') {
-    $fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
-    $fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
-} else {
-    // Para custom/MTD, las fechas BASE ya fueron calculadas conservando duración.
-    $fecha_inicio_base = $fecha_base_inicio_tmp->format('Y-m-d');
-    $fecha_fin_base = $fecha_base_fin_tmp->format('Y-m-d');
-}
+$fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
+$fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
 
 $dias_semana_labels = [
     1 => 'LUN',
@@ -643,32 +621,16 @@ $rango_dias_label = $dia_inicio_mensual === $dia_fin_mensual
     ? 'día '.$dia_fin_mensual
     : 'días '.$dia_inicio_mensual.'-'.$dia_fin_mensual;
 
-function etiqueta_rango_mensual($fecha_inicio, $fecha_fin, $meses_es, $corta = false) {
-    $ini = new DateTime($fecha_inicio);
-    $fin = new DateTime($fecha_fin);
-    $mi = (int)$ini->format('n');
-    $mf = (int)$fin->format('n');
-    $ai = (int)$ini->format('Y');
-    $af = (int)$fin->format('Y');
-    $nom_i = $corta ? strtoupper(substr($meses_es[$mi], 0, 3)) : $meses_es[$mi];
-    $nom_f = $corta ? strtoupper(substr($meses_es[$mf], 0, 3)) : $meses_es[$mf];
-
-    if ($mi === $mf && $ai === $af) {
-        return $nom_i.' '.(int)$ini->format('j').'-'.(int)$fin->format('j').($corta ? '' : ' '.$ai);
-    }
-    return $nom_i.' '.(int)$ini->format('j').' - '.$nom_f.' '.(int)$fin->format('j').($corta ? '' : ' '.$af);
-}
-
 $label_periodo_base = $periodo === 'mensual'
-    ? etiqueta_rango_mensual($fecha_inicio_base, $fecha_fin_base, $meses_es, false)
+    ? $meses_es[$mes_base].' '.$dia_inicio_base.'-'.$dia_fin_base.' '.$anio_mes_base
     : 'Semana '.$semana_base;
 
 $label_periodo_actual = $periodo === 'mensual'
-    ? etiqueta_rango_mensual($fecha_inicio_actual, $fecha_fin_actual, $meses_es, false)
+    ? $meses_es[$mes_actual].' '.$dia_inicio_actual.'-'.$dia_fin_actual.' '.$anio_mes_actual
     : 'Semana '.$semana_actual;
 
-$label_col_base = $periodo === 'mensual' ? etiqueta_rango_mensual($fecha_inicio_base, $fecha_fin_base, $meses_es, true) : 'SEM'.$semana_base;
-$label_col_actual = $periodo === 'mensual' ? etiqueta_rango_mensual($fecha_inicio_actual, $fecha_fin_actual, $meses_es, true) : 'SEM'.$semana_actual;
+$label_col_base = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_base],0,3)).' '.$dia_inicio_base.'-'.$dia_fin_base : 'SEM'.$semana_base;
+$label_col_actual = $periodo === 'mensual' ? strtoupper(substr($meses_es[$mes_actual],0,3)).' '.$dia_inicio_actual.'-'.$dia_fin_actual : 'SEM'.$semana_actual;
 
 // Condiciones sargables por rango de fecha.
 // FIX performance: la vista mensual estaba usando YEAR()/MONTH()/DAY() sobre instalaciones.fecha,
@@ -2218,7 +2180,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </div>
 
                             <div class="range-summary">
-                                <span id="rangeSummary"><?= h($label_periodo_base) ?> vs <?= h($label_periodo_actual) ?></span>
+                                <span id="rangeSummary"><?= h($meses_es[$mes_base]) ?> <?= h($dia_inicio_base) ?>-<?= h($dia_fin_base) ?> vs <?= h($meses_es[$mes_actual]) ?> <?= h($dia_inicio_actual) ?>-<?= h($dia_fin_actual) ?></span>
                             </div>
 
 		<div class="range-actions">
@@ -2716,15 +2678,7 @@ recalc();
         });
 
         if(summary){
-            const meses = <?= json_encode(array_values($meses_es), JSON_UNESCAPED_UNICODE) ?>;
-            const baseStartDay = Math.min(start, <?= (int)$ultimo_dia_base ?>);
-            const duration = (end - start) + 1;
-            const baseStart = new Date(<?= (int)$anio_mes_base ?>, <?= (int)$mes_base - 1 ?>, baseStartDay);
-            const baseEnd = new Date(baseStart.getFullYear(), baseStart.getMonth(), baseStart.getDate() + duration - 1);
-            const baseTxt = (baseStart.getMonth() === baseEnd.getMonth() && baseStart.getFullYear() === baseEnd.getFullYear())
-                ? meses[baseStart.getMonth()] + ' ' + baseStart.getDate() + '-' + baseEnd.getDate()
-                : meses[baseStart.getMonth()] + ' ' + baseStart.getDate() + ' - ' + meses[baseEnd.getMonth()] + ' ' + baseEnd.getDate();
-            summary.textContent = baseTxt + ' vs <?= h($meses_es[$mes_actual]) ?> ' + start + '-' + end;
+            summary.textContent = '<?= h($meses_es[$mes_base]) ?> ' + Math.min(start, <?= (int)$ultimo_dia_base ?>) + '-' + Math.min(end, <?= (int)$ultimo_dia_base ?>) + ' vs <?= h($meses_es[$mes_actual]) ?> ' + start + '-' + end;
         }
     }
 
