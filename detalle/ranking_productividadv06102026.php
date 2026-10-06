@@ -1678,159 +1678,138 @@ ORDER BY
     entidad ASC
 ";
 } elseif ($view === 'vendedores') {
-/*
- * PATCH GENERAL Coach -> Vendedores v1.0 (event-first)
- * ----------------------------------------------------
- * Regla canónica:
- * 1) El universo nace de las instalaciones que YA fueron atribuidas al Coach
- *    en cada periodo (BASE / ACTUAL), no del snapshot HC del cierre.
- * 2) folio_empleado identifica al vendedor; HIC sólo unifica continuidad de
- *    identidad y HC enriquece nombre/antigüedad.
- * 3) Un cambio posterior de Coach NO reescribe ventas históricas.
- * 4) Cada cuenta se cuenta una sola vez por periodo.
- *
- * Esto conserva los fixes previos en Líder/Coach (HIC-Fallback, 504,
- * coaches_match, continuidad estructural Mercy/Jovany) porque el cambio queda
- * encapsulado exclusivamente en view='vendedores'.
- */
 $sql = "
-WITH {$lideres_cte},
-selected_lider AS (
-    SELECT *
-    FROM lideres_activos
-    WHERE (distrito_reporte = '{$distrito_sql}' OR distrito_hc = '{$distrito_hc_sql}')
-      AND lider_hc = '{$lider_sql}'
-),
-eventos_raw AS (
+WITH vendedores_base AS (
     SELECT DISTINCT
-        la.distrito_reporte AS distrito,
-        la.lider_hc AS lider,
+        h.distrito,
+        '{$lider_sql}' AS lider,
         '{$coach_sql}' AS coach,
         '{$coach_pos_sql}' AS coach_pos,
-        i.cuenta,
-        i.fecha,
-        i.folio_empleado AS folio_original,
-        CASE
-            WHEN {$cond_i_base} THEN {$semana_base}
-            WHEN {$cond_i_actual} THEN {$semana_actual}
-            ELSE NULL
-        END AS periodo_key,
-        CASE WHEN {$cond_i_actual} THEN 1 ELSE 0 END AS es_actual,
-        i.plan
-    FROM selected_lider la
-    INNER JOIN instalaciones i
-        ON i.lider = la.lider_instalaciones
-       AND (({$cond_i_base}) OR ({$cond_i_actual}))
+        h.nombre_colaborador AS vendedor,
+        COALESCE(NULLIF(hic.numero_talento_nuevo,''), NULLIF(hic.numero_talento_anterior,''), h.numero_talento_gs) AS folio_empleado,
+        h.numero_talento_gs AS folio_original,
+        hic.numero_talento_anterior AS folio_anterior,
+        hic.numero_talento_nuevo AS folio_nuevo,
+        COALESCE(NULLIF(hic.id_posicion_nueva,''), NULLIF(hic.id_posicion_anterior,''), h.id_posicion) AS id_posicion_unificado,
+        {$antiguedad_expr} AS antiguedad
+    FROM hc h
+    LEFT JOIN historial_identidad_colaborador hic
+        ON (
+            h.numero_talento_gs = hic.numero_talento_anterior
+            OR h.numero_talento_gs = hic.numero_talento_nuevo
+            OR h.id_posicion = hic.id_posicion_anterior
+            OR h.id_posicion = hic.id_posicion_nueva
+        )
        AND (
-            UPPER(TRIM(i.coach)) = UPPER(TRIM('{$coach_sql}'))
-            OR (
-                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', 1), '%')
-                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', -1), '%')
-            )
-            OR (
-                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', 2), '%')
-                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', -2), '%')
-            )
-       )
-    WHERE i.cuenta IS NOT NULL
-      AND i.cuenta <> ''
-),
-eventos AS (
-    SELECT
-        e.*,
-        COALESCE(
-            NULLIF((
-                SELECT COALESCE(NULLIF(hx.numero_talento_nuevo,''), NULLIF(hx.numero_talento_anterior,''))
-                FROM historial_identidad_colaborador hx
-                WHERE e.folio_original = hx.numero_talento_anterior
-                   OR e.folio_original = hx.numero_talento_nuevo
-                ORDER BY hx.fecha_movimiento DESC, hx.id DESC
-                LIMIT 1
-            ),''),
-            e.folio_original
-        ) AS folio_canonico
-    FROM eventos_raw e
-),
-identidades AS (
-    SELECT
-        f.folio_canonico,
-        COALESCE(
-            NULLIF((
-                SELECT h2.nombre_colaborador
-                FROM hc h2
-                LEFT JOIN historial_identidad_colaborador hi2
-                    ON (h2.numero_talento_gs = hi2.numero_talento_anterior OR h2.numero_talento_gs = hi2.numero_talento_nuevo)
-                   AND (hi2.nombre_colaborador IS NULL OR hi2.nombre_colaborador = '' OR UPPER(TRIM(hi2.nombre_colaborador)) = UPPER(TRIM(h2.nombre_colaborador)))
-                WHERE h2.distrito = '{$distrito_hc_sql}'
-                  AND h2.numero_talento_gs <> 'VACANTE'
-                  AND h2.nombre_colaborador <> 'VACANTE'
-                  AND (
-                        h2.numero_talento_gs = f.folio_canonico
-                     OR h2.numero_talento_gs IN (
-                            SELECT hi3.numero_talento_anterior FROM historial_identidad_colaborador hi3 WHERE hi3.numero_talento_nuevo = f.folio_canonico
-                        )
-                     OR h2.numero_talento_gs IN (
-                            SELECT hi4.numero_talento_nuevo FROM historial_identidad_colaborador hi4 WHERE hi4.numero_talento_anterior = f.folio_canonico
+            hic.nombre_colaborador IS NULL
+            OR hic.nombre_colaborador = ''
+            OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
+        )
+    WHERE h.distrito = '{$distrito_hc_sql}'
+      AND h.puesto_lr LIKE '%COACH%'
+      AND h.numero_talento_gs <> 'VACANTE'
+      AND h.nombre_colaborador <> 'VACANTE'
+      AND (
+          (
+              '{$coach_sql}' <> 'VACANTE'
+              AND (
+                  h.nombre_linea_reporte = '{$coach_sql}'
+                  OR h.posicion_lr = '{$coach_pos_sql}'
+                  OR EXISTS (
+                      SELECT 1
+                      FROM historial_identidad_colaborador hicc
+                      WHERE (
+                              h.posicion_lr = hicc.id_posicion_anterior
+                           OR h.posicion_lr = hicc.id_posicion_nueva
+                      )
+                        AND (
+                              '{$coach_pos_sql}' = hicc.id_posicion_anterior
+                           OR '{$coach_pos_sql}' = hicc.id_posicion_nueva
+                           OR UPPER(TRIM(hicc.nombre_colaborador)) = UPPER(TRIM('{$coach_sql}'))
                         )
                   )
-                ORDER BY h2.anio DESC, h2.semana DESC, h2.id DESC
-                LIMIT 1
-            ),''),
-            CONCAT('FOLIO ', f.folio_canonico)
-        ) AS vendedor,
-        (
-            SELECT MIN(h3.fecha_alta)
-            FROM hc h3
-            WHERE h3.distrito = '{$distrito_hc_sql}'
-              AND h3.numero_talento_gs <> 'VACANTE'
-              AND h3.nombre_colaborador <> 'VACANTE'
-              AND (
-                    h3.numero_talento_gs = f.folio_canonico
-                 OR h3.numero_talento_gs IN (
-                        SELECT hi5.numero_talento_anterior FROM historial_identidad_colaborador hi5 WHERE hi5.numero_talento_nuevo = f.folio_canonico
-                    )
-                 OR h3.numero_talento_gs IN (
-                        SELECT hi6.numero_talento_nuevo FROM historial_identidad_colaborador hi6 WHERE hi6.numero_talento_anterior = f.folio_canonico
-                    )
               )
-        ) AS fecha_alta
-    FROM (SELECT DISTINCT folio_canonico FROM eventos WHERE folio_canonico IS NOT NULL AND folio_canonico <> '') f
+          )
+          OR
+          (
+              '{$coach_sql}' = 'VACANTE'
+              AND (
+                  h.posicion_lr = '{$coach_pos_sql}'
+                  OR EXISTS (
+                      SELECT 1
+                      FROM historial_identidad_colaborador hicv
+                      WHERE ('{$coach_pos_sql}' = hicv.id_posicion_anterior OR '{$coach_pos_sql}' = hicv.id_posicion_nueva)
+                        AND (h.posicion_lr = hicv.id_posicion_anterior OR h.posicion_lr = hicv.id_posicion_nueva)
+                  )
+              )
+          )
+      )
+      AND (
+            (h.anio = {$hc_anio_base} AND h.semana = {$hc_semana_base})
+         OR (h.anio = {$hc_anio_actual} AND h.semana = {$hc_semana_actual})
+      )
 ),
 ventas_vendedor AS (
     SELECT
-        e.distrito,
-        e.lider,
-        e.coach,
-        e.coach_pos,
-        COALESCE(id.vendedor, CONCAT('FOLIO ', COALESCE(NULLIF(e.folio_canonico,''),'SIN FOLIO'))) AS vendedor,
-        COALESCE(NULLIF(e.folio_canonico,''), e.folio_original) AS folio_empleado,
-        CASE
-            WHEN id.fecha_alta IS NULL THEN '-'
-            ELSE CONCAT(
-                TIMESTAMPDIFF(YEAR, id.fecha_alta, '{$fecha_fin_actual_sql}'), ' años ',
-                MOD(TIMESTAMPDIFF(MONTH, id.fecha_alta, '{$fecha_fin_actual_sql}'), 12), ' meses'
-            )
-        END AS antiguedad,
-        e.periodo_key AS semana,
-        COUNT(DISTINCT e.cuenta) AS ventas,
-        COUNT(DISTINCT CASE WHEN e.es_actual = 1 AND cp.play = 'TRIPLE PLAY' THEN e.cuenta END) AS triple_play,
-        COUNT(DISTINCT CASE WHEN e.es_actual = 1 AND cp.play = 'DOBLE PLAY' THEN e.cuenta END) AS doble_play,
-        COUNT(DISTINCT CASE WHEN e.es_actual = 1 AND cp.tipo = 'NEGOCIOS' THEN e.cuenta END) AS negocios,
-        COUNT(DISTINCT CASE WHEN e.es_actual = 1 AND cp.tipo = 'RESIDENCIAL' THEN e.cuenta END) AS residencial
-    FROM eventos e
-    LEFT JOIN identidades id ON id.folio_canonico = e.folio_canonico
-    LEFT JOIN catalogo_paquetes cp ON UPPER(TRIM(e.plan)) = UPPER(TRIM(cp.nombre_plan))
-    WHERE e.periodo_key IS NOT NULL
+        vb.distrito,
+        vb.lider,
+        vb.coach,
+        vb.coach_pos,
+        vb.vendedor,
+        vb.folio_empleado,
+        vb.antiguedad,
+        CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END AS semana,
+        COUNT(DISTINCT i.cuenta) AS ventas,
+        COUNT(DISTINCT CASE
+                WHEN {$cond_mix_actual}
+                 AND cp.play = 'TRIPLE PLAY'
+                THEN i.cuenta ELSE NULL END) AS triple_play,
+        COUNT(DISTINCT CASE
+                WHEN {$cond_mix_actual}
+                 AND cp.play = 'DOBLE PLAY'
+                THEN i.cuenta ELSE NULL END) AS doble_play,
+        COUNT(DISTINCT CASE
+                WHEN {$cond_mix_actual}
+                 AND cp.tipo = 'NEGOCIOS'
+                THEN i.cuenta ELSE NULL END) AS negocios,
+        COUNT(DISTINCT CASE
+                WHEN {$cond_mix_actual}
+                 AND cp.tipo = 'RESIDENCIAL'
+                THEN i.cuenta ELSE NULL END) AS residencial
+
+    FROM vendedores_base vb
+    LEFT JOIN instalaciones i
+        ON (i.folio_empleado = vb.folio_empleado OR i.folio_empleado = vb.folio_original OR i.folio_empleado = vb.folio_anterior OR i.folio_empleado = vb.folio_nuevo)
+       AND (
+            ({$cond_i_base})
+         OR ({$cond_i_actual})
+       )
+    LEFT JOIN catalogo_paquetes cp
+        ON UPPER(TRIM(i.plan)) = UPPER(TRIM(cp.nombre_plan))
     GROUP BY
-        e.distrito, e.lider, e.coach, e.coach_pos,
-        COALESCE(id.vendedor, CONCAT('FOLIO ', COALESCE(NULLIF(e.folio_canonico,''),'SIN FOLIO'))),
-        COALESCE(NULLIF(e.folio_canonico,''), e.folio_original),
-        id.fecha_alta,
-        e.periodo_key
+        vb.distrito,
+        vb.lider,
+        vb.coach,
+        vb.coach_pos,
+        vb.vendedor,
+        vb.folio_empleado,
+        vb.antiguedad,
+        CASE WHEN {$cond_i_base} THEN {$semana_base} WHEN {$cond_i_actual} THEN {$semana_actual} ELSE NULL END
 )
 SELECT
-    distrito, lider, coach, coach_pos, vendedor, folio_empleado, antiguedad,
-    semana, ventas, triple_play, doble_play, negocios, residencial
+    distrito,
+    lider,
+    coach,
+    coach_pos,
+    vendedor,
+    folio_empleado,
+    antiguedad,
+    semana,
+    ventas,
+    triple_play,
+    doble_play,
+    negocios,
+    residencial
 FROM ventas_vendedor
 ORDER BY vendedor ASC, semana ASC
 ";
@@ -2291,17 +2270,15 @@ $total_coach = 0;
 $mejor_vendedor = '';
 $mejor_total = -1;
 foreach ($coach_matrix as $v) {
-    // KPI del Coach = únicamente periodo ACTUAL; BASE sólo sirve para comparativo.
-    $ventas_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
-    $total_coach += $ventas_actual_v;
-    if ($ventas_actual_v > $mejor_total) {
-        $mejor_total = $ventas_actual_v;
+    $total_coach += (int)$v['total'];
+    if ((int)$v['total'] > $mejor_total) {
+        $mejor_total = (int)$v['total'];
         $mejor_vendedor = $v['vendedor'];
     }
 }
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
+    <div class="card"><div class="label">Ventas acumuladas del coach</div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Semana 1 a <?= h($label_periodo_actual) ?></div></div>
     <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura <?= h($label_col_base) ?> o <?= h($label_col_actual) ?></div></div>
     <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> ventas</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
