@@ -1,6 +1,44 @@
 
 
 <?php
+/*
+ * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
+ * ============================================================================
+ * Este archivo concentra la navegación temporal y el drill-down Líder > Coach
+ * > Vendedor. Los cambios recientes NO deben interpretarse como simples aliases
+ * de nombres: separan identidad de colaborador, estructura organizacional y
+ * fecha real del evento para conservar correctamente el histórico.
+ *
+ * Reglas canónicas consolidadas esta semana:
+ * 1) IDENTIDAD: folio/talento + historial_identidad_colaborador (HIC) se usan
+ *    para dar continuidad a la MISMA persona cuando cambia su identificador.
+ *    HIC no debe enlazar personas distintas que ocuparon la misma plaza.
+ * 2) ESTRUCTURA: id_posicion / posicion_lr permiten reconstruir Líder > Coach
+ *    cuando los nombres de línea de reporte vienen desactualizados o VACANTE.
+ *    Caso de referencia: continuidad estructural Jovany -> Mercy en plaza líder.
+ * 3) EVENTO HISTÓRICO: en mensual, una instalación conserva primero la
+ *    atribución válida registrada en instalaciones en la fecha del evento.
+ *    Un snapshot HC posterior no debe reescribir ventas históricas.
+ * 4) FALLBACK: HC/HIC completa atribución cuando el evento no trae estructura
+ *    suficiente; nunca debe sustituir una atribución directa válida.
+ * 5) DRILL-DOWN Coach > Vendedor: el universo nace de las instalaciones del
+ *    periodo (event-first), no únicamente de la plantilla HC de cierre. Esto
+ *    evita perder vendedores que cambiaron de coach durante el mes.
+ * 6) DEDUPLICACIÓN: coaches_match desacopla la estructura semanal del matching
+ *    comercial para evitar duplicar instalaciones al comparar dos periodos.
+ * 7) PERFORMANCE: los rangos de instalaciones son sargables por fecha y las
+ *    vistas mensuales preagregan antes de cruzar HC/HIC para evitar 504.
+ *
+ * Navegación mensual (Oct-2026):
+ * - El calendario permite moverse al mes anterior/siguiente desde el propio
+ *   selector y conservar el tipo de comparación/rango seleccionado.
+ * - Un rango custom permanece dentro de un solo mes. BASE es automáticamente
+ *   el mismo rango de días del mes inmediato anterior, ajustado si ese mes tiene
+ *   menos días.
+ * - "Mes completo" conserva la comparación mes completo vs mes completo; para
+ *   el último mes con datos se limita al último día realmente cargado.
+ * ============================================================================
+ */
 ini_set('display_errors', 0);
 error_reporting(0);
 header("Cache-Control: no-cache, no-store, must-revalidate");
@@ -320,6 +358,9 @@ if ($anio_mes_actual > $ultimo_anio_datos || ($anio_mes_actual == $ultimo_anio_d
     $mes_actual = $ultimo_mes_datos;
 }
 
+// PERIODO BASE mensual: siempre es el mes calendario inmediatamente anterior
+// al mes que el usuario está visualizando/seleccionando en el calendario.
+// El rango de días se homologa más abajo (ej. SEP 1-5 vs OCT 1-5).
 $mes_base = $mes_actual - 1;
 $anio_mes_base = $anio_mes_actual;
 if ($mes_base < 1) {
@@ -2053,7 +2094,46 @@ include __DIR__ . '/../includes/sidebar.php';
                             <input type="hidden" name="dia_inicio" id="diaInicioInput" value="<?= h($dia_inicio_actual) ?>">
                             <input type="hidden" name="dia_fin" id="diaFinInput" value="<?= h($dia_fin_actual) ?>">
 
-                            <div class="range-panel-title">Selecciona rango de <?= h($meses_es[$mes_actual]) ?> <?= h($anio_mes_actual) ?></div>
+                            <?php
+                                // Navegación DENTRO del calendario. A diferencia de las flechas externas,
+                                // conserva el modo actual (custom/completo) y el rango de días cuando aplica.
+                                $calendar_prev_params = array_merge($_GET, [
+                                    'periodo'=>'mensual',
+                                    'anio_mes'=>$prev_anio_mes_nav,
+                                    'mes'=>$prev_mes_nav,
+                                    'rango_mode'=>$rango_mode,
+                                    'fecha_inicio'=>null,
+                                    'fecha_fin'=>null
+                                ]);
+                                $calendar_next_params = array_merge($_GET, [
+                                    'periodo'=>'mensual',
+                                    'anio_mes'=>$next_anio_mes_nav,
+                                    'mes'=>$next_mes_nav,
+                                    'rango_mode'=>$rango_mode,
+                                    'fecha_inicio'=>null,
+                                    'fecha_fin'=>null
+                                ]);
+                                if ($rango_mode === 'custom') {
+                                    $calendar_prev_params['dia_inicio'] = $dia_inicio_actual;
+                                    $calendar_prev_params['dia_fin'] = $dia_fin_actual;
+                                    $calendar_next_params['dia_inicio'] = $dia_inicio_actual;
+                                    $calendar_next_params['dia_fin'] = $dia_fin_actual;
+                                } elseif ($rango_mode === 'completo') {
+                                    $calendar_prev_params['dia_inicio'] = null;
+                                    $calendar_prev_params['dia_fin'] = null;
+                                    $calendar_next_params['dia_inicio'] = null;
+                                    $calendar_next_params['dia_fin'] = null;
+                                }
+                            ?>
+                            <div class="range-panel-title" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                                <a class="calendar-month-nav" href="?<?= qs($calendar_prev_params) ?>" title="Mes anterior" style="text-decoration:none;font-weight:800;font-size:20px;line-height:1;">‹</a>
+                                <span>Selecciona rango de <?= h($meses_es[$mes_actual]) ?> <?= h($anio_mes_actual) ?></span>
+                                <?php if ($has_next_month): ?>
+                                    <a class="calendar-month-nav" href="?<?= qs($calendar_next_params) ?>" title="Mes siguiente" style="text-decoration:none;font-weight:800;font-size:20px;line-height:1;">›</a>
+                                <?php else: ?>
+                                    <span class="calendar-month-nav" aria-disabled="true" style="opacity:.25;font-weight:800;font-size:20px;line-height:1;">›</span>
+                                <?php endif; ?>
+                            </div>
                             <div class="calendar-grid-real" id="calendarGrid"
      data-days="<?= h($ultimo_dia_actual) ?>"
      data-start="<?= h($dia_inicio_actual) ?>"
@@ -2598,7 +2678,7 @@ recalc();
         });
 
         if(summary){
-            summary.textContent = 'Rango seleccionado: día ' + start + ' al ' + end;
+            summary.textContent = '<?= h($meses_es[$mes_base]) ?> ' + Math.min(start, <?= (int)$ultimo_dia_base ?>) + '-' + Math.min(end, <?= (int)$ultimo_dia_base ?>) + ' vs <?= h($meses_es[$mes_actual]) ?> ' + start + '-' + end;
         }
     }
 
