@@ -605,22 +605,6 @@ $cond_i_base = "i.fecha BETWEEN '{$fecha_inicio_base_sql}' AND '{$fecha_fin_base
 $cond_i_actual = "i.fecha BETWEEN '{$fecha_inicio_actual_sql}' AND '{$fecha_fin_actual_sql}'"
     . ($periodo === 'semanal' ? " AND DAYOFWEEK(i.fecha) IN ({$dias_semana_mysql_in})" : "");
 
-/*
- * FIX temporal mensual HIC-Fallback v2.1
- * --------------------------------------
- * En mensual, la atribucion directa registrada en instalaciones tiene prioridad.
- * El fallback por HC/HIC solo entra cuando el coach no tiene atribucion directa
- * en el periodo. Esto evita que el snapshot HC del cierre reasigne hacia atras
- * ventas historicas de vendedores que cambiaron de coach durante el mes.
- * En semanal se conserva GREATEST() para no alterar el comportamiento validado.
- */
-$venta_base_expr = ($periodo === 'mensual')
-    ? "CASE WHEN COALESCE(vb.ins_sem_base,0) > 0 THEN COALESCE(vb.ins_sem_base,0) ELSE COALESCE(vbh.ins_sem_base_hc,0) END"
-    : "GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))";
-$venta_actual_expr = ($periodo === 'mensual')
-    ? "CASE WHEN COALESCE(va.ins_sem_actual,0) > 0 THEN COALESCE(va.ins_sem_actual,0) ELSE COALESCE(vah.ins_sem_actual_hc,0) END"
-    : "GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0))";
-
 $cond_ibase = "ibase.fecha BETWEEN '{$fecha_inicio_base_sql}' AND '{$fecha_fin_base_sql}'"
     . ($periodo === 'semanal' ? " AND DAYOFWEEK(ibase.fecha) IN ({$dias_semana_mysql_in})" : "");
 
@@ -928,8 +912,8 @@ ventas_lider AS (
         la.distrito_reporte AS distrito,
         la.lider_hc AS entidad,
         la.lider_hc AS lider,
-        COALESCE(SUM({$venta_base_expr}),0) AS ins_sem_base,
-        COALESCE(SUM({$venta_actual_expr}),0) AS ins_sem_actual
+        COALESCE(SUM(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))),0) AS ins_sem_base,
+        COALESCE(SUM(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0))),0) AS ins_sem_actual
     FROM lideres_activos la
     LEFT JOIN coaches_match c
       ON c.distrito=la.distrito_reporte AND c.lider=la.lider_hc
@@ -1286,10 +1270,10 @@ SELECT
     h.coach,
     h.coach_pos,
     '' AS folio_empleado,
-    {$venta_base_expr} AS ins_sem_base,
-    {$venta_actual_expr} AS ins_sem_actual,
-    {$venta_actual_expr} - {$venta_base_expr} AS dif,
-    ROUND((({$venta_actual_expr} - {$venta_base_expr}) / NULLIF({$venta_base_expr},0)) * 100,0) AS pct_dif,
+    GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) AS ins_sem_base,
+    GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) AS ins_sem_actual,
+    GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) - GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) AS dif,
+    ROUND(((GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) - GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))) / NULLIF(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)),0)) * 100,0) AS pct_dif,
     h.hc_activo_base,
     h.hc_activo_actual,
     h.hc_con_ins_base,
@@ -1298,8 +1282,8 @@ SELECT
     h.hc_activo_actual - h.hc_con_ins_actual AS hc_sin_venta_actual,
     ROUND(((h.hc_activo_base - h.hc_con_ins_base) / NULLIF(h.hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
     ROUND(((h.hc_activo_actual - h.hc_con_ins_actual) / NULLIF(h.hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
-    ROUND({$venta_base_expr} / NULLIF(h.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
-    ROUND({$venta_actual_expr} / NULLIF(h.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
+    ROUND(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) / NULLIF(h.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
+    ROUND(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) / NULLIF(h.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
     h.hc_activo_base AS activo_base,
     h.vacante_base,
     h.hc_activo_base + h.vacante_base AS hc_total_base,
@@ -1312,8 +1296,8 @@ LEFT JOIN ventas_actual va ON h.coach_key = va.coach_key
 LEFT JOIN ventas_base_hc vbh ON h.coach_key = vbh.coach_key
 LEFT JOIN ventas_actual_hc vah ON h.coach_key = vah.coach_key
 WHERE
-       {$venta_base_expr} > 0
-    OR {$venta_actual_expr} > 0
+       GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) > 0
+    OR GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) > 0
     OR COALESCE(h.hc_activo_base + h.vacante_base,0) > 0
     OR COALESCE(h.hc_activo_actual + h.vacante_actual,0) > 0
 ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
@@ -1582,8 +1566,8 @@ total_lider AS (
 ),
 matched_lider AS (
     SELECT
-        COALESCE(SUM({$venta_base_expr}), 0) AS matched_base,
-        COALESCE(SUM({$venta_actual_expr}), 0) AS matched_actual
+        COALESCE(SUM(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))), 0) AS matched_base,
+        COALESCE(SUM(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0))), 0) AS matched_actual
     FROM resumen r
     LEFT JOIN ventas_base vb ON r.coach_key = vb.coach_key
     LEFT JOIN ventas_actual va ON r.coach_key = va.coach_key
@@ -1608,10 +1592,10 @@ FROM (
         r.coach,
         r.coach_pos,
         '' AS folio_empleado,
-        {$venta_base_expr} AS ins_sem_base,
-        {$venta_actual_expr} AS ins_sem_actual,
-        {$venta_actual_expr} - {$venta_base_expr} AS dif,
-        ROUND((({$venta_actual_expr} - {$venta_base_expr}) / NULLIF({$venta_base_expr},0)) * 100,0) AS pct_dif,
+        GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) AS ins_sem_base,
+        GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) AS ins_sem_actual,
+        GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) - GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) AS dif,
+        ROUND(((GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) - GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0))) / NULLIF(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)),0)) * 100,0) AS pct_dif,
         r.hc_activo_base,
         r.hc_activo_actual,
         r.hc_con_ins_base,
@@ -1620,8 +1604,8 @@ FROM (
         r.hc_activo_actual - r.hc_con_ins_actual AS hc_sin_venta_actual,
         ROUND(((r.hc_activo_base - r.hc_con_ins_base) / NULLIF(r.hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
         ROUND(((r.hc_activo_actual - r.hc_con_ins_actual) / NULLIF(r.hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
-        ROUND({$venta_base_expr} / NULLIF(r.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
-        ROUND({$venta_actual_expr} / NULLIF(r.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
+        ROUND(GREATEST(COALESCE(vb.ins_sem_base,0), COALESCE(vbh.ins_sem_base_hc,0)) / NULLIF(r.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
+        ROUND(GREATEST(COALESCE(va.ins_sem_actual,0), COALESCE(vah.ins_sem_actual_hc,0)) / NULLIF(r.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
         r.hc_activo_base AS activo_base,
         r.vacante_base,
         r.hc_activo_base + r.vacante_base AS hc_total_base,
