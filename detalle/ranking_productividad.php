@@ -29,6 +29,14 @@
  * 7) PERFORMANCE: los rangos de instalaciones son sargables por fecha y las
  *    vistas mensuales preagregan antes de cruzar HC/HIC para evitar 504.
  *
+ * Selector continuo de fechas — alcance funcional #1 a #5:
+ * 1) Muestra días adyacentes del mes anterior/siguiente dentro de la cuadrícula.
+ * 2) Esos días adyacentes son seleccionables como fechas reales.
+ * 3) Permite un rango ACTUAL que cruce meses/años sin partirlo artificialmente.
+ * 4) BASE = un mes calendario antes del inicio ACTUAL + misma duración exacta.
+ * 5) Etiquetas/encabezados muestran el rango real; "Mes completo" sigue siendo
+ *    una acción independiente y conserva mes completo vs mes completo.
+ *
  * Navegación mensual (Oct-2026):
  * - El calendario permite moverse al mes anterior/siguiente desde el propio
  *   selector y conservar el tipo de comparación/rango seleccionado.
@@ -450,9 +458,8 @@ if ($periodo === 'mensual') {
 }
 
 // Corte operativo por default: día vencido del calendario actual.
-// Aplica también cuando navegas meses anteriores.
-// Ejemplo si hoy es 19: Abril default = 1-18.
-// Si el mes seleccionado tiene menos días, se ajusta al último día del mes.
+// El calendario mensual trabaja ahora con FECHAS REALES, no sólo con números de día.
+// Esto permite seleccionar rangos continuos que crucen meses (ej. 28-SEP -> 05-OCT).
 $dia_default_mensual = (int)date('j', strtotime('-1 day'));
 $dia_default_mensual = min(
     $dia_default_mensual,
@@ -462,101 +469,92 @@ $dia_default_mensual = min(
 $ultimo_dia_base = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_base, $mes_base)));
 $ultimo_dia_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)));
 
-// El input se limita al mes seleccionado actual.
-// El mes base se ajusta automáticamente con MIN() si tiene menos días.
-// Ejemplo: Mar 1-31 vs Feb 1-28.
 $rango_mode = $_GET['rango_mode'] ?? 'mtd';
 if (!in_array($rango_mode, ['mtd','completo','custom'], true)) $rango_mode = 'mtd';
 
-// Mes completo siempre debe ignorar cualquier rango manual heredado en la URL.
+// Mes completo ignora cualquier selección manual heredada.
 if ($rango_mode === 'completo') {
     unset($_GET['dia_inicio'], $_GET['dia_fin'], $_GET['fecha_inicio'], $_GET['fecha_fin']);
 }
 
-$fecha_inicio_actual = sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual);
-$fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_default_mensual);
-
 if ($rango_mode === 'completo') {
-    // Mes completo real para cada mes histórico:
-    // Ejemplo Abril completo => Marzo 1-31 vs Abril 1-30.
-    // Si el mes seleccionado es el último mes con datos, se limita al último día cargado para no ir al futuro.
-    $dia_inicio_mensual = 1;
-
+    // "Mes completo": mes seleccionado vs mes calendario inmediato anterior.
+    // Para el último mes con datos, ACTUAL se limita al último día realmente cargado.
+    $fecha_inicio_actual = sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual);
     $dia_fin_actual_completo = $ultimo_dia_actual;
     if ($anio_mes_actual == $ultimo_anio_datos && $mes_actual == $ultimo_mes_datos && !empty($row_ultima_fecha['ultima_fecha'])) {
         $dia_fin_actual_completo = min($ultimo_dia_actual, (int)date('j', strtotime($row_ultima_fecha['ultima_fecha'])));
     }
+    $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_fin_actual_completo);
 
-    $dia_inicio_base = 1;
-    $dia_fin_base = $ultimo_dia_base;
+    $fecha_inicio_base = sprintf('%04d-%02d-01', $anio_mes_base, $mes_base);
+    $fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $ultimo_dia_base);
+} elseif ($rango_mode === 'custom' && !empty($_GET['fecha_inicio']) && !empty($_GET['fecha_fin'])) {
+    // RANGO CONTINUO:
+    // 1) Se respetan las fechas exactas elegidas, incluso si cruzan mes/año.
+    // 2) BASE inicia un mes calendario antes del inicio ACTUAL.
+    // 3) BASE conserva exactamente la misma cantidad de días calendario.
+    //    Ej.: 28-SEP -> 05-OCT (8 días) => 28-AGO -> 04-SEP (8 días).
+    $fi = DateTime::createFromFormat('!Y-m-d', (string)$_GET['fecha_inicio']);
+    $ff = DateTime::createFromFormat('!Y-m-d', (string)$_GET['fecha_fin']);
 
-    $dia_inicio_actual = 1;
-    $dia_fin_actual = $dia_fin_actual_completo;
-    $dia_fin_mensual = $dia_fin_actual_completo;
+    if (!$fi || !$ff) {
+        $fi = new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual));
+        $ff = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_default_mensual));
+    }
+    if ($fi > $ff) {
+        $tmp = $fi; $fi = $ff; $ff = $tmp;
+    }
+
+    // No permitir seleccionar fechas posteriores al último dato cargado.
+    $maxFechaDatos = !empty($row_ultima_fecha['ultima_fecha'])
+        ? new DateTime($row_ultima_fecha['ultima_fecha'])
+        : new DateTime(sprintf('%04d-%02d-%02d', $ultimo_anio_datos, $ultimo_mes_datos, $ultimo_dia_actual));
+    if ($ff > $maxFechaDatos) $ff = clone $maxFechaDatos;
+    if ($fi > $ff) $fi = clone $ff;
+
+    $fecha_inicio_actual = $fi->format('Y-m-d');
+    $fecha_fin_actual = $ff->format('Y-m-d');
+
+    $duracion_rango_dias = (int)$fi->diff($ff)->days + 1;
+
+    // Subtract-month seguro: conserva el día cuando existe; si no, usa último día del mes BASE.
+    $baseYear = (int)$fi->format('Y');
+    $baseMonth = (int)$fi->format('n') - 1;
+    if ($baseMonth < 1) { $baseMonth = 12; $baseYear--; }
+    $baseLastDay = (int)date('t', strtotime(sprintf('%04d-%02d-01', $baseYear, $baseMonth)));
+    $baseDay = min((int)$fi->format('j'), $baseLastDay);
+
+    $baseIni = new DateTime(sprintf('%04d-%02d-%02d', $baseYear, $baseMonth, $baseDay));
+    $baseFin = clone $baseIni;
+    if ($duracion_rango_dias > 1) $baseFin->modify('+'.($duracion_rango_dias - 1).' days');
+
+    $fecha_inicio_base = $baseIni->format('Y-m-d');
+    $fecha_fin_base = $baseFin->format('Y-m-d');
 } else {
-    if ($rango_mode !== 'custom') {
-        $_GET['dia_inicio'] = 1;
-        $_GET['dia_fin'] = $dia_default_mensual;
-    }
+    // MTD/default: conserva el comportamiento operativo existente.
+    $fecha_inicio_actual = sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual);
+    $fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_default_mensual);
 
-    if ($rango_mode === 'custom' && !empty($_GET['fecha_inicio']) && !empty($_GET['fecha_fin'])) {
-        $fi = DateTime::createFromFormat('Y-m-d', $_GET['fecha_inicio']);
-        $ff = DateTime::createFromFormat('Y-m-d', $_GET['fecha_fin']);
+    $fi = new DateTime($fecha_inicio_actual);
+    $ff = new DateTime($fecha_fin_actual);
+    $duracion_rango_dias = (int)$fi->diff($ff)->days + 1;
 
-        if ($fi && $ff) {
-            // Solo se toma el día elegido; el mes/año activo se controla con el selector mensual.
-            $dia_inicio_mensual = (int)$fi->format('j');
-            $dia_fin_mensual = (int)$ff->format('j');
-        } else {
-            $dia_inicio_mensual = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
-            $dia_fin_mensual = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_default_mensual;
-        }
-    } else {
-        $dia_inicio_mensual = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
-        $dia_fin_mensual = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_default_mensual;
-    }
+    $baseIni = new DateTime(sprintf('%04d-%02d-01', $anio_mes_base, $mes_base));
+    $baseFin = clone $baseIni;
+    if ($duracion_rango_dias > 1) $baseFin->modify('+'.($duracion_rango_dias - 1).' days');
 
-    $dia_inicio_mensual = max(1, min($ultimo_dia_actual, $dia_inicio_mensual));
-    $dia_fin_mensual = max(1, min($ultimo_dia_actual, $dia_fin_mensual));
-
-    if ($dia_inicio_mensual > $dia_fin_mensual) {
-        $tmp_dia = $dia_inicio_mensual;
-        $dia_inicio_mensual = $dia_fin_mensual;
-        $dia_fin_mensual = $tmp_dia;
-    }
-
-    $dia_inicio_actual = min($dia_inicio_mensual, $ultimo_dia_actual);
-    $dia_fin_actual = min($dia_fin_mensual, $ultimo_dia_actual);
-
-    // Regla canónica de rango comparable:
-    // 1) BASE inicia exactamente un mes antes del inicio ACTUAL.
-    // 2) Si ese día no existe en el mes BASE, usar su último día válido.
-    // 3) Conservar EXACTAMENTE la misma cantidad de días calendario que ACTUAL.
-    //    Ej.: ACTUAL 31-MAR a 05-ABR (6 días) => BASE 28-FEB a 05-MAR.
-    $fecha_actual_inicio_tmp = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_inicio_actual));
-    $fecha_actual_fin_tmp = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_fin_actual));
-    $duracion_rango_dias = (int)$fecha_actual_inicio_tmp->diff($fecha_actual_fin_tmp)->days + 1;
-
-    $dia_inicio_base = min($dia_inicio_actual, $ultimo_dia_base);
-    $fecha_base_inicio_tmp = new DateTime(sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base));
-    $fecha_base_fin_tmp = clone $fecha_base_inicio_tmp;
-    if ($duracion_rango_dias > 1) {
-        $fecha_base_fin_tmp->modify('+'.($duracion_rango_dias - 1).' days');
-    }
-    $dia_fin_base = (int)$fecha_base_fin_tmp->format('j');
+    $fecha_inicio_base = $baseIni->format('Y-m-d');
+    $fecha_fin_base = $baseFin->format('Y-m-d');
 }
 
-$fecha_inicio_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_inicio_actual);
-$fecha_fin_actual = sprintf('%04d-%02d-%02d', $anio_mes_actual, $mes_actual, $dia_fin_actual);
-
-if ($rango_mode === 'completo') {
-    $fecha_inicio_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_inicio_base);
-    $fecha_fin_base = sprintf('%04d-%02d-%02d', $anio_mes_base, $mes_base, $dia_fin_base);
-} else {
-    // Para custom/MTD, las fechas BASE ya fueron calculadas conservando duración.
-    $fecha_inicio_base = $fecha_base_inicio_tmp->format('Y-m-d');
-    $fecha_fin_base = $fecha_base_fin_tmp->format('Y-m-d');
-}
+// Variables de compatibilidad usadas por UI/navegación existente.
+$dia_inicio_actual = (int)date('j', strtotime($fecha_inicio_actual));
+$dia_fin_actual = (int)date('j', strtotime($fecha_fin_actual));
+$dia_inicio_base = (int)date('j', strtotime($fecha_inicio_base));
+$dia_fin_base = (int)date('j', strtotime($fecha_fin_base));
+$dia_inicio_mensual = $dia_inicio_actual;
+$dia_fin_mensual = $dia_fin_actual;
 
 $dias_semana_labels = [
     1 => 'LUN',
@@ -2030,6 +2028,17 @@ if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
 
 /* Calendario mensual: lunes = 1, domingo = 7 */
 $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)))->format('N');
+
+// Calendario continuo de 6 semanas: incluye días visibles del mes anterior/siguiente.
+// Los días adyacentes son seleccionables y conservan su fecha real.
+$calendar_month_first = new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual));
+$calendar_grid_start = clone $calendar_month_first;
+$calendar_grid_start->modify('-'.($primer_dia_semana - 1).' days');
+$calendar_grid_end = clone $calendar_grid_start;
+$calendar_grid_end->modify('+41 days');
+$calendar_max_date = !empty($row_ultima_fecha['ultima_fecha'])
+    ? $row_ultima_fecha['ultima_fecha']
+    : sprintf('%04d-%02d-%02d', $ultimo_anio_datos, $ultimo_mes_datos, $ultimo_dia_actual);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -2038,6 +2047,16 @@ $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= h($title_label) ?> — TOTALXPEDIENT</title>
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
+
+<style>
+/* Calendario continuo: los días adyacentes siguen siendo seleccionables. */
+body.page-ranking .calendar-day.adjacent-month { opacity:.48; }
+body.page-ranking .calendar-day.adjacent-month.selected-start,
+body.page-ranking .calendar-day.adjacent-month.selected-end,
+body.page-ranking .calendar-day.adjacent-month.in-range { opacity:1; }
+body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed; }
+</style>
+
 </head>
 <body class="page-ranking">
 <?php
@@ -2129,6 +2148,8 @@ include __DIR__ . '/../includes/sidebar.php';
                                 <?php endif; ?>
                             <?php endforeach; ?>
                             <input type="hidden" name="rango_mode" value="custom">
+                            <input type="hidden" name="fecha_inicio" id="fechaInicioInput" value="<?= h($fecha_inicio_actual) ?>">
+                            <input type="hidden" name="fecha_fin" id="fechaFinInput" value="<?= h($fecha_fin_actual) ?>">
                             <input type="hidden" name="dia_inicio" id="diaInicioInput" value="<?= h($dia_inicio_actual) ?>">
                             <input type="hidden" name="dia_fin" id="diaFinInput" value="<?= h($dia_fin_actual) ?>">
 
@@ -2139,24 +2160,15 @@ include __DIR__ . '/../includes/sidebar.php';
                                     'periodo'=>'mensual',
                                     'anio_mes'=>$prev_anio_mes_nav,
                                     'mes'=>$prev_mes_nav,
-                                    'rango_mode'=>$rango_mode,
-                                    'fecha_inicio'=>null,
-                                    'fecha_fin'=>null
+                                    'rango_mode'=>$rango_mode
                                 ]);
                                 $calendar_next_params = array_merge($_GET, [
                                     'periodo'=>'mensual',
                                     'anio_mes'=>$next_anio_mes_nav,
                                     'mes'=>$next_mes_nav,
-                                    'rango_mode'=>$rango_mode,
-                                    'fecha_inicio'=>null,
-                                    'fecha_fin'=>null
+                                    'rango_mode'=>$rango_mode
                                 ]);
-                                if ($rango_mode === 'custom') {
-                                    $calendar_prev_params['dia_inicio'] = $dia_inicio_actual;
-                                    $calendar_prev_params['dia_fin'] = $dia_fin_actual;
-                                    $calendar_next_params['dia_inicio'] = $dia_inicio_actual;
-                                    $calendar_next_params['dia_fin'] = $dia_fin_actual;
-                                } elseif ($rango_mode === 'completo') {
+                                if ($rango_mode === 'completo') {
                                     $calendar_prev_params['dia_inicio'] = null;
                                     $calendar_prev_params['dia_fin'] = null;
                                     $calendar_next_params['dia_inicio'] = null;
@@ -2173,9 +2185,10 @@ include __DIR__ . '/../includes/sidebar.php';
                                 <?php endif; ?>
                             </div>
                             <div class="calendar-grid-real" id="calendarGrid"
-     data-days="<?= h($ultimo_dia_actual) ?>"
-     data-start="<?= h($dia_inicio_actual) ?>"
-     data-end="<?= h($dia_fin_actual) ?>">
+     data-start-date="<?= h($fecha_inicio_actual) ?>"
+     data-end-date="<?= h($fecha_fin_actual) ?>"
+     data-display-year="<?= h($anio_mes_actual) ?>"
+     data-display-month="<?= h($mes_actual) ?>">
 
     <div class="calendar-weekday">Lun</div>
     <div class="calendar-weekday">Mar</div>
@@ -2185,36 +2198,31 @@ include __DIR__ . '/../includes/sidebar.php';
     <div class="calendar-weekday">Sáb</div>
     <div class="calendar-weekday">Dom</div>
 
-    <?php for ($i = 1; $i < $primer_dia_semana; $i++): ?>
-        <div class="calendar-empty"></div>
-    <?php endfor; ?>
-
-    <?php for ($d = 1; $d <= $ultimo_dia_actual; $d++): ?>
-        <?php
+    <?php
+        $calendar_cursor = clone $calendar_grid_start;
+        for ($cell = 0; $cell < 42; $cell++):
+            $cell_date = $calendar_cursor->format('Y-m-d');
+            $cell_day = (int)$calendar_cursor->format('j');
+            $cell_month = (int)$calendar_cursor->format('n');
             $classes = [];
-
-            if ($d == $dia_inicio_actual) {
-                $classes[] = 'selected-start';
-            }
-
-            if ($d == $dia_fin_actual) {
-                $classes[] = 'selected-end';
-            }
-
-            if ($d > $dia_inicio_actual && $d < $dia_fin_actual) {
-                $classes[] = 'in-range';
-            }
-        ?>
-
+            if ($cell_month !== $mes_actual) $classes[] = 'adjacent-month';
+            if ($cell_date === $fecha_inicio_actual) $classes[] = 'selected-start';
+            if ($cell_date === $fecha_fin_actual) $classes[] = 'selected-end';
+            if ($cell_date > $fecha_inicio_actual && $cell_date < $fecha_fin_actual) $classes[] = 'in-range';
+            $disabled = ($cell_date > $calendar_max_date);
+            if ($disabled) $classes[] = 'disabled-date';
+    ?>
         <button
             type="button"
             class="calendar-day <?= h(implode(' ', $classes)) ?>"
-            data-day="<?= h($d) ?>"
-        >
-            <?= h($d) ?>
-        </button>
-    <?php endfor; ?>
-
+            data-date="<?= h($cell_date) ?>"
+            data-day="<?= h($cell_day) ?>"
+            <?= $disabled ? 'disabled' : '' ?>
+        ><?= h($cell_day) ?></button>
+    <?php
+            $calendar_cursor->modify('+1 day');
+        endfor;
+    ?>
 </div>
 
                             <div class="range-summary">
@@ -2693,67 +2701,83 @@ recalc();
     const trigger = document.getElementById('rangeTrigger');
     const panel = document.getElementById('rangePanel');
     const grid = document.getElementById('calendarGrid');
-    const startInput = document.getElementById('diaInicioInput');
-    const endInput = document.getElementById('diaFinInput');
+    const startDateInput = document.getElementById('fechaInicioInput');
+    const endDateInput = document.getElementById('fechaFinInput');
+    const startDayInput = document.getElementById('diaInicioInput');
+    const endDayInput = document.getElementById('diaFinInput');
     const summary = document.getElementById('rangeSummary');
 
-    if(!dropdown || !trigger || !grid || !startInput || !endInput) return;
+    if(!dropdown || !trigger || !grid || !startDateInput || !endDateInput) return;
 
-    let start = parseInt(grid.dataset.start || startInput.value || '1', 10);
-    let end = parseInt(grid.dataset.end || endInput.value || start, 10);
+    let start = grid.dataset.startDate || startDateInput.value;
+    let end = grid.dataset.endDate || endDateInput.value || start;
     let clickMode = 'start';
+    const meses = <?= json_encode(array_values($meses_es), JSON_UNESCAPED_UNICODE) ?>;
 
+    function parseLocal(iso){
+        const p = iso.split('-').map(Number);
+        return new Date(p[0], p[1]-1, p[2], 12, 0, 0);
+    }
+    function isoLocal(d){
+        const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+        return `${y}-${m}-${day}`;
+    }
+    function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+    function daysInclusive(a,b){ return Math.round((parseLocal(b)-parseLocal(a))/86400000)+1; }
+    function baseStartFor(iso){
+        const d=parseLocal(iso);
+        let y=d.getFullYear(), m=d.getMonth()-1;
+        if(m<0){m=11;y--;}
+        const last=new Date(y,m+1,0).getDate();
+        return new Date(y,m,Math.min(d.getDate(),last),12,0,0);
+    }
+    function label(a,b){
+        const x=parseLocal(a), y=parseLocal(b);
+        if(x.getFullYear()===y.getFullYear() && x.getMonth()===y.getMonth()){
+            return `${meses[x.getMonth()]} ${x.getDate()}-${y.getDate()}`;
+        }
+        return `${meses[x.getMonth()]} ${x.getDate()} - ${meses[y.getMonth()]} ${y.getDate()}`;
+    }
     function paint(){
-        if(start > end){ const t = start; start = end; end = t; }
-        startInput.value = start;
-        endInput.value = end;
+        if(start > end){ const t=start; start=end; end=t; }
+        startDateInput.value=start;
+        endDateInput.value=end;
+        if(startDayInput) startDayInput.value=parseLocal(start).getDate();
+        if(endDayInput) endDayInput.value=parseLocal(end).getDate();
 
-        grid.querySelectorAll('.calendar-day').forEach(btn=>{
-            const d = parseInt(btn.dataset.day, 10);
-            btn.classList.toggle('selected-start', d === start);
-            btn.classList.toggle('selected-end', d === end);
-            btn.classList.toggle('in-range', d > start && d < end);
+        grid.querySelectorAll('.calendar-day[data-date]').forEach(btn=>{
+            const d=btn.dataset.date;
+            btn.classList.toggle('selected-start', d===start);
+            btn.classList.toggle('selected-end', d===end);
+            btn.classList.toggle('in-range', d>start && d<end);
         });
 
         if(summary){
-            const meses = <?= json_encode(array_values($meses_es), JSON_UNESCAPED_UNICODE) ?>;
-            const baseStartDay = Math.min(start, <?= (int)$ultimo_dia_base ?>);
-            const duration = (end - start) + 1;
-            const baseStart = new Date(<?= (int)$anio_mes_base ?>, <?= (int)$mes_base - 1 ?>, baseStartDay);
-            const baseEnd = new Date(baseStart.getFullYear(), baseStart.getMonth(), baseStart.getDate() + duration - 1);
-            const baseTxt = (baseStart.getMonth() === baseEnd.getMonth() && baseStart.getFullYear() === baseEnd.getFullYear())
-                ? meses[baseStart.getMonth()] + ' ' + baseStart.getDate() + '-' + baseEnd.getDate()
-                : meses[baseStart.getMonth()] + ' ' + baseStart.getDate() + ' - ' + meses[baseEnd.getMonth()] + ' ' + baseEnd.getDate();
-            summary.textContent = baseTxt + ' vs <?= h($meses_es[$mes_actual]) ?> ' + start + '-' + end;
+            const duration=daysInclusive(start,end);
+            const bs=baseStartFor(start);
+            const be=addDays(bs,duration-1);
+            summary.textContent=label(isoLocal(bs),isoLocal(be))+' vs '+label(start,end);
         }
     }
 
-    trigger.addEventListener('click', (e)=>{
+    trigger.addEventListener('click', e=>{
         e.stopPropagation();
         dropdown.classList.toggle('open');
     });
+    panel.addEventListener('click', e=>e.stopPropagation());
+    document.addEventListener('click', ()=>dropdown.classList.remove('open'));
 
-    panel.addEventListener('click', (e)=>e.stopPropagation());
-
-    document.addEventListener('click', ()=>{
-        dropdown.classList.remove('open');
-    });
-
-    grid.querySelectorAll('.calendar-day').forEach(btn=>{
+    grid.querySelectorAll('.calendar-day[data-date]:not(:disabled)').forEach(btn=>{
         btn.addEventListener('click', ()=>{
-            const d = parseInt(btn.dataset.day, 10);
-            if(clickMode === 'start'){
-                start = d;
-                end = d;
-                clickMode = 'end';
+            const d=btn.dataset.date;
+            if(clickMode==='start'){
+                start=d; end=d; clickMode='end';
             }else{
-                end = d;
-                clickMode = 'start';
+                end=d; clickMode='start';
             }
             paint();
         });
     });
-
     paint();
 })();
 </script>
