@@ -5,6 +5,8 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+echo '<h1>TEST CERTIFICADO V3</h1>';
+exit;
 /*
  * RANKING DE PRODUCTIVIDAD — MÓDULO CERTIFICADO TalIAHierarchyResolver v1.0
  * Baseline: ranking_productividad(20261007-151622).php
