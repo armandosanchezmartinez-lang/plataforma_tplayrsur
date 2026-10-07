@@ -1742,22 +1742,23 @@ ORDER BY
 ";
 } elseif ($view === 'vendedores') {
 /*
- * PATCH GENERAL Coach -> Vendedores v1.0 (event-first)
- * ----------------------------------------------------
+ * PATCH GENERAL Coach -> Vendedores v1.1 (event-first real)
+ * ---------------------------------------------------------
  * Regla canónica:
- * 1) El universo nace de las instalaciones que YA fueron atribuidas al Coach
- *    en cada periodo (BASE / ACTUAL), no del snapshot HC del cierre.
- * 2) folio_empleado identifica al vendedor; HIC sólo unifica continuidad de
- *    identidad y HC enriquece nombre/antigüedad.
- * 3) Un cambio posterior de Coach NO reescribe ventas históricas.
- * 4) Cada cuenta se cuenta una sola vez por periodo.
- * 5) Continuidad estructural de Líder: acepta tanto el alias histórico de
- *    instalaciones (lider_instalaciones) como el ocupante HC vigente (lider_hc).
- *    Así Jovany -> Mercy conserva eventos legacy y actuales sin depender de HC.
+ * 1) El universo nace DIRECTAMENTE de instalaciones del periodo ya atribuidas
+ *    al Coach del evento. En este nivel NO se vuelve a filtrar por nombre del
+ *    Líder; la navegación Líder -> Coach ya resolvió la estructura superior.
+ * 2) Una instalación válida del Coach nunca se descarta por ausencia de HC de
+ *    la semana corriente. HC/HIC sólo resuelven/enriquecen identidad.
+ * 3) folio_empleado puede corresponder a numero_sf, numero_base_comisiones o
+ *    numero_talento_gs. Los tres identificadores son válidos.
+ * 4) HIC mantiene continuidad de la MISMA persona cuando cambia identificador.
+ * 5) Un cambio posterior de Coach NO reescribe ventas históricas.
+ * 6) Cada cuenta se cuenta una sola vez por periodo.
  *
- * Esto conserva los fixes previos en Líder/Coach (HIC-Fallback, 504,
- * coaches_match, continuidad estructural Mercy/Jovany) porque el cambio queda
- * encapsulado exclusivamente en view='vendedores'.
+ * FIX Mercy/Jovany:
+ * La continuidad de la plaza Líder 1739397 ya fue resuelta en Ranking Coach.
+ * Por ello Coach -> Vendedor no condiciona eventos a i.lider=Jovany/Mercy.
  */
 $sql = "
 WITH {$lideres_cte},
@@ -1769,13 +1770,13 @@ selected_lider AS (
 ),
 eventos_raw AS (
     SELECT DISTINCT
-        la.distrito_reporte AS distrito,
-        la.lider_hc AS lider,
+        '{$distrito_sql}' AS distrito,
+        '{$lider_sql}' AS lider,
         '{$coach_sql}' AS coach,
         '{$coach_pos_sql}' AS coach_pos,
         i.cuenta,
         i.fecha,
-        i.folio_empleado AS folio_original,
+        NULLIF(TRIM(i.folio_empleado),'') AS folio_original,
         CASE
             WHEN {$cond_i_base} THEN {$semana_base}
             WHEN {$cond_i_actual} THEN {$semana_actual}
@@ -1783,14 +1784,19 @@ eventos_raw AS (
         END AS periodo_key,
         CASE WHEN {$cond_i_actual} THEN 1 ELSE 0 END AS es_actual,
         i.plan
-    FROM selected_lider la
-    INNER JOIN instalaciones i
-        ON (
-              UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
-           OR UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_hc))
-        )
-       AND (({$cond_i_base}) OR ({$cond_i_actual}))
-       AND (
+    FROM instalaciones i
+    WHERE (({$cond_i_base}) OR ({$cond_i_actual}))
+      AND i.cuenta IS NOT NULL
+      AND i.cuenta <> ''
+      AND EXISTS (
+          SELECT 1
+          FROM selected_lider la
+          WHERE UPPER(TRIM(i.distrito)) IN (
+              UPPER(TRIM(la.distrito_reporte)),
+              UPPER(TRIM(la.distrito_hc))
+          )
+      )
+      AND (
             UPPER(TRIM(i.coach)) = UPPER(TRIM('{$coach_sql}'))
             OR (
                 UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', 1), '%')
@@ -1800,9 +1806,7 @@ eventos_raw AS (
                 UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', 2), '%')
                 AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', -2), '%')
             )
-       )
-    WHERE i.cuenta IS NOT NULL
-      AND i.cuenta <> ''
+      )
 ),
 eventos AS (
     SELECT
@@ -1814,6 +1818,20 @@ eventos AS (
                 WHERE e.folio_original = hx.numero_talento_anterior
                    OR e.folio_original = hx.numero_talento_nuevo
                 ORDER BY hx.fecha_movimiento DESC, hx.id DESC
+                LIMIT 1
+            ),''),
+            NULLIF((
+                SELECT hcanon.numero_talento_gs
+                FROM hc hcanon
+                WHERE hcanon.distrito = '{$distrito_hc_sql}'
+                  AND hcanon.numero_talento_gs <> 'VACANTE'
+                  AND hcanon.nombre_colaborador <> 'VACANTE'
+                  AND (
+                        TRIM(hcanon.numero_talento_gs) = TRIM(e.folio_original)
+                     OR TRIM(hcanon.numero_sf) = TRIM(e.folio_original)
+                     OR TRIM(hcanon.numero_base_comisiones) = TRIM(e.folio_original)
+                  )
+                ORDER BY hcanon.anio DESC, hcanon.semana DESC, hcanon.id DESC
                 LIMIT 1
             ),''),
             e.folio_original
@@ -1828,18 +1846,31 @@ identidades AS (
                 SELECT h2.nombre_colaborador
                 FROM hc h2
                 LEFT JOIN historial_identidad_colaborador hi2
-                    ON (h2.numero_talento_gs = hi2.numero_talento_anterior OR h2.numero_talento_gs = hi2.numero_talento_nuevo)
-                   AND (hi2.nombre_colaborador IS NULL OR hi2.nombre_colaborador = '' OR UPPER(TRIM(hi2.nombre_colaborador)) = UPPER(TRIM(h2.nombre_colaborador)))
+                    ON (
+                           h2.numero_talento_gs = hi2.numero_talento_anterior
+                        OR h2.numero_talento_gs = hi2.numero_talento_nuevo
+                    )
+                   AND (
+                        hi2.nombre_colaborador IS NULL
+                        OR hi2.nombre_colaborador = ''
+                        OR UPPER(TRIM(hi2.nombre_colaborador)) = UPPER(TRIM(h2.nombre_colaborador))
+                   )
                 WHERE h2.distrito = '{$distrito_hc_sql}'
                   AND h2.numero_talento_gs <> 'VACANTE'
                   AND h2.nombre_colaborador <> 'VACANTE'
                   AND (
-                        h2.numero_talento_gs = f.folio_canonico
+                        TRIM(h2.numero_talento_gs) = TRIM(f.folio_canonico)
+                     OR TRIM(h2.numero_sf) = TRIM(f.folio_canonico)
+                     OR TRIM(h2.numero_base_comisiones) = TRIM(f.folio_canonico)
                      OR h2.numero_talento_gs IN (
-                            SELECT hi3.numero_talento_anterior FROM historial_identidad_colaborador hi3 WHERE hi3.numero_talento_nuevo = f.folio_canonico
+                            SELECT hi3.numero_talento_anterior
+                            FROM historial_identidad_colaborador hi3
+                            WHERE hi3.numero_talento_nuevo = f.folio_canonico
                         )
                      OR h2.numero_talento_gs IN (
-                            SELECT hi4.numero_talento_nuevo FROM historial_identidad_colaborador hi4 WHERE hi4.numero_talento_anterior = f.folio_canonico
+                            SELECT hi4.numero_talento_nuevo
+                            FROM historial_identidad_colaborador hi4
+                            WHERE hi4.numero_talento_anterior = f.folio_canonico
                         )
                   )
                 ORDER BY h2.anio DESC, h2.semana DESC, h2.id DESC
@@ -1854,16 +1885,27 @@ identidades AS (
               AND h3.numero_talento_gs <> 'VACANTE'
               AND h3.nombre_colaborador <> 'VACANTE'
               AND (
-                    h3.numero_talento_gs = f.folio_canonico
+                    TRIM(h3.numero_talento_gs) = TRIM(f.folio_canonico)
+                 OR TRIM(h3.numero_sf) = TRIM(f.folio_canonico)
+                 OR TRIM(h3.numero_base_comisiones) = TRIM(f.folio_canonico)
                  OR h3.numero_talento_gs IN (
-                        SELECT hi5.numero_talento_anterior FROM historial_identidad_colaborador hi5 WHERE hi5.numero_talento_nuevo = f.folio_canonico
+                        SELECT hi5.numero_talento_anterior
+                        FROM historial_identidad_colaborador hi5
+                        WHERE hi5.numero_talento_nuevo = f.folio_canonico
                     )
                  OR h3.numero_talento_gs IN (
-                        SELECT hi6.numero_talento_nuevo FROM historial_identidad_colaborador hi6 WHERE hi6.numero_talento_anterior = f.folio_canonico
+                        SELECT hi6.numero_talento_nuevo
+                        FROM historial_identidad_colaborador hi6
+                        WHERE hi6.numero_talento_anterior = f.folio_canonico
                     )
               )
         ) AS fecha_alta
-    FROM (SELECT DISTINCT folio_canonico FROM eventos WHERE folio_canonico IS NOT NULL AND folio_canonico <> '') f
+    FROM (
+        SELECT DISTINCT folio_canonico
+        FROM eventos
+        WHERE folio_canonico IS NOT NULL
+          AND folio_canonico <> ''
+    ) f
 ),
 ventas_vendedor AS (
     SELECT
@@ -1887,8 +1929,10 @@ ventas_vendedor AS (
         COUNT(DISTINCT CASE WHEN e.es_actual = 1 AND cp.tipo = 'NEGOCIOS' THEN e.cuenta END) AS negocios,
         COUNT(DISTINCT CASE WHEN e.es_actual = 1 AND cp.tipo = 'RESIDENCIAL' THEN e.cuenta END) AS residencial
     FROM eventos e
-    LEFT JOIN identidades id ON id.folio_canonico = e.folio_canonico
-    LEFT JOIN catalogo_paquetes cp ON UPPER(TRIM(e.plan)) = UPPER(TRIM(cp.nombre_plan))
+    LEFT JOIN identidades id
+        ON id.folio_canonico = e.folio_canonico
+    LEFT JOIN catalogo_paquetes cp
+        ON UPPER(TRIM(e.plan)) = UPPER(TRIM(cp.nombre_plan))
     WHERE e.periodo_key IS NOT NULL
     GROUP BY
         e.distrito, e.lider, e.coach, e.coach_pos,
