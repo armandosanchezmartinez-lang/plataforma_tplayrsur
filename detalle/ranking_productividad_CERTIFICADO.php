@@ -1,10 +1,6 @@
 
 
 <?php
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 /*
  * RANKING DE PRODUCTIVIDAD — MÓDULO CERTIFICADO TalIAHierarchyResolver v1.0
  * Baseline: ranking_productividad(20261007-151622).php
@@ -54,9 +50,8 @@ error_reporting(E_ALL);
  *   el último mes con datos se limita al último día realmente cargado.
  * ============================================================================
  */
-// ini_set('display_errors', 0);
-// error_reporting(0);
-
+ini_set('display_errors', 0);
+error_reporting(0);
 header("Cache-Control: no-cache, no-store, must-revalidate");
 session_start();
 
@@ -68,8 +63,8 @@ if (!isset($_SESSION['usuario'])) {
 include '../conexion.php';
 
 // TalIAHierarchyResolver v1.0 — fuente canónica compartida.
-require_once __DIR__ . '/../includes/talia_hierarchy/lib/TaliaHierarchyResolver.php';
-$taliaHierarchyConfig = require __DIR__ . '/../includes/talia_hierarchy/config/talia_hierarchy.php';
+require_once __DIR__ . '/includes/talia_hierarchy/lib/TaliaHierarchyResolver.php';
+$taliaHierarchyConfig = require __DIR__ . '/includes/talia_hierarchy/config/talia_hierarchy.php';
 $taliaHierarchy = new TaliaHierarchyResolver($conexion, $taliaHierarchyConfig);
 
 $rol = $_SESSION['rol'] ?? 'vendedor';
@@ -1756,6 +1751,9 @@ ORDER BY
  *    identidad y HC enriquece nombre/antigüedad.
  * 3) Un cambio posterior de Coach NO reescribe ventas históricas.
  * 4) Cada cuenta se cuenta una sola vez por periodo.
+ * 5) Continuidad estructural de Líder: acepta tanto el alias histórico de
+ *    instalaciones (lider_instalaciones) como el ocupante HC vigente (lider_hc).
+ *    Así Jovany -> Mercy conserva eventos legacy y actuales sin depender de HC.
  *
  * Esto conserva los fixes previos en Líder/Coach (HIC-Fallback, 504,
  * coaches_match, continuidad estructural Mercy/Jovany) porque el cambio queda
@@ -1787,7 +1785,10 @@ eventos_raw AS (
         i.plan
     FROM selected_lider la
     INNER JOIN instalaciones i
-        ON i.lider = la.lider_instalaciones
+        ON (
+              UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
+           OR UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_hc))
+        )
        AND (({$cond_i_base}) OR ({$cond_i_actual}))
        AND (
             UPPER(TRIM(i.coach)) = UPPER(TRIM('{$coach_sql}'))
