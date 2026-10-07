@@ -1,12 +1,6 @@
 
 
 <?php
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
-
-echo '<h1>TEST CERTIFICADO V3</h1>';
-exit;
 /*
  * RANKING DE PRODUCTIVIDAD — MÓDULO CERTIFICADO TalIAHierarchyResolver v1.0
  * Baseline: ranking_productividad(20261007-151622).php
@@ -69,8 +63,8 @@ if (!isset($_SESSION['usuario'])) {
 include '../conexion.php';
 
 // TalIAHierarchyResolver v1.0 — fuente canónica compartida.
-require_once __DIR__ . '/includes/talia_hierarchy/lib/TaliaHierarchyResolver.php';
-$taliaHierarchyConfig = require __DIR__ . '/includes/talia_hierarchy/config/talia_hierarchy.php';
+require_once __DIR__ . '/../includes/talia_hierarchy/lib/TaliaHierarchyResolver.php';
+$taliaHierarchyConfig = require __DIR__ . '/../includes/talia_hierarchy/config/talia_hierarchy.php';
 $taliaHierarchy = new TaliaHierarchyResolver($conexion, $taliaHierarchyConfig);
 
 $rol = $_SESSION['rol'] ?? 'vendedor';
