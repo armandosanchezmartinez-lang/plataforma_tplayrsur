@@ -63,8 +63,8 @@ if (!isset($_SESSION['usuario'])) {
 include '../conexion.php';
 
 // TalIAHierarchyResolver v1.0 — fuente canónica compartida.
-require_once __DIR__ . '/includes/talia_hierarchy/lib/TaliaHierarchyResolver.php';
-$taliaHierarchyConfig = require __DIR__ . '/includes/talia_hierarchy/config/talia_hierarchy.php';
+require_once __DIR__ . '/../includes/talia_hierarchy/lib/TaliaHierarchyResolver.php';
+$taliaHierarchyConfig = require __DIR__ . '/../includes/talia_hierarchy/config/talia_hierarchy.php';
 $taliaHierarchy = new TaliaHierarchyResolver($conexion, $taliaHierarchyConfig);
 
 $rol = $_SESSION['rol'] ?? 'vendedor';
