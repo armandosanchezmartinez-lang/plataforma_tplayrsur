@@ -54,8 +54,9 @@ error_reporting(E_ALL);
  *   el último mes con datos se limita al último día realmente cargado.
  * ============================================================================
  */
-ini_set('display_errors', 0);
-error_reporting(0);
+// ini_set('display_errors', 0);
+// error_reporting(0);
+
 header("Cache-Control: no-cache, no-store, must-revalidate");
 session_start();
 
