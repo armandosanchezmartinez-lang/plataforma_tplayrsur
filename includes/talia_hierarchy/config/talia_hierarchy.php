@@ -8,7 +8,7 @@
  * - No usar HIC para enlazar personas distintas que ocuparon la misma plaza.
  */
 return [
-    'version' => '1.0.0',
+    'version' => '1.1.0',
     'leaders' => [
         ['distrito_reporte'=>'CANCUN','distrito_hc'=>'CANCUN','lider_hc'=>'COTO FELIX ERICK DANIEL','lider_instalaciones'=>'COTO FELIX ERICK DANIEL','lider_pos'=>null],
         ['distrito_reporte'=>'CANCUN','distrito_hc'=>'CANCUN','lider_hc'=>'GAMBOA LARA LUIS ANTONIO','lider_instalaciones'=>'GAMBOA LARA LUIS ANTONIO','lider_pos'=>null],

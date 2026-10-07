@@ -2,7 +2,7 @@
 
 <?php
 /*
- * RANKING DE PRODUCTIVIDAD — MÓDULO CERTIFICADO TalIAHierarchyResolver v1.0
+ * RANKING DE PRODUCTIVIDAD — MÓDULO CERTIFICADO TalIAHierarchyResolver v1.1
  * Baseline: ranking_productividad(20261007-151622).php
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
@@ -1758,6 +1758,12 @@ ORDER BY
     entidad ASC
 ";
 } elseif ($view === 'vendedores') {
+// TalIA Hierarchy v1.1: reglas compartidas; refactor sin cambio funcional.
+$th_leader_event = $taliaHierarchy->sqlLeaderEventPredicate('i', 'la');
+$th_coach_event = $taliaHierarchy->sqlCoachEventPredicate('i', $coach_param);
+$th_canonical_folio = $taliaHierarchy->sqlCanonicalFolioExpr('e.folio_original');
+$th_hc2_identity = $taliaHierarchy->sqlHcCanonicalIdentityPredicate('h2', 'f.folio_canonico');
+$th_hc3_identity = $taliaHierarchy->sqlHcCanonicalIdentityPredicate('h3', 'f.folio_canonico');
 /*
  * PATCH GENERAL Coach -> Vendedores v1.0 (event-first)
  * ----------------------------------------------------
@@ -1802,39 +1808,16 @@ eventos_raw AS (
         i.plan
     FROM selected_lider la
     INNER JOIN instalaciones i
-        ON (
-              UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
-           OR UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_hc))
-        )
+        ON {$th_leader_event}
        AND (({$cond_i_base}) OR ({$cond_i_actual}))
-       AND (
-            UPPER(TRIM(i.coach)) = UPPER(TRIM('{$coach_sql}'))
-            OR (
-                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', 1), '%')
-                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', -1), '%')
-            )
-            OR (
-                UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', 2), '%')
-                AND UPPER(TRIM(i.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$coach_sql}')), ' ', -2), '%')
-            )
-       )
+       AND {$th_coach_event}
     WHERE i.cuenta IS NOT NULL
       AND i.cuenta <> ''
 ),
 eventos AS (
     SELECT
         e.*,
-        COALESCE(
-            NULLIF((
-                SELECT COALESCE(NULLIF(hx.numero_talento_nuevo,''), NULLIF(hx.numero_talento_anterior,''))
-                FROM historial_identidad_colaborador hx
-                WHERE e.folio_original = hx.numero_talento_anterior
-                   OR e.folio_original = hx.numero_talento_nuevo
-                ORDER BY hx.fecha_movimiento DESC, hx.id DESC
-                LIMIT 1
-            ),''),
-            e.folio_original
-        ) AS folio_canonico
+        {$th_canonical_folio} AS folio_canonico
     FROM eventos_raw e
 ),
 identidades AS (
@@ -1850,15 +1833,7 @@ identidades AS (
                 WHERE h2.distrito = '{$distrito_hc_sql}'
                   AND h2.numero_talento_gs <> 'VACANTE'
                   AND h2.nombre_colaborador <> 'VACANTE'
-                  AND (
-                        h2.numero_talento_gs = f.folio_canonico
-                     OR h2.numero_talento_gs IN (
-                            SELECT hi3.numero_talento_anterior FROM historial_identidad_colaborador hi3 WHERE hi3.numero_talento_nuevo = f.folio_canonico
-                        )
-                     OR h2.numero_talento_gs IN (
-                            SELECT hi4.numero_talento_nuevo FROM historial_identidad_colaborador hi4 WHERE hi4.numero_talento_anterior = f.folio_canonico
-                        )
-                  )
+                  AND {$th_hc2_identity}
                 ORDER BY h2.anio DESC, h2.semana DESC, h2.id DESC
                 LIMIT 1
             ),''),
@@ -1870,15 +1845,7 @@ identidades AS (
             WHERE h3.distrito = '{$distrito_hc_sql}'
               AND h3.numero_talento_gs <> 'VACANTE'
               AND h3.nombre_colaborador <> 'VACANTE'
-              AND (
-                    h3.numero_talento_gs = f.folio_canonico
-                 OR h3.numero_talento_gs IN (
-                        SELECT hi5.numero_talento_anterior FROM historial_identidad_colaborador hi5 WHERE hi5.numero_talento_nuevo = f.folio_canonico
-                    )
-                 OR h3.numero_talento_gs IN (
-                        SELECT hi6.numero_talento_nuevo FROM historial_identidad_colaborador hi6 WHERE hi6.numero_talento_anterior = f.folio_canonico
-                    )
-              )
+              AND {$th_hc3_identity}
         ) AS fecha_alta
     FROM (SELECT DISTINCT folio_canonico FROM eventos WHERE folio_canonico IS NOT NULL AND folio_canonico <> '') f
 ),

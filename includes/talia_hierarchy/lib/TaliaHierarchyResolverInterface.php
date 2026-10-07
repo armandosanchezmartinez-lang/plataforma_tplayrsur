@@ -9,4 +9,7 @@ interface TaliaHierarchyResolverInterface
     public function sqlFolioMatch(string $installationAlias, string $personAlias): string;
     public function sqlCanonicalFolioExpr(string $folioExpr): string;
     public function sqlCoachStructurePredicate(string $hcAlias, string $coachAlias): string;
+    public function sqlLeaderEventPredicate(string $installationAlias, string $leaderAlias): string;
+    public function sqlCoachEventPredicate(string $installationAlias, string $coach): string;
+    public function sqlHcCanonicalIdentityPredicate(string $hcAlias, string $canonicalFolioExpr): string;
 }

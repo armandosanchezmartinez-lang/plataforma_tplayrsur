@@ -2,7 +2,7 @@
 require_once __DIR__ . '/TaliaHierarchyResolverInterface.php';
 
 /**
- * TaliaHierarchyResolver v1.0
+ * TaliaHierarchyResolver v1.1
  * Fuente canónica de reglas de IDENTIDAD + ESTRUCTURA + ATRIBUCIÓN TEMPORAL.
  *
  * Principios certificados desde Ranking Productividad:
@@ -113,4 +113,45 @@ final class TaliaHierarchyResolver implements TaliaHierarchyResolverInterface
         $c = preg_replace('/[^A-Za-z0-9_]/', '', $coachAlias);
         return "({$h}.nombre_linea_reporte = {$c}.coach OR {$h}.posicion_lr = {$c}.coach_pos OR EXISTS (SELECT 1 FROM historial_identidad_colaborador hicx WHERE ({$h}.posicion_lr = hicx.id_posicion_anterior OR {$h}.posicion_lr = hicx.id_posicion_nueva) AND ({$c}.coach_pos = hicx.id_posicion_anterior OR {$c}.coach_pos = hicx.id_posicion_nueva)))";
     }
+
+    /**
+     * Evento de instalación perteneciente a un líder certificado.
+     * Acepta el alias histórico de instalaciones y el ocupante HC vigente.
+     * No mezcla identidad con continuidad estructural.
+     */
+    public function sqlLeaderEventPredicate(string $installationAlias, string $leaderAlias): string
+    {
+        $i = preg_replace('/[^A-Za-z0-9_]/', '', $installationAlias);
+        $l = preg_replace('/[^A-Za-z0-9_]/', '', $leaderAlias);
+        return "(UPPER(TRIM({$i}.lider)) = UPPER(TRIM({$l}.lider_instalaciones)) OR UPPER(TRIM({$i}.lider)) = UPPER(TRIM({$l}.lider_hc)))";
+    }
+
+    /**
+     * Matching comercial de Coach certificado por Ranking.
+     * Conserva exactamente: igualdad normalizada + fallback nombre/apellidos.
+     */
+    public function sqlCoachEventPredicate(string $installationAlias, string $coach): string
+    {
+        $i = preg_replace('/[^A-Za-z0-9_]/', '', $installationAlias);
+        $c = mysqli_real_escape_string($this->db, $coach);
+        return "(UPPER(TRIM({$i}.coach)) = UPPER(TRIM('{$c}'))"
+            . " OR (UPPER(TRIM({$i}.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$c}')), ' ', 1), '%')"
+            . " AND UPPER(TRIM({$i}.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$c}')), ' ', -1), '%'))"
+            . " OR (UPPER(TRIM({$i}.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$c}')), ' ', 2), '%')"
+            . " AND UPPER(TRIM({$i}.coach)) LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM('{$c}')), ' ', -2), '%')))";
+    }
+
+    /**
+     * Predicado de continuidad de identidad HC para un folio ya canonicalizado.
+     * Mantiene la regla certificada actual: talento GS directo o equivalencia HIC.
+     * No usa posición para unir personas distintas.
+     */
+    public function sqlHcCanonicalIdentityPredicate(string $hcAlias, string $canonicalFolioExpr): string
+    {
+        $h = preg_replace('/[^A-Za-z0-9_]/', '', $hcAlias);
+        return "({$h}.numero_talento_gs = {$canonicalFolioExpr}"
+            . " OR {$h}.numero_talento_gs IN (SELECT hi_a.numero_talento_anterior FROM historial_identidad_colaborador hi_a WHERE hi_a.numero_talento_nuevo = {$canonicalFolioExpr})"
+            . " OR {$h}.numero_talento_gs IN (SELECT hi_b.numero_talento_nuevo FROM historial_identidad_colaborador hi_b WHERE hi_b.numero_talento_anterior = {$canonicalFolioExpr}))";
+    }
+
 }
