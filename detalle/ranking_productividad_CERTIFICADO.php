@@ -2082,11 +2082,38 @@ if ($view === 'coaches' && !$query_error && $rows) {
         if (!$lres) throw new RuntimeException(mysqli_error($conexion));
         $leaderEntries=[];
         while ($lr=mysqli_fetch_assoc($lres)) $leaderEntries[]=$lr;
-        if (count($leaderEntries)!==1 || trim((string)($leaderEntries[0]['lider_pos']??''))==='') {
-            throw new RuntimeException('Posición del líder ausente o ambigua');
+        // Resolver la posición del líder sin fijar nombres ni números particulares.
+        // El catálogo es prioritario; cuando carece de posición se consulta HC
+        // SOLO para el mismo líder/distrito y las dos fotografías comparadas.
+        if (count($leaderEntries)!==1) {
+            throw new RuntimeException('Líder ausente o ambiguo en el catálogo de jerarquía');
         }
-        $lp=esc($conexion,trim((string)$leaderEntries[0]['lider_pos']));
         $dh=esc($conexion,(string)$leaderEntries[0]['distrito_hc']);
+        $liderPos=trim((string)($leaderEntries[0]['lider_pos']??''));
+        $liderPosFuente='CATALOGO';
+        if ($liderPos==='') {
+            $leaderName=esc($conexion,trim((string)$lider_param));
+            $hcLeaderSql="SELECT DISTINCT TRIM(id_posicion) AS posicion
+                FROM hc
+                WHERE distrito='$dh'
+                  AND UPPER(TRIM(nombre_colaborador))=UPPER(TRIM('$leaderName'))
+                  AND UPPER(TRIM(posicion)) LIKE '%LIDER%'
+                  AND id_posicion IS NOT NULL
+                  AND TRIM(id_posicion) NOT IN ('', '0', 'VACANTE')
+                  AND ((anio=".(int)$hc_anio_base." AND semana=".(int)$hc_semana_base.")
+                    OR (anio=".(int)$hc_anio_actual." AND semana=".(int)$hc_semana_actual."))
+                LIMIT 2";
+            $hcLeaderRes=mysqli_query($conexion,$hcLeaderSql);
+            if (!$hcLeaderRes) throw new RuntimeException('Consulta de posición en HC: '.mysqli_error($conexion));
+            $leaderPositions=[];
+            while ($hp=mysqli_fetch_assoc($hcLeaderRes)) $leaderPositions[]=(string)$hp['posicion'];
+            if (count($leaderPositions)!==1) {
+                throw new RuntimeException('Posición del líder ausente o ambigua en HC para los periodos comparados');
+            }
+            $liderPos=$leaderPositions[0];
+            $liderPosFuente='HC';
+        }
+        $lp=esc($conexion,$liderPos);
         $windows=[
             ['base',$fecha_inicio_base_calc,$fecha_fin_base_calc],
             ['actual',$fecha_inicio_actual_calc,$fecha_fin_actual_calc]
@@ -2235,6 +2262,7 @@ if ($view === 'coaches' && !$query_error && $rows) {
         unset($row);
         $aliasCount=count($historicalPositionAliases);
         $atribucion_hist_estado='Atribución histórica aplicada a Coach · coincidencia completa por cuenta.'
+            .' Posición líder: '.$liderPos.' ('.$liderPosFuente.').'
             .($aliasCount ? ' Continuidades de posición verificadas por identidad de coach: '.$aliasCount.'.' : '');
     } catch (Throwable $e) {
         // Fail closed: no se sustituyen conteos con ceros cuando falta cobertura.
