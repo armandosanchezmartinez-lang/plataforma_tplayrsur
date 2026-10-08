@@ -1396,10 +1396,11 @@ ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'coaches') {
 /*
- * CANDIDATO STAGING v1.0 - Evento primero, cuenta unica / lider / periodo.
+ * CANDIDATO STAGING v1.1 - Evento primero + continuidad Mercy/Jovany.
  * Diagnostico SEM40: 50 cuentas Mercy/Jovany, 84 Maria Jose; todas coach unico.
  * Coach del evento prevalece; HC/HIC solo resuelve coach vacio de manera UNIVOCA.
  * Nunca se calcula NO IDENTIFICADO por diferencia de totales.
+ * Identidad plaza 1739397: Jovany + Mercy (ambos nombres del evento).
  * Este cambio solo interviene view=coaches; no desplegar sin validar el resto.
  */
 $cond_ibase_hc_exists = str_replace('ibase.', 'ix.', $cond_ibase);
@@ -1538,14 +1539,22 @@ eventos_raw AS (
            'BASE' AS periodo_key, i.cuenta, i.fecha, i.folio_empleado,
            UPPER(TRIM(COALESCE(i.coach,''))) AS coach_evento
     FROM selected_lider la
-    INNER JOIN instalaciones i ON i.lider = la.lider_instalaciones AND {$cond_i_base}
+    INNER JOIN instalaciones i ON (
+        UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
+        OR (la.lider_pos = '1739397'
+            AND UPPER(TRIM(i.lider)) = 'MERCY GUADALUPE ESTRADA MEDINA')
+    ) AND {$cond_i_base}
     WHERE i.cuenta IS NOT NULL AND TRIM(i.cuenta) <> ''
     UNION ALL
     SELECT la.distrito_reporte, la.lider_hc,
            'ACTUAL', i.cuenta, i.fecha, i.folio_empleado,
            UPPER(TRIM(COALESCE(i.coach,'')))
     FROM selected_lider la
-    INNER JOIN instalaciones i ON i.lider = la.lider_instalaciones AND {$cond_i_actual}
+    INNER JOIN instalaciones i ON (
+        UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
+        OR (la.lider_pos = '1739397'
+            AND UPPER(TRIM(i.lider)) = 'MERCY GUADALUPE ESTRADA MEDINA')
+    ) AND {$cond_i_actual}
     WHERE i.cuenta IS NOT NULL AND TRIM(i.cuenta) <> ''
 ),
 -- Si una misma cuenta tiene mas de un nombre de coach, no elegir arbitrariamente.
