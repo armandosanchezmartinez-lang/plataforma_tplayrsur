@@ -2034,12 +2034,14 @@ if (!$res) {
 }
 
 /*
- * TalIA | Atribución histórica controlada (v0.3)
+ * TalIA | Atribución histórica controlada (v0.4)
  * ==============================================================
  * Alcance EXCLUSIVO de esta iteración: drill-down Líder -> Coaches.
  * No modifica Ranking Líder, Ranking Coach, Vendedor, HC ni otras vistas.
  * - Usa eventos del periodo y fotografía HC representativa del mes.
  * - No usa nombres codificados de personal ni posiciones fijas.
+ * - Admite continuidad de coach por nombre completo inequívoco cuando cambió
+ *   de posición entre fotografías, sin fusionar personas distintas.
  * - Solo reemplaza conteos cuando TODOS los eventos del universo seleccionado
  *   tienen asignación única y el total coincide sin duplicados.
  * - Si no se puede certificar, conserva vista original y genera una advertencia.
@@ -2089,7 +2091,30 @@ if ($view === 'coaches' && !$query_error && $rows) {
             ['base',$fecha_inicio_base_calc,$fecha_fin_base_calc],
             ['actual',$fecha_inicio_actual_calc,$fecha_fin_actual_calc]
         ];
+        // Catálogo de la vista: las posiciones tienen prioridad. La continuidad
+        // por nombre solo procede si el nombre COMPLETO corresponde a un único
+        // coach; no se usan fragmentos ni similitudes parciales.
+        $coachSignature = static function ($value): string {
+            $name = strtoupper(trim((string)$value));
+            $name = preg_replace('/[^A-Z0-9\s]/', ' ', $name);
+            $tokens = preg_split('/\s+/', trim($name), -1, PREG_SPLIT_NO_EMPTY);
+            sort($tokens, SORT_STRING);
+            return implode('|', $tokens);
+        };
+        $positionsInView=[];
+        $namesInView=[];
+        foreach ($rows as $row) {
+            $pos=trim((string)($row['coach_pos']??''));
+            $name=(string)($row['coach']??'');
+            if ($pos !== '') $positionsInView[$pos]=true;
+            $sig=$coachSignature($name);
+            if ($sig !== '') {
+                if (!isset($namesInView[$sig])) $namesInView[$sig]=[];
+                if ($pos !== '') $namesInView[$sig][$pos]=true;
+            }
+        }
         $histCounts=[];
+        $historicalPositionAliases=[];
         foreach ($windows as [$period,$start,$end]) {
             $months=$getMonthMap($start,$end);
             $parts=[];
@@ -2129,6 +2154,7 @@ if ($view === 'coaches' && !$query_error && $rows) {
                 candidates AS (
                   SELECT e.cuenta, e.lider_sf, e.folios, e.fechas,
                       h.id_posicion vendedor_pos, TRIM(h.posicion_lr) coach_pos,
+                      UPPER(TRIM(h.nombre_linea_reporte)) coach_nombre_hc,
                       c.coach_pos matched_coach,
                       CASE WHEN UPPER(TRIM(e.lider_sf)) IN (SELECT nombre FROM titulares) THEN 1 ELSE 0 END sf_in_scope
                   FROM eventos e
@@ -2144,25 +2170,48 @@ if ($view === 'coaches' && !$query_error && $rows) {
                   SELECT e.cuenta,
                      MAX(CASE WHEN c.matched_coach IS NOT NULL THEN 1 ELSE 0 END) in_hc,
                      MAX(CASE WHEN UPPER(TRIM(e.lider_sf)) IN (SELECT nombre FROM titulares) THEN 1 ELSE 0 END) in_sf,
-                     COUNT(DISTINCT CASE WHEN c.matched_coach IS NOT NULL THEN c.coach_pos END) coaches,
-                     MIN(CASE WHEN c.matched_coach IS NOT NULL THEN c.coach_pos END) coach_pos,
+                     COUNT(DISTINCT NULLIF(c.coach_pos,'')) coaches,
+                     COUNT(DISTINCT NULLIF(c.coach_nombre_hc,'')) coach_nombres,
+                     MIN(NULLIF(c.coach_pos,'')) coach_pos,
+                     MIN(NULLIF(c.coach_nombre_hc,'')) coach_nombre_hc,
                      MAX(e.folios) folios, MAX(e.fechas) fechas
                   FROM eventos e LEFT JOIN candidates c ON c.cuenta=e.cuenta
                   GROUP BY e.cuenta
                 )
                 SELECT CASE WHEN in_hc=1 OR in_sf=1 THEN 'INCLUIDA' ELSE 'AJENA' END AS scope,
-                       CASE WHEN folios<>1 OR fechas<>1 OR coaches<>1 THEN 'PENDIENTE' ELSE 'OK' END AS estado,
-                       coach_pos, COUNT(*) cuentas
+                       CASE WHEN folios<>1 OR fechas<>1 OR coaches<>1 OR coach_nombres<>1 THEN 'PENDIENTE' ELSE 'OK' END AS estado,
+                       coach_pos, coach_nombre_hc, COUNT(*) cuentas
                 FROM per_account
-                GROUP BY scope, estado, coach_pos";
+                GROUP BY scope, estado, coach_pos, coach_nombre_hc";
             $hr=mysqli_query($conexion,$sqlHist);
             if (!$hr) throw new RuntimeException('Consulta histórica: '.mysqli_error($conexion));
             $count=0; $pending=0; $bucket=[];
             while($rec=mysqli_fetch_assoc($hr)) {
                 if ($rec['scope']!=='INCLUIDA') continue;
                 $n=(int)$rec['cuentas'];$count+=$n;
-                if($rec['estado']!=='OK' || !$rec['coach_pos']) $pending+=$n;
-                else $bucket[(string)$rec['coach_pos']]=($bucket[(string)$rec['coach_pos']]??0)+$n;
+                if ($rec['estado']!=='OK' || !$rec['coach_pos']) {
+                    $pending+=$n;
+                    continue;
+                }
+                $historicalPos=trim((string)$rec['coach_pos']);
+                $targetPos=$historicalPos;
+                if (!isset($positionsInView[$targetPos])) {
+                    $sig=$coachSignature($rec['coach_nombre_hc']??'');
+                    $matches=array_keys($namesInView[$sig]??[]);
+                    if (count($matches)!==1) {
+                        $pending+=$n;
+                        continue;
+                    }
+                    $targetPos=(string)$matches[0];
+                    // Un mismo alias histórico no puede apuntar a dos coaches.
+                    if (isset($historicalPositionAliases[$historicalPos]) &&
+                        $historicalPositionAliases[$historicalPos]!==$targetPos) {
+                        $pending+=$n;
+                        continue;
+                    }
+                    $historicalPositionAliases[$historicalPos]=$targetPos;
+                }
+                $bucket[$targetPos]=($bucket[$targetPos]??0)+$n;
             }
             if ($count===0 || $pending>0 || array_sum($bucket)!==$count) {
                 throw new RuntimeException("Universo $period incompleto: $count cuentas, $pending pendientes");
@@ -2170,8 +2219,7 @@ if ($view === 'coaches' && !$query_error && $rows) {
             $histCounts[$period]=$bucket;
         }
         // Todos los coaches detectados deben existir en esta navegación.
-        $existing=[];
-        foreach($rows as $row) $existing[trim((string)($row['coach_pos']??''))]=true;
+        $existing=$positionsInView;
         foreach($histCounts as $period=>$bucket) foreach($bucket as $pos=>$n) {
             if (!isset($existing[$pos])) throw new RuntimeException("Posición de coach $pos sin renglón en vista");
         }
@@ -2185,7 +2233,9 @@ if ($view === 'coaches' && !$query_error && $rows) {
             $row['prod_actual']=((float)($row['hc_activo_actual']??0)>0)?round($row['ins_sem_actual']/$row['hc_activo_actual']/$dias_habiles_actual,2):null;
         }
         unset($row);
-        $atribucion_hist_estado='Atribución histórica aplicada a Coach · coincidencia completa por cuenta.';
+        $aliasCount=count($historicalPositionAliases);
+        $atribucion_hist_estado='Atribución histórica aplicada a Coach · coincidencia completa por cuenta.'
+            .($aliasCount ? ' Continuidades de posición verificadas por identidad de coach: '.$aliasCount.'.' : '');
     } catch (Throwable $e) {
         // Fail closed: no se sustituyen conteos con ceros cuando falta cobertura.
         $atribucion_hist_estado='Atribución histórica aún no aplicada: '.$e->getMessage().'. Se conservan los resultados de la versión funcional.';
