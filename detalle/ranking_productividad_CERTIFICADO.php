@@ -270,212 +270,6 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
     return $tot;
 }
 
-
-/**
- * ATRIBUCION HISTORICA MENSUAL, v1.0 - SOLO LECTURA.
- * No crea tablas, no ejecuta UPDATE y no incluye archivos STAGING.
- * Procesa rangos acotados y utiliza mapas PHP para evitar JOINs OR por evento.
- * La fotografia mensual elegida es la ultima anterior al lunes de la semana
- * que contiene el primer dia del mes siguiente (regla operativa de HC).
- * Advertencias visibles cuando falten datos o exista ambiguedad.
- */
-function talia_historico_ligero($db, $lideres_cte, $base_ini, $base_fin, $actual_ini, $actual_fin, $dias_iso, $view, &$rows, &$coach_matrix, $distrito_sel, $lider_sel, $coach_pos_sel, $sem_base, $sem_actual, $dias_base, $dias_actual) {
-    if ($view === 'ventas') return [];
-    $warnings = [];
-    $desde = min($base_ini, $actual_ini);
-    $hasta = max($base_fin, $actual_fin);
-    $q = mysqli_query($db, "SELECT DISTINCT anio, semana FROM hc WHERE anio IS NOT NULL AND semana IS NOT NULL ORDER BY anio,semana");
-    if (!$q) throw new RuntimeException('No fue posible leer semanas HC: '.mysqli_error($db));
-    $available=[];
-    while ($r=mysqli_fetch_assoc($q)) {
-        $d = (new DateTimeImmutable())->setISODate((int)$r['anio'], (int)$r['semana'], 1);
-        $available[]=['anio'=>(int)$r['anio'],'semana'=>(int)$r['semana'],'lunes'=>$d->format('Y-m-d')];
-    }
-    $map=[];
-    $cursor=new DateTimeImmutable(substr($desde,0,7).'-01');
-    $last=new DateTimeImmutable(substr($hasta,0,7).'-01');
-    while ($cursor <= $last) {
-        $next=$cursor->modify('first day of next month');
-        $cutoff=$next->modify('monday this week')->format('Y-m-d');
-        $chosen=null;
-        foreach ($available as $a) if ($a['lunes'] < $cutoff) $chosen=$a;
-        $ym=$cursor->format('Y-m');
-        if (!$chosen) { $warnings[]='Sin fotografia HC aplicable a '.$ym; }
-        else $map[$ym]=$chosen;
-        $cursor=$next;
-    }
-    if (!$map) throw new RuntimeException('No hay fotografias HC para el rango');
-
-    // Traer unicamente las fotografias necesarias, nunca todo el HC historico.
-    $snapshots=[];
-    foreach ($map as $m) $snapshots[$m['anio'].'-'.$m['semana']]=$m;
-    $terms=[];
-    foreach ($snapshots as $m) $terms[]='(anio='.(int)$m['anio'].' AND semana='.(int)$m['semana'].')';
-    $sqlhc='SELECT anio,semana,numero_sf,numero_talento_gs,numero_base_comisiones,id_posicion,nombre_colaborador,fecha_alta,distrito,posicion_lr,nombre_linea_reporte,puesto_lr FROM hc WHERE '.implode(' OR ',$terms);
-    $qr=mysqli_query($db,$sqlhc);
-    if (!$qr) throw new RuntimeException('HC historico: '.mysqli_error($db));
-    $hc=[]; $leaderLinks=[];
-    while ($h=mysqli_fetch_assoc($qr)) {
-        $sk=$h['anio'].'-'.$h['semana'];
-        $district=strtoupper(trim((string)$h['distrito']));
-        $pos=trim((string)$h['id_posicion']);
-        if ($pos!=='' && stripos((string)$h['puesto_lr'],'LIDER')!==false && trim((string)$h['posicion_lr'])!=='') {
-            $lk=$sk.'|'.$district.'|'.$pos;
-            $leaderLinks[$lk][trim((string)$h['posicion_lr'])]=true;
-        }
-        if (strtoupper(trim((string)$h['nombre_colaborador']))==='VACANTE') continue;
-        foreach (['numero_sf','numero_talento_gs','numero_base_comisiones'] as $field) {
-            $id=trim((string)$h[$field]);
-            if ($id==='' || strtoupper($id)==='VACANTE' || $id==='-') continue;
-            $key=$sk.'|'.$id;
-            $hc[$key][$district.'|'.$pos]=$h;
-        }
-    }
-    // Alias HIC: exclusivamente continuidad de la MISMA persona, comprobada por nombre.
-    // No se propaga la identidad entre titulares distintos de una posicion.
-    $aliases=[];
-    $qh=mysqli_query($db,'SELECT numero_talento_anterior,numero_talento_nuevo,nombre_colaborador FROM historial_identidad_colaborador');
-    if ($qh) while ($hi=mysqli_fetch_assoc($qh)) {
-        $old=trim((string)$hi['numero_talento_anterior']);
-        $new=trim((string)$hi['numero_talento_nuevo']);
-        $n=strtoupper(trim((string)$hi['nombre_colaborador']));
-        if ($old==='' || $new==='' || $old===$new || $n==='') continue;
-        $aliases[$old][]=['alias'=>$new,'nombre'=>$n];
-        $aliases[$new][]=['alias'=>$old,'nombre'=>$n];
-    }
-    // Catálogo estructural actual: no se codifican nombres ni IDs particulares.
-    $catalog=[];
-    $q=mysqli_query($db,"WITH {$lideres_cte} SELECT distrito_reporte,distrito_hc,lider_hc,lider_pos FROM lideres_activos");
-    if (!$q) throw new RuntimeException('Catalogo de lideres: '.mysqli_error($db));
-    while ($r=mysqli_fetch_assoc($q)) {
-        $district=strtoupper(trim((string)$r['distrito_hc']));
-        $pos=trim((string)$r['lider_pos']);
-        if ($pos!=='') $catalog[$district.'|'.$pos]=$r;
-    }
-    // Consulta simple por rango (sargable). La atribucion se realiza en memoria.
-    $ini=mysqli_real_escape_string($db,$desde);
-    $fin=mysqli_real_escape_string($db,(new DateTimeImmutable($hasta))->modify('+1 day')->format('Y-m-d'));
-    $qi=mysqli_query($db,"SELECT cuenta,fecha,folio_empleado,distrito,lider,coach,plan FROM instalaciones WHERE fecha >= '$ini' AND fecha < '$fin' AND cuenta IS NOT NULL AND cuenta <> '' ORDER BY fecha,cuenta");
-    if (!$qi) throw new RuntimeException('Instalaciones historicas: '.mysqli_error($db));
-    $events=[]; $conflicts=[];
-    $days=array_fill_keys(array_map('intval',$dias_iso),true);
-    while ($e=mysqli_fetch_assoc($qi)) {
-        $f=substr((string)$e['fecha'],0,10);
-        if (($f<$base_ini || $f>$base_fin) && ($f<$actual_ini || $f>$actual_fin)) continue;
-        if ($days && !isset($days[(int)(new DateTimeImmutable($f))->format('N')])) continue;
-        $account=trim((string)$e['cuenta']);
-        if (isset($events[$account])) {
-            if ($events[$account]['fecha']!==$e['fecha'] || trim((string)$events[$account]['folio_empleado'])!==trim((string)$e['folio_empleado'])) $conflicts[$account]=true;
-            continue;
-        }
-        $events[$account]=$e;
-    }
-    if ($conflicts) $warnings[]='Cuentas con evento/folio ambiguo: '.count($conflicts);
-    $countsLeader=[]; $countsCoach=[]; $people=[]; $unresolved=[]; $knownCoach=[];
-    foreach ($events as $account=>$e) {
-        if (isset($conflicts[$account])) continue;
-        $fecha=substr((string)$e['fecha'],0,10);
-        $period=($fecha >= $actual_ini && $fecha <= $actual_fin)?'actual':'base';
-        $m=$map[substr($fecha,0,7)]??null;
-        if (!$m) { $unresolved['SIN_SNAPSHOT']=($unresolved['SIN_SNAPSHOT']??0)+1; continue; }
-        $sk=$m['anio'].'-'.$m['semana'];
-        $folio=trim((string)$e['folio_empleado']);
-        $candidates=$hc[$sk.'|'.$folio]??[];
-        if (!$candidates) foreach ($aliases[$folio]??[] as $alt) {
-            foreach ($hc[$sk.'|'.$alt['alias']]??[] as $key=>$candidate) {
-                if (strtoupper(trim((string)$candidate['nombre_colaborador']))===$alt['nombre']) $candidates[$key]=$candidate;
-            }
-        }
-        if (count($candidates)!==1) { $reason=$candidates?'IDENTIDAD_AMBIGUA':'SIN_IDENTIDAD'; $unresolved[$reason]=($unresolved[$reason]??0)+1; continue; }
-        $h=reset($candidates);
-        $district=strtoupper(trim((string)$h['distrito']));
-        $coachPos=trim((string)$h['posicion_lr']);
-        $lps=$leaderLinks[$sk.'|'.$district.'|'.$coachPos]??[];
-        if (count($lps)!==1) { $unresolved['COACH_SIN_LIDER_UNICO']=($unresolved['COACH_SIN_LIDER_UNICO']??0)+1; continue; }
-        $liderPos=array_key_first($lps);
-        $leader=$catalog[$district.'|'.$liderPos]??null;
-        if (!$leader) { $unresolved['LIDER_NO_CATALOGADO']=($unresolved['LIDER_NO_CATALOGADO']??0)+1; continue; }
-        $leaderKey=strtoupper(trim((string)$leader['distrito_reporte'])).'|'.strtoupper(trim((string)$leader['lider_hc']));
-        $coachKey=$leaderKey.'|'.$coachPos;
-        $countsLeader[$leaderKey][$period]=($countsLeader[$leaderKey][$period]??0)+1;
-        $countsCoach[$coachKey][$period]=($countsCoach[$coachKey][$period]??0)+1;
-        $knownCoach[$coachKey]=['coach'=>$h['nombre_linea_reporte'],'lider'=>$leader['lider_hc'],'distrito'=>$leader['distrito_reporte'],'coach_pos'=>$coachPos];
-        $people[$coachKey][$period][]=['hc'=>$h,'evento'=>$e];
-    }
-    foreach ($unresolved as $reason=>$n) $warnings[]=$reason.': '.$n;
-    if ($view==='vendedores') {
-        $districtKey=strtoupper(trim($distrito_sel));
-        $leaderKey=$districtKey.'|'.strtoupper(trim($lider_sel));
-        $selected=$leaderKey.'|'.trim($coach_pos_sel);
-        if (trim($coach_pos_sel)==='') { $warnings[]='Vista vendedor sin posicion de coach'; return $warnings; }
-        $packages=[];
-        $qc=mysqli_query($db,'SELECT nombre_plan,play,tipo FROM catalogo_paquetes');
-        if ($qc) while ($p=mysqli_fetch_assoc($qc)) $packages[strtoupper(trim((string)$p['nombre_plan']))]=$p;
-        $matrix=[];
-        foreach ($people[$selected]??[] as $period=>$items) foreach ($items as $entry) {
-            $h=$entry['hc']; $e=$entry['evento'];
-            $id=trim((string)$h['numero_talento_gs']);
-            if ($id==='') $id=trim((string)$h['id_posicion']);
-            if (!isset($matrix[$id])) {
-                $age='-';
-                if (!empty($h['fecha_alta']) && $h['fecha_alta']!=='0000-00-00') {
-                    try { $d=(new DateTimeImmutable($h['fecha_alta']))->diff(new DateTimeImmutable($actual_fin)); $age=$d->y.' años '.$d->m.' meses'; } catch (Throwable $ignore) {}
-                }
-                $matrix[$id]=['vendedor'=>$h['nombre_colaborador'],'folio_empleado'=>$id,'antiguedad'=>$age,'semanas'=>array_fill(1,max($sem_base,$sem_actual),0),'total'=>0,'triple_play'=>0,'doble_play'=>0,'negocios'=>0,'residencial'=>0];
-            }
-            $week=$period==='actual'?$sem_actual:$sem_base;
-            $matrix[$id]['semanas'][$week]=($matrix[$id]['semanas'][$week]??0)+1;
-            $matrix[$id]['total']++;
-            if ($period==='actual') {
-                $pack=$packages[strtoupper(trim((string)$e['plan']))]??null;
-                if ($pack) {
-                    if (strtoupper(trim((string)$pack['play']))==='TRIPLE PLAY') $matrix[$id]['triple_play']++;
-                    if (strtoupper(trim((string)$pack['play']))==='DOBLE PLAY') $matrix[$id]['doble_play']++;
-                    if (strtoupper(trim((string)$pack['tipo']))==='NEGOCIOS') $matrix[$id]['negocios']++;
-                    if (strtoupper(trim((string)$pack['tipo']))==='RESIDENCIAL') $matrix[$id]['residencial']++;
-                }
-            }
-        }
-        uasort($matrix,fn($a,$b)=>(($b['semanas'][$sem_actual]??0)<=>($a['semanas'][$sem_actual]??0)) ?: strcmp($a['vendedor'],$b['vendedor']));
-        $coach_matrix=$matrix;
-        return $warnings;
-    }
-    $isLeader=$view==='lideres';
-    $totals=$isLeader?$countsLeader:$countsCoach;
-    $seen=[];
-    foreach ($rows as &$r) {
-        $lk=strtoupper(trim((string)$r['distrito'])).'|'.strtoupper(trim((string)$r['lider']));
-        $key=$isLeader?$lk:($lk.'|'.trim((string)($r['coach_pos']??'')));
-        if (!$isLeader && trim((string)($r['coach_pos']??''))==='') continue; // SIN COACH legacy
-        $t=$totals[$key]??[];
-        $r['ins_sem_base']=(int)($t['base']??0);
-        $r['ins_sem_actual']=(int)($t['actual']??0);
-        $r['dif']=$r['ins_sem_actual']-$r['ins_sem_base'];
-        $r['pct_dif']=$r['ins_sem_base']?round($r['dif']*100/$r['ins_sem_base']):null;
-        $r['prod_base']=(float)$r['hc_activo_base']>0?round($r['ins_sem_base']/(float)$r['hc_activo_base']/max(1,$dias_base),2):null;
-        $r['prod_actual']=(float)$r['hc_activo_actual']>0?round($r['ins_sem_actual']/(float)$r['hc_activo_actual']/max(1,$dias_actual),2):null;
-        if (isset($seen[$key])) $warnings[]='Fila duplicada para '.$key;
-        $seen[$key]=true;
-    }
-    unset($r);
-    // Una posicion presente en el evento pero ausente en el HC de cierre no desaparece.
-    foreach ($totals as $key=>$t) {
-        if (isset($seen[$key])) continue;
-        $parts=explode('|',$key);
-        $info=$knownCoach[$key]??null;
-        $name=$isLeader?($parts[1]??''):(($info['coach']??'')?:'POSICION COACH '.($parts[2]??''));
-        $base=(int)($t['base']??0); $actual=(int)($t['actual']??0);
-        $rows[]=['distrito'=>$parts[0]??'','entidad'=>$name,'lider'=>$isLeader?$name:($info['lider']??$parts[1]??''),'coach'=>$isLeader?'':$name,
-            'coach_pos'=>$isLeader?'':($parts[2]??''),'folio_empleado'=>'',
-            'ins_sem_base'=>$base,'ins_sem_actual'=>$actual,'dif'=>$actual-$base,'pct_dif'=>$base?round(($actual-$base)*100/$base):null,
-            'hc_activo_base'=>0,'hc_activo_actual'=>0,'hc_con_ins_base'=>0,'hc_con_ins_actual'=>0,
-            'hc_sin_venta_base'=>0,'hc_sin_venta_actual'=>0,'pct_hc_sin_ins_base'=>null,'pct_hc_sin_ins_actual'=>null,
-            'prod_base'=>null,'prod_actual'=>null,'activo_base'=>0,'vacante_base'=>0,'hc_total_base'=>0,'activo_actual'=>0,'vacante_actual'=>0,'hc_total_actual'=>0];
-    }
-    usort($rows,fn($a,$b)=>(($b['prod_actual']??-1)<=>($a['prod_actual']??-1)) ?: (($b['ins_sem_actual']??0)<=>($a['ins_sem_actual']??0)));
-    return $warnings;
-}
-
 /* Semanas disponibles */
 $semanas = [];
 $res_sem = mysqli_query($conexion, "
@@ -2239,22 +2033,162 @@ if (!$res) {
     }
 }
 
-// Activar atribucion historica solo para las vistas comerciales; sin tablas extras.
-$talia_historico_alertas = [];
-if (!$query_error && $view !== 'ventas') {
+/*
+ * TalIA | Atribución histórica controlada (v0.3)
+ * ==============================================================
+ * Alcance EXCLUSIVO de esta iteración: drill-down Líder -> Coaches.
+ * No modifica Ranking Líder, Ranking Coach, Vendedor, HC ni otras vistas.
+ * - Usa eventos del periodo y fotografía HC representativa del mes.
+ * - No usa nombres codificados de personal ni posiciones fijas.
+ * - Solo reemplaza conteos cuando TODOS los eventos del universo seleccionado
+ *   tienen asignación única y el total coincide sin duplicados.
+ * - Si no se puede certificar, conserva vista original y genera una advertencia.
+ * - Las consultas usan rangos por fecha; no recorren historia completa.
+ */
+$atribucion_hist_estado = '';
+if ($view === 'coaches' && !$query_error && $rows) {
     try {
-        $talia_historico_alertas = talia_historico_ligero(
-            $conexion, $lideres_cte,
-            $fecha_inicio_base_calc, $fecha_fin_base_calc,
-            $fecha_inicio_actual_calc, $fecha_fin_actual_calc,
-            $periodo === 'semanal' ? $dias_semana_seleccionados : [],
-            $view, $rows, $coach_matrix,
-            $distrito_param, $lider_param, $coach_pos_param,
-            $semana_base, $semana_actual, $dias_habiles_base, $dias_habiles_actual
-        );
+        $hc_available = [];
+        $hs = mysqli_query($conexion, "SELECT DISTINCT anio, semana FROM hc WHERE anio IS NOT NULL AND semana IS NOT NULL ORDER BY anio, semana");
+        if (!$hs) throw new RuntimeException(mysqli_error($conexion));
+        while ($hrow = mysqli_fetch_assoc($hs)) {
+            $ymd = (new DateTimeImmutable('2026-01-01'))->setISODate((int)$hrow['anio'], (int)$hrow['semana'], 1)->format('Y-m-d');
+            $hc_available[] = [(int)$hrow['anio'], (int)$hrow['semana'], $ymd];
+        }
+        $getMonthMap = static function (string $start, string $end) use ($hc_available): array {
+            $cursor = new DateTimeImmutable(substr($start,0,7).'-01');
+            $last = new DateTimeImmutable(substr($end,0,7).'-01');
+            $maps = [];
+            while ($cursor <= $last) {
+                $next = $cursor->modify('first day of next month');
+                // La plantilla del primer lunes del mes entrante es la primera
+                // que puede representar la nueva estructura; antes de esa fecha
+                // usar la última fotografía del mes en curso.
+                $firstMonday = $next;
+                while ($firstMonday->format('N') !== '1') $firstMonday=$firstMonday->modify('-1 day');
+                $cutoff=$firstMonday->format('Y-m-d');
+                $pick=null;
+                foreach ($hc_available as $h) if ($h[2] < $cutoff) $pick=$h;
+                if (!$pick) throw new RuntimeException('Sin HC representativo para '.$cursor->format('Y-m'));
+                $maps[] = [ $cursor->format('Y-m'), $pick[0], $pick[1] ];
+                $cursor=$next;
+            }
+            return $maps;
+        };
+        $lookup = "WITH {$lideres_cte} SELECT distrito_hc, lider_pos FROM lideres_activos WHERE (distrito_reporte='{$distrito_sql}' OR distrito_hc='{$distrito_hc_sql}') AND lider_hc='{$lider_sql}' LIMIT 2";
+        $lres = mysqli_query($conexion, $lookup);
+        if (!$lres) throw new RuntimeException(mysqli_error($conexion));
+        $leaderEntries=[];
+        while ($lr=mysqli_fetch_assoc($lres)) $leaderEntries[]=$lr;
+        if (count($leaderEntries)!==1 || trim((string)($leaderEntries[0]['lider_pos']??''))==='') {
+            throw new RuntimeException('Posición del líder ausente o ambigua');
+        }
+        $lp=esc($conexion,trim((string)$leaderEntries[0]['lider_pos']));
+        $dh=esc($conexion,(string)$leaderEntries[0]['distrito_hc']);
+        $windows=[
+            ['base',$fecha_inicio_base_calc,$fecha_fin_base_calc],
+            ['actual',$fecha_inicio_actual_calc,$fecha_fin_actual_calc]
+        ];
+        $histCounts=[];
+        foreach ($windows as [$period,$start,$end]) {
+            $months=$getMonthMap($start,$end);
+            $parts=[];
+            foreach($months as [$mes,$a,$w]) $parts[]="SELECT '".esc($conexion,$mes)."' AS mes, ".(int)$a." AS anio, ".(int)$w." AS semana";
+            $mapSql=implode(' UNION ALL ',$parts);
+            $startSql=esc($conexion,$start);
+            $endSql=esc($conexion,(new DateTimeImmutable($end))->modify('+1 day')->format('Y-m-d'));
+            $daysClause=($periodo==='semanal' && $dias_semana_mysql_in!=='') ? " AND DAYOFWEEK(i.fecha) IN ($dias_semana_mysql_in)" : '';
+            // Universo: únicamente el distrito y los eventos cuyos líderes de
+            // Salesforce aparecen como titulares históricos de la posición.
+            // Los eventos con otro líder se incorporan solo si HC acredita su
+            // pertenencia a esa misma posición organizacional.
+            $sqlHist="WITH meses AS ($mapSql),
+                titulares AS (
+                  SELECT DISTINCT UPPER(TRIM(nombre_colaborador)) nombre
+                  FROM hc WHERE distrito='$dh' AND TRIM(id_posicion)='$lp'
+                    AND nombre_colaborador<>'VACANTE'
+                ),
+                coaches_pos AS (
+                  SELECT DISTINCT h.anio, h.semana, TRIM(h.id_posicion) coach_pos
+                  FROM hc h JOIN meses m ON h.anio=m.anio AND h.semana=m.semana
+                  WHERE h.distrito='$dh' AND TRIM(h.posicion_lr)='$lp'
+                    AND h.puesto_lr LIKE '%LIDER%' AND h.nombre_colaborador<>'VACANTE'
+                ),
+                eventos AS (
+                  SELECT TRIM(i.cuenta) cuenta, MIN(i.fecha) fecha,
+                    MIN(TRIM(i.folio_empleado)) folio,
+                    MIN(UPPER(TRIM(i.lider))) lider_sf,
+                    COUNT(DISTINCT TRIM(i.folio_empleado)) folios,
+                    COUNT(DISTINCT DATE(i.fecha)) fechas
+                  FROM instalaciones i
+                  WHERE i.fecha >= '$startSql' AND i.fecha < '$endSql' $daysClause
+                    AND UPPER(TRIM(i.distrito)) IN (UPPER('$dh'),UPPER('{$distrito_sql}'))
+                    AND i.cuenta IS NOT NULL AND TRIM(i.cuenta)<>''
+                  GROUP BY TRIM(i.cuenta)
+                ),
+                candidates AS (
+                  SELECT e.cuenta, e.lider_sf, e.folios, e.fechas,
+                      h.id_posicion vendedor_pos, TRIM(h.posicion_lr) coach_pos,
+                      c.coach_pos matched_coach,
+                      CASE WHEN UPPER(TRIM(e.lider_sf)) IN (SELECT nombre FROM titulares) THEN 1 ELSE 0 END sf_in_scope
+                  FROM eventos e
+                  JOIN meses m ON m.mes=DATE_FORMAT(e.fecha,'%Y-%m')
+                  JOIN hc h ON h.anio=m.anio AND h.semana=m.semana AND h.distrito='$dh'
+                     AND h.nombre_colaborador<>'VACANTE'
+                     AND (TRIM(h.numero_sf)=e.folio OR TRIM(h.numero_talento_gs)=e.folio
+                       OR TRIM(h.numero_base_comisiones)=e.folio)
+                  LEFT JOIN coaches_pos c ON c.anio=h.anio AND c.semana=h.semana
+                      AND c.coach_pos=TRIM(h.posicion_lr)
+                ),
+                per_account AS (
+                  SELECT e.cuenta,
+                     MAX(CASE WHEN c.matched_coach IS NOT NULL THEN 1 ELSE 0 END) in_hc,
+                     MAX(CASE WHEN UPPER(TRIM(e.lider_sf)) IN (SELECT nombre FROM titulares) THEN 1 ELSE 0 END) in_sf,
+                     COUNT(DISTINCT CASE WHEN c.matched_coach IS NOT NULL THEN c.coach_pos END) coaches,
+                     MIN(CASE WHEN c.matched_coach IS NOT NULL THEN c.coach_pos END) coach_pos,
+                     MAX(e.folios) folios, MAX(e.fechas) fechas
+                  FROM eventos e LEFT JOIN candidates c ON c.cuenta=e.cuenta
+                  GROUP BY e.cuenta
+                )
+                SELECT CASE WHEN in_hc=1 OR in_sf=1 THEN 'INCLUIDA' ELSE 'AJENA' END AS scope,
+                       CASE WHEN folios<>1 OR fechas<>1 OR coaches<>1 THEN 'PENDIENTE' ELSE 'OK' END AS estado,
+                       coach_pos, COUNT(*) cuentas
+                FROM per_account
+                GROUP BY scope, estado, coach_pos";
+            $hr=mysqli_query($conexion,$sqlHist);
+            if (!$hr) throw new RuntimeException('Consulta histórica: '.mysqli_error($conexion));
+            $count=0; $pending=0; $bucket=[];
+            while($rec=mysqli_fetch_assoc($hr)) {
+                if ($rec['scope']!=='INCLUIDA') continue;
+                $n=(int)$rec['cuentas'];$count+=$n;
+                if($rec['estado']!=='OK' || !$rec['coach_pos']) $pending+=$n;
+                else $bucket[(string)$rec['coach_pos']]=($bucket[(string)$rec['coach_pos']]??0)+$n;
+            }
+            if ($count===0 || $pending>0 || array_sum($bucket)!==$count) {
+                throw new RuntimeException("Universo $period incompleto: $count cuentas, $pending pendientes");
+            }
+            $histCounts[$period]=$bucket;
+        }
+        // Todos los coaches detectados deben existir en esta navegación.
+        $existing=[];
+        foreach($rows as $row) $existing[trim((string)($row['coach_pos']??''))]=true;
+        foreach($histCounts as $period=>$bucket) foreach($bucket as $pos=>$n) {
+            if (!isset($existing[$pos])) throw new RuntimeException("Posición de coach $pos sin renglón en vista");
+        }
+        foreach($rows as &$row) {
+            $pos=trim((string)($row['coach_pos']??''));
+            $row['ins_sem_base']=(int)($histCounts['base'][$pos]??0);
+            $row['ins_sem_actual']=(int)($histCounts['actual'][$pos]??0);
+            $row['dif']=$row['ins_sem_actual']-$row['ins_sem_base'];
+            $row['pct_dif']=$row['ins_sem_base']>0?round(100*$row['dif']/$row['ins_sem_base']):null;
+            $row['prod_base']=((float)($row['hc_activo_base']??0)>0)?round($row['ins_sem_base']/$row['hc_activo_base']/$dias_habiles_base,2):null;
+            $row['prod_actual']=((float)($row['hc_activo_actual']??0)>0)?round($row['ins_sem_actual']/$row['hc_activo_actual']/$dias_habiles_actual,2):null;
+        }
+        unset($row);
+        $atribucion_hist_estado='Atribución histórica aplicada a Coach · coincidencia completa por cuenta.';
     } catch (Throwable $e) {
-        // Modo seguro: nunca destruir un resultado previo del CERTIFICADO.
-        $talia_historico_alertas[] = 'Atribucion historica no aplicada: '.$e->getMessage();
+        // Fail closed: no se sustituyen conteos con ceros cuando falta cobertura.
+        $atribucion_hist_estado='Atribución histórica aún no aplicada: '.$e->getMessage().'. Se conservan los resultados de la versión funcional.';
     }
 }
 
@@ -2577,7 +2511,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
-<?php if (!empty($talia_historico_alertas)): ?><div class="error" style="padding:12px;margin:8px 0">Atribución histórica: <?= h(implode(" | ", $talia_historico_alertas)) ?></div><?php endif; ?>
+<?php if ($view === 'coaches' && $atribucion_hist_estado): ?><div style="padding:10px 16px;margin:10px 0;border:1px solid #d6dbea;border-radius:8px;font-size:12px;"> <?= h($atribucion_hist_estado) ?> </div><?php endif; ?>
 
 <?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
 <section class="cards">
