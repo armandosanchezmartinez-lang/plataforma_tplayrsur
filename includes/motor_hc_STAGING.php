@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TALIA / MOTOR HC v0.6.0 - STAGING (NO PRODUCTIVO)
+ * TALIA / MOTOR HC v0.6.1 - STAGING (NO PRODUCTIVO)
  * =====================================================
  * OBJETIVO: asociar una instalacion unica (cuenta) al vendedor, coach y
  * posicion de lider que acredita Capital Humano (HC). No modifica la BD.
@@ -37,8 +37,14 @@ declare(strict_types=1);
  *   6) Certifica solo cadenas HC unicas; conserva casos ambiguos pendientes.
  *   7) Filtra la salida certificada por lider/coach/vendedor solicitados.
  *
+ * FIX v0.6.1 (09-OCT-2026):
+ *   Todas las claves de distrito del indice HC se consultan con el mismo
+ *   normalizador usado al construirlas. Antes Coatza-Mina mostraba ceros
+ *   porque la fila decia 'COATZA MINA' y el indice 'COATZA-MINA'.
+ *   No cambia identidad, criterio de certificacion ni alcance comercial.
+ *
  * SALIDA / ARRAY:
- *   version: 0.6.0-hc-position-staging.
+ *   version: 0.6.1-hc-position-staging.
  *   cuentas: filas certificadas (una por cuenta), incluyendo cuenta, fecha,
  *       lider_id, lider_posicion, coach_id, vendedor_id, fuente, estado, hc_foto.
  *   conciliacion: sumatorias de las cuentas filtradas.
@@ -378,7 +384,12 @@ final class RankingAtribucionServiceV06
             $candidatos=[];
             if ($seller!==null && !$hicAmbiguo && !$fechaAmbigua && $fotoKey!==null) {
                 foreach ($indices[$fotoKey]['personas'][$seller]??[] as $h) {
-                    $district=(string)$h['distrito'];
+                    // CRITICO: las plazas/los coaches se indexaron por distrito CANONICO.
+                    // La fila HC puede decir COATZA MINA / COATZA-MINA / COATZA/MINA.
+                    // Consultar con el texto crudo provocaba perder TODA la atribucion
+                    // de Coatza-Mina pese a existir vendedor, coach y lider en HC.
+                    $district=self::normalizarDistrito($h['distrito']??null);
+                    if ($district===null) continue;
                     $coachPos=trim((string)($h['posicion_lr']??''));
                     $coach=$indices[$fotoKey]['coaches'][$district][$coachPos]??null;
                     if (!$coach) continue;
@@ -457,7 +468,7 @@ final class RankingAtribucionServiceV06
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.0-hc-position-staging',
+            'version'=>'0.6.1-hc-position-staging',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
