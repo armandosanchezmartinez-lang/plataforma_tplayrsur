@@ -20,6 +20,11 @@
  * agrega por lider / coach / vendedor y pinta la tabla.
  * SALIDA: HTML; no escribe archivos ni modifica tablas.
  * ALCANCE: comparacion visual frente a ranking_productividad.php.
+ * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
+ * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
+ * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
+ * reemplaza por el nombre de un colaborador escrito a mano.
+ *
  * IMPORTANTE: igualdad de cifras NO CERTIFICADA sin ejecutar ambos contra
  * la misma BD y periodos. No desplegar como reemplazo de produccion.
  */
@@ -854,7 +859,9 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
     foreach ($hcs as $h) {
         if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
         $nombreLineal=rank05_name_key($h['nombre_linea_reporte']??'');
-        $distrito=(string)($h['distrito']??'');
+        // Misma clave canonica de distrito que utiliza Motor HC v0.6.1.
+        $distrito=RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null);
+        if ($distrito===null) continue;
         $candidates=[];
         foreach ($idsPorNombre[$nombreLineal]??[] as $lid=>$_) {
             if ($distrito===($catalogo[$lid]['hc']??'')) $candidates[$lid]=true;
@@ -877,7 +884,7 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
         if ($posCoach==='' || $idPos==='') continue;
         foreach ($catalogo as $lid=>$l) {
             $coachKey=$lid.'|'.$posCoach;
-            if (!isset($coaches[$coachKey]) || (string)($h['distrito']??'')!==$l['hc']) continue;
+            if (!isset($coaches[$coachKey]) || RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
             $vac=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'')==='VACANTE';
             $talento=(string)($h['numero_talento_gs']??'');
             if ($talento==='' || $talento==='VACANTE') $vac=true;
@@ -2161,7 +2168,17 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        if (($resBase05['version']??'')!=='0.6.0-hc-position-staging' || ($resActual05['version']??'')!=='0.6.0-hc-position-staging') throw new RuntimeException('Motor HC v0.6 STAGING requerido no disponible');
+        // CONTRATO v0.6.1: ambos periodos deben provenir de la version exacta
+        // desplegada de Motor HC STAGING. La verificacion protege la comparacion
+        // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
+        $versionMotorRequerida05 = '0.6.1-hc-position-staging';
+        if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
+            throw new RuntimeException(
+                'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
+                '; BASE='.($resBase05['version'] ?? 'SIN_VERSION').
+                '; ACTUAL='.($resActual05['version'] ?? 'SIN_VERSION')
+            );
+        }
         $canonicos05=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
         $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
         $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
@@ -2555,7 +2572,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 
 <section class="table-card" style="padding:12px 18px;margin-bottom:12px">
-<strong>TalIA · MOTOR HC v0.6 · STAGING (NO PRODUCTIVO)</strong>
+<strong>TalIA · MOTOR HC v0.6.1 · STAGING (NO PRODUCTIVO)</strong>
 <span style="font-size:12px;color:#475569;margin-left:12px">Instalaciones de Líder, Coach y Vendedor: MISMO universo por cuenta; HC independiente (fotografía BASE <?= h($rank05_fotografias['base']??'?') ?>, ACTUAL <?= h($rank05_fotografias['actual']??'?') ?>). Mix comercial aún no conectado.</span>
 </section>
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
