@@ -61,6 +61,7 @@ if (empty($_SESSION['usuario'])) {
 include '../conexion.php';
 
 $rol = $_SESSION['rol'] ?? 'vendedor';
+if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('STAGING canónico reservado a ADMIN / Dirección Regional.'); }
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -338,6 +339,7 @@ $has_next = (
 
 $view = $_GET['view'] ?? 'lideres';
 if (!in_array($view, ['lideres','ranking_coach','coaches','vendedores','ventas'], true)) $view = 'lideres';
+if ($view === 'ventas') $view = 'vendedores'; // Evita mostrar historial no deduplicado fuera del motor.
 
 $periodo = $_GET['periodo'] ?? 'semanal';
 if (!in_array($periodo, ['semanal','mensual'], true)) $periodo = 'semanal';
@@ -790,6 +792,230 @@ lideres_activos AS (
     UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL', 'CHRISTIANNE MIGUEL SANCHEZ SANCHEZ', NULL
     UNION ALL SELECT 'VILLAHERMOSA', 'VILLAHERMOSA', 'HERNANDEZ PALMA MIRIAN GABRIELA', 'MIRIAN GABRIELA HERNANDEZ PALMA', NULL
 )";
+
+
+/**
+ * TalIA Ranking STAGING v0.5 - ÚNICA fuente de instalaciones:
+ * RankingAtribucionService v0.3 -> una fila por cuenta -> agrupaciones de vista.
+ * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
+ */
+function rank05_name_key($nombre): string {
+    $s = RankingAtribucionService::norm((string)$nombre);
+    $p = array_values(array_filter(explode(' ', $s), static fn($x)=>$x!==''));
+    sort($p, SORT_STRING);
+    return implode(' ', $p);
+}
+function rank05_catalogo(): array { return RankingAtribucionService::lideresStaging(); }
+function rank05_ficha(array $catalogo, string $liderId): array {
+    return $catalogo[$liderId] ?? ['distrito'=>'SIN_DISTRITO','hc'=>'','nombre'=>'LÍDER NO IDENTIFICADO','aliases'=>[],'plaza'=>null];
+}
+function rank05_foto_hc(RankingAtribucionService $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
+    $info=$motor->cargarHc($desde,$hasta);
+    $photos=$info['fotos'];
+    $ultima=null;
+    foreach ($photos as $k=>$p) { if ($p !== null) $ultima=$p; }
+    if ($ultima===null) throw new RuntimeException('No hay fotografía HC histórica anterior al período seleccionado');
+    $fotoKey=implode('-',$ultima);
+    $hcs=$info['datos'][$fotoKey] ?? [];
+    if (!$hcs) throw new RuntimeException('Fotografía HC sin filas: '.$fotoKey);
+    $idsPorNombre=[];
+    foreach ($catalogo as $lid=>$l) {
+        foreach (array_unique(array_merge([(string)$l['nombre']], $l['aliases'])) as $alias) {
+            $idKey=rank05_name_key($alias);
+            $idsPorNombre[$idKey][$lid]=true;
+        }
+    }
+    $coaches=[];$sellerByCoach=[];
+    // La plaza identifica una posición, no una persona; HC da su ocupante en esta fotografía.
+    foreach ($hcs as $h) {
+        if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
+        $nombreLineal=rank05_name_key($h['nombre_linea_reporte']??'');
+        $distrito=(string)($h['distrito']??'');
+        $candidates=[];
+        foreach ($idsPorNombre[$nombreLineal]??[] as $lid=>$_) {
+            if ($distrito===($catalogo[$lid]['hc']??'')) $candidates[$lid]=true;
+        }
+        foreach ($catalogo as $lid=>$l) {
+            if ($l['plaza']!==null && (string)($h['posicion_lr']??'')===(string)$l['plaza'] && $distrito===$l['hc']) $candidates[$lid]=true;
+        }
+        if (count($candidates)!==1) continue;
+        $lid=(string)array_key_first($candidates);
+        $pos=(string)($h['id_posicion']??'');
+        if ($pos==='') continue;
+        $k=$lid.'|'.$pos;
+        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionService::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
+    }
+    if (!$coaches) throw new RuntimeException('Ningún coach de Región SUR pudo relacionarse con HC '.$fotoKey);
+    foreach ($hcs as $h) {
+        if (stripos((string)($h['puesto_lr']??''),'COACH')===false) continue;
+        $posCoach=(string)($h['posicion_lr']??'');
+        $idPos=(string)($h['id_posicion']??'');
+        if ($posCoach==='' || $idPos==='') continue;
+        foreach ($catalogo as $lid=>$l) {
+            $coachKey=$lid.'|'.$posCoach;
+            if (!isset($coaches[$coachKey]) || (string)($h['distrito']??'')!==$l['hc']) continue;
+            $vac=RankingAtribucionService::norm($h['nombre_colaborador']??'')==='VACANTE';
+            $talento=(string)($h['numero_talento_gs']??'');
+            if ($talento==='' || $talento==='VACANTE') $vac=true;
+            $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
+            // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
+            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionService::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
+        }
+    }
+    return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
+}
+function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $eventos): array {
+    $filas=[];
+    foreach ($hc['vendedores'] as $k=>$seats) {
+        if (!str_starts_with($k, $lider.'|')) continue;
+        $idCoach=substr($k,strlen($lider)+1);
+        if ($coach!==null && $idCoach!==$coach) continue;
+        foreach ($seats as $pos=>$seat) $filas[$k.'|'.$pos]=$seat;
+    }
+    $identidadesConInst=[];
+    foreach ($eventos as $ev) {
+        if (($ev['lider_id']??null)!==$lider) continue;
+        if ($coach!==null && (string)($ev['coach_id']??'SIN_COACH')!==$coach) continue;
+        if (!empty($ev['vendedor_id'])) $identidadesConInst[(string)$ev['vendedor_id']]=true;
+    }
+    $activo=0;$vacante=0;$con=0;
+    foreach ($filas as $seat) {
+        if ($seat['vacante']) { $vacante++; continue; }
+        $activo++;
+        if ($seat['persona']!==null && isset($identidadesConInst[$seat['persona']])) $con++;
+    }
+    return ['activo'=>$activo,'vacante'=>$vacante,'con_ins'=>$con];
+}
+function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?string $vendedor=null): int {
+    $n=0;
+    foreach ($filas as $r) {
+        if (($r['lider_id']??null)!==$lider) continue;
+        if ($coach!==null && (string)($r['coach_id']??'SIN_COACH')!==$coach) continue;
+        if ($vendedor!==null && (string)($r['vendedor_id']??'SIN_VENDEDOR')!==$vendedor) continue;
+        $n++;
+    }
+    return $n;
+}
+function rank05_row(string $lider, string $coachId, string $nombre, array $catalogo, int $insBase, int $insActual, array $hb, array $ha, int $diasBase, int $diasActual): array {
+    $l=rank05_ficha($catalogo,$lider);
+    $hcActivoBase=$hb['activo'];$hcActivoActual=$ha['activo'];
+    $sinBase=max(0,$hcActivoBase-$hb['con_ins']);$sinActual=max(0,$hcActivoActual-$ha['con_ins']);
+    $dif=$insActual-$insBase;
+    return [
+        'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],
+        'coach'=>$coachId!==''?$nombre:'','coach_pos'=>$coachId,'folio_empleado'=>'',
+        'ins_sem_base'=>$insBase,'ins_sem_actual'=>$insActual,'dif'=>$dif,
+        'pct_dif'=>$insBase>0?round(100*$dif/$insBase):null,
+        'hc_activo_base'=>$hcActivoBase,'hc_activo_actual'=>$hcActivoActual,
+        'hc_con_ins_base'=>$hb['con_ins'],'hc_con_ins_actual'=>$ha['con_ins'],
+        'hc_sin_venta_base'=>$sinBase,'hc_sin_venta_actual'=>$sinActual,
+        'pct_hc_sin_ins_base'=>$hcActivoBase>0?round(100*$sinBase/$hcActivoBase):null,
+        'pct_hc_sin_ins_actual'=>$hcActivoActual>0?round(100*$sinActual/$hcActivoActual):null,
+        'prod_base'=>($hcActivoBase>0 && $diasBase>0)?round($insBase/$hcActivoBase/$diasBase,2):null,
+        'prod_actual'=>($hcActivoActual>0 && $diasActual>0)?round($insActual/$hcActivoActual/$diasActual,2):null,
+        'activo_base'=>$hcActivoBase,'vacante_base'=>$hb['vacante'],'hc_total_base'=>$hcActivoBase+$hb['vacante'],
+        'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
+    ];
+}
+function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual): array {
+    $ids=array_keys($catalogo);
+    $seleccion=null;
+    if (in_array($view,['coaches','vendedores'],true)) {
+        foreach ($catalogo as $lid=>$l) {
+            if (rank05_name_key($liderParam)===rank05_name_key($l['nombre'])) { $seleccion=$lid; break; }
+        }
+        if ($seleccion===null) throw new RuntimeException('Líder no identificado en el catálogo canónico');
+        $ids=[$seleccion];
+    }
+    $rows=[];$matrix=[];
+    if (in_array($view,['lideres','ranking_coach','coaches'],true)) {
+        foreach ($ids as $lid) {
+            if ($view==='lideres') {
+                $hb=rank05_resumen_hc($fotoBase,$lid,null,$base);
+                $ha=rank05_resumen_hc($fotoActual,$lid,null,$actual);
+                $rows[]=rank05_row($lid,'',$catalogo[$lid]['nombre'],$catalogo,rank05_num_cuentas($base,$lid),rank05_num_cuentas($actual,$lid),$hb,$ha,$diasBase,$diasActual);
+                continue;
+            }
+            $coachIds=[];$nombres=[];
+            foreach ([$fotoBase,$fotoActual] as $h) foreach ($h['coaches'] as $c) {
+                if ($c['lider_id']===$lid) { $coachIds[$c['id']]=true; $nombres[$c['id']]=$c['nombre']; }
+            }
+            foreach ([$base,$actual] as $es) foreach ($es as $e) {
+                if (($e['lider_id']??null)!==$lid) continue;
+                $co=(string)($e['coach_id']??'SIN_COACH');
+                $coachIds[$co]=true;
+                if (!isset($nombres[$co])) $nombres[$co]=RankingAtribucionService::norm($e['coach_evento']??'');
+            }
+            foreach (array_keys($coachIds) as $co) {
+                $nombre=$nombres[$co]??'';
+                if ($co==='SIN_COACH') $nombre='COACH NO IDENTIFICADO';
+                elseif ($nombre==='' || $nombre==='VACANTE') {
+                    $nombre=($co==='VACANTE'?'VACANTE':(str_starts_with($co,'EVENT|') ? 'EVENTO · '.str_replace('|',' ',substr($co,strrpos($co,'|')+1)) : ('PLAZA '.$co)));
+                }
+                if (str_starts_with($co,'EVENT|')) $nombre.=' · IDENTIDAD PROVISIONAL';
+                $rows[]=rank05_row($lid,$co,$nombre,$catalogo,
+                    rank05_num_cuentas($base,$lid,$co),rank05_num_cuentas($actual,$lid,$co),
+                    rank05_resumen_hc($fotoBase,$lid,$co,$base),rank05_resumen_hc($fotoActual,$lid,$co,$actual),$diasBase,$diasActual);
+            }
+        }
+        usort($rows,static fn($a,$b)=>(int)$b['ins_sem_actual']<=>(int)$a['ins_sem_actual'] ?: strcmp($a['entidad'],$b['entidad']));
+    } elseif ($view==='vendedores') {
+        if ($coachPos==='') throw new RuntimeException('Falta ID de coach en la navegación canónica (coach_pos)');
+        $lid=$seleccion;
+        $ventas=[];
+        foreach (['base'=>$base,'actual'=>$actual] as $lado=>$es) foreach ($es as $r) {
+            if (($r['lider_id']??null)!==$lid || (string)($r['coach_id']??'SIN_COACH')!==$coachPos) continue;
+            $v=(string)($r['vendedor_id']??'SIN_VENDEDOR');
+            $ventas[$v] ??= ['base'=>0,'actual'=>0];
+            $ventas[$v][$lado]++;
+        }
+        $nombres=[];
+        foreach ([$fotoBase,$fotoActual] as $h) {
+            foreach ($h['vendedores'][$lid.'|'.$coachPos]??[] as $seat) {
+                if ($seat['vacante'] || $seat['persona']===null) continue;
+                $nombres[$seat['persona']]=$seat['nombre'];
+                $ventas[$seat['persona']] ??= ['base'=>0,'actual'=>0];
+            }
+        }
+        foreach ($ventas as $v=>$vcts) {
+            $nombre=$nombres[$v]??($v==='SIN_VENDEDOR'?'VENDEDOR NO IDENTIFICADO':'FOLIO '.$v);
+            $matrix[$lid.'|'.$coachPos.'|'.$v]=[
+                'vendedor'=>$nombre,'folio_empleado'=>$v==='SIN_VENDEDOR'?'':$v,'antiguedad'=>'-',
+                'ins_base'=>$vcts['base'],'ins_actual'=>$vcts['actual'],
+                'total'=>$vcts['base']+$vcts['actual'],
+                'doble_play'=>0,'triple_play'=>0,'residencial'=>0,'negocios'=>0,
+            ];
+        }
+        uasort($matrix,static fn($a,$b)=>($b['ins_actual']<=>$a['ins_actual']) ?: strcmp($a['vendedor'],$b['vendedor']));
+    }
+    // Prueba independiente del indicador HC: cuentas únicas y conservación exacta de jerarquía.
+    $verifica=function(array $eventos,string $lado) use ($catalogo): void {
+        $keys=[];$leaders=[];$coaches=[];$vendedores=[];
+        foreach ($eventos as $ev) {
+            $cuenta=(string)($ev['cuenta']??'');
+            if ($cuenta==='' || isset($keys[$cuenta])) throw new LogicException('Cuenta ausente o duplicada en '.$lado);
+            $keys[$cuenta]=true;
+            $lid=(string)($ev['lider_id']??'SIN_LIDER');
+            $co=(string)($ev['coach_id']??'SIN_COACH');
+            $ve=(string)($ev['vendedor_id']??'SIN_VENDEDOR');
+            $leaders[$lid]=($leaders[$lid]??0)+1;
+            $coaches[$lid.'|'.$co]=($coaches[$lid.'|'.$co]??0)+1;
+            $vendedores[$lid.'|'.$co.'|'.$ve]=($vendedores[$lid.'|'.$co.'|'.$ve]??0)+1;
+        }
+        if (array_sum($leaders)!==count($keys) || array_sum($coaches)!==count($keys) || array_sum($vendedores)!==count($keys)) throw new LogicException('Discrepancia jerárquica en '.$lado);
+    };
+    $verifica($base,'BASE');$verifica($actual,'ACTUAL');
+    if ($view==='lideres' && (array_sum(array_column($rows,'ins_sem_base'))!==count($base) || array_sum(array_column($rows,'ins_sem_actual'))!==count($actual))) {
+        throw new LogicException('Ranking líder no conserva universo motor');
+    }
+    if ($view==='coaches') {
+        if (array_sum(array_column($rows,'ins_sem_base'))!==rank05_num_cuentas($base,$seleccion) || array_sum(array_column($rows,'ins_sem_actual'))!==rank05_num_cuentas($actual,$seleccion)) throw new LogicException('Ranking coach no conserva universo líder');
+    }
+    if ($view==='vendedores') {
+        if (array_sum(array_column($matrix,'ins_base'))!==rank05_num_cuentas($base,$seleccion,$coachPos) || array_sum(array_column($matrix,'ins_actual'))!==rank05_num_cuentas($actual,$seleccion,$coachPos)) throw new LogicException('Ranking vendedor no conserva universo coach');
+    }
+    return ['rows'=>$rows,'matrix'=>$matrix,'total_base'=>count($base),'total_actual'=>count($actual)];
+}
 
 $query_error = '';
 $rows = [];
@@ -1899,8 +2125,32 @@ ORDER BY semana ASC
 ";
 }
 
-$res = mysqli_query($conexion, $sql);
 $coach_matrix = [];
+$rank05_estado='';
+$rank05_fotografias=[];
+if ($view !== 'ventas') {
+    try {
+        require_once __DIR__.'/ranking_atribucion_service.php';
+        $motor05=new RankingAtribucionService($conexion);
+        $catalogo05=rank05_catalogo();
+        $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
+        $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
+        $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
+        if (($resBase05['version']??'')!=='0.3.0-hc-hic' || ($resActual05['version']??'')!=='0.3.0-hc-hic') throw new RuntimeException('El motor HC/HIC v0.3 requerido no está instalado');
+        $canonicos05=RankingAtribucionService::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
+        $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
+        $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
+        $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
+        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual);
+        $rows=$datos05['rows'];
+        $coach_matrix=$datos05['matrix'];
+        $rank05_estado='CANONICO|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
+    } catch (Throwable $e) {
+        $query_error='Motor canónico: '.$e->getMessage();
+        $rows=[]; $coach_matrix=[];
+    }
+} else {
+$res = mysqli_query($conexion, $sql);
 if (!$res) {
     $query_error = mysqli_error($conexion);
 } else {
@@ -1954,6 +2204,8 @@ if (!$res) {
     }
 }
 
+} // FIN ruta heredada solo para vista ventas. Ranking L/C/V proviene exclusivamente del motor.
+
 $tot = base_metrics_totals($rows, $dias_habiles_base, $dias_habiles_actual);
 $districts = [];
 if (in_array($view, ['lideres','ranking_coach'], true)) {
@@ -1967,12 +2219,13 @@ $title_label = [
     'lideres'        => 'Ranking de Productividad',
     'ranking_coach'  => 'Ranking Coach',
     'coaches'        => 'Ranking por Coach',
-    'vendedores' => 'Ventas Semanales del Coach',
+    'vendedores' => 'Instalaciones del Coach',
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
 /* Mantener el rango seleccionado al navegar entre niveles del ranking. */
-$motor_modo = (($_GET['motor'] ?? '') === '1') && in_array($rol, ['admin','director_regional'], true);
+// v0.5: la metodología canónica es la vista principal; no existe modo paralelo.
+$motor_modo = false;
 $nav_estado = [
     'motor'       => $motor_modo ? '1' : '0',
     'periodo'     => $periodo,
@@ -2001,68 +2254,6 @@ if (!empty($hc_actual_fallback)) $subtitle .= " · HC actual usando SEM{$hc_sema
 if (in_array($view, ['coaches','vendedores','ventas'], true)) $subtitle .= " · Líder: {$lider_param}";
 if ($view === 'vendedores' || $view === 'ventas') $subtitle .= " · Coach: {$coach_param}";
 if ($view === 'ventas') $subtitle .= " · Vendedor: {$vendedor_param}";
-
-/* Motor canónico: consume una sola colección de cuentas por período. No muta fuentes. */
-$motor_error = '';
-$motor_nodos = [];
-$motor_totales = ['base'=>0, 'actual'=>0];
-$motor_resumen = [];
-$motor_lider = (string)($_GET['motor_lider'] ?? '');
-$motor_coach = (string)($_GET['motor_coach'] ?? '');
-$motor_vendedor = (string)($_GET['motor_vendedor'] ?? '');
-$motor_nivel = $motor_vendedor !== '' ? 'VENDEDOR' : ($motor_coach !== '' ? 'VENDEDOR' : ($motor_lider !== '' ? 'COACH' : 'LIDER'));
-$motor_hc_nombres = [];
-if ($motor_modo) {
-    try {
-        require_once __DIR__ . '/talia_jerarquia_consulta_service_v02.php';
-        $canonico = new RankingAtribucionService($conexion);
-        $fachada = new TaliaJerarquiaConsultaService($canonico);
-        $dias_motor = $periodo === 'semanal' ? array_map('intval', $dias_semana_seleccionados) : [];
-        $consulta_base = $canonico->obtenerInstalacionesJerarquia($fecha_inicio_base_calc, $fecha_fin_base_calc, null, null, null, $dias_motor);
-        $consulta_actual = $canonico->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc, $fecha_fin_actual_calc, null, null, null, $dias_motor);
-        $motor_totales = ['base'=>count($consulta_base['cuentas']), 'actual'=>count($consulta_actual['cuentas'])];
-        $opciones = ['nivel'=>$motor_nivel, 'id_lider'=>$motor_lider === '' ? null : $motor_lider];
-        // SIN_COACH / SIN_VENDEDOR son categorías de conservación; en el motor su ID es null.
-        $seleccionar = static function(array $cuentas) use ($motor_coach, $motor_vendedor): array {
-            return array_values(array_filter($cuentas, static function(array $e) use ($motor_coach, $motor_vendedor): bool {
-                $c = (string)($e['coach_id'] ?? 'SIN_COACH');
-                $v = (string)($e['vendedor_id'] ?? 'SIN_VENDEDOR');
-                return ($motor_coach === '' || $c === $motor_coach) && ($motor_vendedor === '' || $v === $motor_vendedor);
-            }));
-        };
-        $mBase = $fachada->agruparFilas($seleccionar($consulta_base['cuentas']), $opciones);
-        $mActual = $fachada->agruparFilas($seleccionar($consulta_actual['cuentas']), $opciones);
-        $motor_resumen = ['base'=>$mBase, 'actual'=>$mActual];
-        $todos = [];
-        foreach (['base'=>$mBase, 'actual'=>$mActual] as $lado=>$resultado) {
-            foreach ($resultado['nodos'] as $n) {
-                $k=$n['id'];
-                $todos[$k] ??= ['id'=>$k, 'lider_id'=>$n['lider_id'], 'coach_id'=>$n['coach_id'],
-                    'vendedor_id'=>$n['vendedor_id'], 'distrito'=>$n['distrito'], 'base'=>0, 'actual'=>0];
-                $todos[$k][$lado] = $n['instalaciones'];
-            }
-        }
-        // Un único universo para todos los niveles y mismo conjunto de IDs de cuenta.
-        foreach (['base'=>$consulta_base, 'actual'=>$consulta_actual] as $lado=>$consulta) {
-            $cuentas = array_column($consulta['cuentas'], 'cuenta');
-            if (count($cuentas) !== count(array_unique($cuentas))) throw new LogicException('Cuenta duplicada en '.$lado);
-            $sum = array_sum(array_column($motor_resumen[$lado]['nodos'], 'instalaciones'));
-            if ($sum !== $motor_resumen[$lado]['total_instalaciones']) throw new LogicException('Drilldown inconsistente en '.$lado);
-        }
-        $motor_nodos = array_values($todos);
-        usort($motor_nodos, static fn($a,$b)=>($b['actual']<=>$a['actual']) ?: strcmp($a['id'],$b['id']));
-        foreach ($consulta_actual['cuentas'] as $e) {
-            if ($e['coach_id'] !== null && !isset($motor_hc_nombres[$e['coach_id']]) && !empty($e['coach_evento'])) {
-                $motor_hc_nombres[$e['coach_id']] = $e['coach_evento'];
-            }
-        }
-    } catch (Throwable $e) {
-        $motor_error = $e->getMessage();
-    }
-}
-function motor_link(array $estado, array $reemplazo): string {
-    return '?' . qs(array_merge($estado, ['motor'=>'1','motor_lider'=>'','motor_coach'=>'','motor_vendedor'=>''], $reemplazo));
-}
 
 /* Calendario mensual: lunes = 1, domingo = 7 */
 $primer_dia_semana = (int)(new DateTime(sprintf('%04d-%02d-01', $anio_mes_actual, $mes_actual)))->format('N');
@@ -2318,7 +2509,7 @@ body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed;
                     <span class="breadcrumb-sep">›</span>
                     <?php if ($view === 'coaches'): ?>
                         <span class="breadcrumb-current">👤 <?= h($lider_param) ?></span>
-                    <?php elseif ($view === 'vendedores'): ?>
+                    <?php elseif (!$query_error && $view === 'vendedores'): ?>
                         <a class="breadcrumb-link" href="<?= h($lider_link) ?>">👤 <?= h($lider_param) ?></a>
                         <span class="breadcrumb-sep">›</span>
                         <span class="breadcrumb-current">🧭 <?= h($coach_param) ?></span>
@@ -2341,60 +2532,13 @@ body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed;
     </div>
 </section>
 
-<section class="table-card" style="margin-top:14px;padding:15px 20px">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-    <div><strong>Motor TalIA · Concordancia jerárquica (STAGING)</strong>
-      <div style="font-size:12px;color:#64748b">Misma atribución por cuenta · <?= h($label_periodo_base) ?> vs <?= h($label_periodo_actual) ?> · Sin cambios a producción</div>
-    </div>
-    <?php if ($motor_modo): ?><a class="level-action" href="?<?= h(qs(array_merge($nav_estado,['motor'=>'0','view'=>'lideres']))) ?>">Volver a vista heredada</a>
-    <?php else: ?><a class="level-action primary" href="<?= h(motor_link($nav_estado,[])) ?>">Abrir motor canónico</a><?php endif; ?>
-  </div>
+<section class="table-card" style="padding:12px 18px;margin-bottom:12px">
+<strong>TalIA · Concordancia canónica v0.5</strong>
+<span style="font-size:12px;color:#475569;margin-left:12px">Instalaciones de Líder, Coach y Vendedor: MISMO universo por cuenta; HC independiente (fotografía BASE <?= h($rank05_fotografias['base']??'?') ?>, ACTUAL <?= h($rank05_fotografias['actual']??'?') ?>). Mix comercial aún no conectado.</span>
 </section>
-<?php if ($motor_modo): ?>
-<section class="table-card" id="motor-canonico" style="padding:20px">
-<?php if ($motor_error !== ''): ?>
-  <div class="error">Motor no disponible: <?= h($motor_error) ?>. No se sustituyeron cifras por ceros.</div>
-<?php else: ?>
-  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-    <a class="level-action" href="<?= h(motor_link($nav_estado,[])) ?>">Región SUR · Líderes</a>
-    <?php if ($motor_lider !== ''): ?><a class="level-action" href="<?= h(motor_link($nav_estado,['motor_lider'=>$motor_lider])) ?>">Coaches</a><?php endif; ?>
-    <?php if ($motor_coach !== ''): ?><a class="level-action primary" href="<?= h(motor_link($nav_estado,['motor_lider'=>$motor_lider,'motor_coach'=>$motor_coach])) ?>">Vendedores</a><?php endif; ?>
-  </div>
-  <div class="table-head"><strong><?= h($motor_nivel === 'LIDER' ? 'Líderes' : ($motor_nivel === 'COACH' ? 'Coaches del líder' : 'Vendedores del coach')) ?></strong>
-    <span>Base <?= fmt_num($motor_resumen['base']['total_instalaciones']) ?> · Actual <?= fmt_num($motor_resumen['actual']['total_instalaciones']) ?> · Conservación por cuenta: OK</span>
-  </div>
-  <div class="table-wrap"><table class="sales-table"><thead><tr>
-  <th>Distrito</th><th><?= h($motor_nivel) ?></th><th class="num">Inst. BASE</th><th class="num">Inst. ACTUAL</th><th class="num">Diferencia</th><th>Consultar</th>
-  </tr></thead><tbody>
-  <?php foreach ($motor_nodos as $n): ?>
-  <?php
-    $id = (string)$n['id'];
-    $etiqueta = $motor_nivel === 'LIDER' ? (RankingAtribucionService::lideresStaging()[$n['lider_id']]['nombre'] ?? $id) :
-        ($motor_nivel === 'COACH' ? ($motor_hc_nombres[$n['coach_id']] ?? ($n['coach_id'] === 'SIN_COACH' ? 'COACH NO IDENTIFICADO' : (string)$n['coach_id'])) :
-        ($n['vendedor_id'] ?? 'VENDEDOR NO IDENTIFICADO'));
-    $siguiente = $motor_nivel === 'LIDER' ? ['motor_lider'=>$n['lider_id']] :
-        ($motor_nivel === 'COACH' ? ['motor_lider'=>$n['lider_id'],'motor_coach'=>$n['coach_id']] : []);
-  ?>
-  <tr><td><?= h($n['distrito']) ?></td><td><?= h($etiqueta) ?></td>
-  <td class="num"><?= fmt_num($n['base']) ?></td><td class="num"><?= fmt_num($n['actual']) ?></td>
-  <td class="num"><?= fmt_num($n['actual']-$n['base']) ?></td><td>
-  <?php if ($motor_nivel !== 'VENDEDOR'): ?><a href="<?= h(motor_link($nav_estado,$siguiente)) ?>">Ver <?= $motor_nivel === 'LIDER' ? 'coaches' : 'vendedores' ?> →</a>
-  <?php else: ?><span style="font-size:12px;color:#64748b">Nivel final</span><?php endif; ?>
-  </td></tr>
-  <?php endforeach; ?>
-  <tr class="total-row"><td colspan="2">TOTAL DE SELECCIÓN</td>
-  <td class="num"><?= fmt_num($motor_resumen['base']['total_instalaciones']) ?></td><td class="num"><?= fmt_num($motor_resumen['actual']['total_instalaciones']) ?></td>
-  <td class="num"><?= fmt_num($motor_resumen['actual']['total_instalaciones']-$motor_resumen['base']['total_instalaciones']) ?></td><td></td></tr>
-  </tbody></table></div>
-  <p style="font-size:12px;color:#64748b;margin-top:12px">Versión <?= h($motor_resumen['actual']['motor_atribucion']) ?>. Este panel muestra exclusivamente instalaciones atribuidas. HC, productividad, 2P/3P y ventas mantienen su metodología heredada y no están certificados por este panel. Las identidades EVENT| son provisionales. No se reasignan movimientos de Capital Humano.</p>
-<?php endif; ?>
-</section>
-<?php endif; ?>
-<div id="legacy-region" style="<?= $motor_modo ? 'display:none' : '' ?>">
-
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
 
-<?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
+<?php if (!$query_error && !in_array($view, ['ventas','vendedores'], true)): ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
     <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
@@ -2512,7 +2656,7 @@ $mejor_vendedor = '';
 $mejor_total = -1;
 foreach ($coach_matrix as $v) {
     // KPI del Coach = únicamente periodo ACTUAL; BASE sólo sirve para comparativo.
-    $ventas_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
+    $ventas_actual_v = (int)($v['ins_actual'] ?? 0);
     $total_coach += $ventas_actual_v;
     if ($ventas_actual_v > $mejor_total) {
         $mejor_total = $ventas_actual_v;
@@ -2521,16 +2665,16 @@ foreach ($coach_matrix as $v) {
 }
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
+    <div class="card"><div class="label">Instalaciones del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
     <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura <?= h($label_col_base) ?> o <?= h($label_col_actual) ?></div></div>
-    <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> ventas</div></div>
+    <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> instalaciones</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
 </section>
 
 <section class="table-card">
     <div class="table-head">
         <strong>Resumen por vendedor del coach</strong>
-        <span>Comparativo <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Mix comercial <?= h($label_col_actual) ?></span>
+        <span>Comparativo <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Mix 2P/3P pendiente de conectar al mismo universo</span>
     </div>
     <div class="table-wrap">
         <table class="sales-table" style="min-width:1280px">
@@ -2555,8 +2699,8 @@ foreach ($coach_matrix as $v) {
             <tbody>
                 <?php foreach ($coach_matrix as $v): ?>
                 <?php
-                        $ins_base_v = (int)($v['semanas'][$semana_base] ?? 0);
-                        $ins_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
+                        $ins_base_v = (int)($v['ins_base'] ?? 0);
+                        $ins_actual_v = (int)($v['ins_actual'] ?? 0);
                         $dif_v = $ins_actual_v - $ins_base_v;
                         $pct_v = $ins_base_v > 0 ? round(($dif_v / $ins_base_v) * 100, 0) : null;
                         $total_v = (int)$v['total'];
@@ -2599,22 +2743,22 @@ foreach ($coach_matrix as $v) {
                     <td class="num"><?= fmt_num($ins_actual_v) ?></td>
                     <td class="num"><?= fmt_num($dif_v) ?></td>
                     <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '-' : fmt_num($pct_v).'%' ?></span></td>
-                    <td class="num"><?= fmt_num($doble_v) ?></td>
-                    <td class="center"><?= $pct_doble === null ? '-' : fmt_num($pct_doble).'%' ?></td>
-                    <td class="num"><?= fmt_num($triple_v) ?></td>
-                    <td class="center"><?= $pct_triple === null ? '-' : fmt_num($pct_triple).'%' ?></td>
-                    <td class="num"><?= fmt_num($resid_v) ?></td>
-                    <td class="center"><?= $pct_resid === null ? '-' : fmt_num($pct_resid).'%' ?></td>
-                    <td class="num"><?= fmt_num($neg_v) ?></td>
-                    <td class="center"><?= $pct_neg === null ? '-' : fmt_num($pct_neg).'%' ?></td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
                 </tr>
                 <?php endforeach; ?>
                 <tr class="total-row">
                     <?php
                         $t_base = 0; $t_actual = 0; $t_doble = 0; $t_triple = 0; $t_resid = 0; $t_neg = 0;
                         foreach ($coach_matrix as $v) {
-                            $t_base += (int)($v['semanas'][$semana_base] ?? 0);
-                            $t_actual += (int)($v['semanas'][$semana_actual] ?? 0);
+                            $t_base += (int)($v['ins_base'] ?? 0);
+                            $t_actual += (int)($v['ins_actual'] ?? 0);
                             $t_doble += (int)($v['doble_play'] ?? 0);
                             $t_triple += (int)($v['triple_play'] ?? 0);
                             $t_resid += (int)($v['residencial'] ?? 0);
@@ -2639,14 +2783,14 @@ foreach ($coach_matrix as $v) {
                         $pct_t_resid = $t_segmento > 0 ? round(($t_resid / $t_segmento) * 100, 0) : null;
                         $pct_t_neg = $t_segmento > 0 ? round(($t_neg / $t_segmento) * 100, 0) : null;
                     ?>
-                    <td class="num"><?= fmt_num($t_doble) ?></td>
-                    <td class="center"><?= $pct_t_doble === null ? '-' : fmt_num($pct_t_doble).'%' ?></td>
-                    <td class="num"><?= fmt_num($t_triple) ?></td>
-                    <td class="center"><?= $pct_t_triple === null ? '-' : fmt_num($pct_t_triple).'%' ?></td>
-                    <td class="num"><?= fmt_num($t_resid) ?></td>
-                    <td class="center"><?= $pct_t_resid === null ? '-' : fmt_num($pct_t_resid).'%' ?></td>
-                    <td class="num"><?= fmt_num($t_neg) ?></td>
-                    <td class="center"><?= $pct_t_neg === null ? '-' : fmt_num($pct_t_neg).'%' ?></td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
                 </tr>
             </tbody>
         </table>
@@ -2690,7 +2834,6 @@ foreach ($ventas_hist as $vh) {
     </div>
 </section>
 <?php endif; ?>
-</div><!-- legacy-region -->
 </main>
 
 <?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
