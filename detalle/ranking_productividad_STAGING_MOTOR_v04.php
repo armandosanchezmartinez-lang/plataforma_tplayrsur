@@ -53,9 +53,9 @@ error_reporting(0);
 header("Cache-Control: no-cache, no-store, must-revalidate");
 session_start();
 
-if (!isset($_SESSION['usuario'])) {
-    header("Location: ../login.php");
-    exit();
+if (empty($_SESSION['usuario'])) {
+    http_response_code(403);
+    exit('Sesión de TalIA no disponible. Inicia sesión desde la plataforma.');
 }
 
 include '../conexion.php';
@@ -2098,9 +2098,14 @@ body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed;
 </head>
 <body class="page-ranking">
 <?php
-$current_page = 'ranking';
-include __DIR__ . '/../includes/sidebar.php';
+/* STAGING aislado: no cargar sidebar compartido mientras se diagnostica
+ * una posible redirección del componente. La autorización ya se aplica arriba.
+ * No se altera sidebar.php ni el Ranking productivo. */
 ?>
+<nav aria-label="Navegación de prueba TalIA" style="position:fixed;z-index:90;top:12px;left:12px;background:#fff;border:1px solid #dbe2ec;border-radius:10px;padding:9px 12px;box-shadow:0 4px 12px #0001;font:13px system-ui,Arial,sans-serif">
+ <a href="../index.php" style="color:#27346d;text-decoration:none;font-weight:700">← TalIA</a>
+ <span style="margin-left:10px;color:#475569">STAGING · prueba de acceso</span>
+</nav>
 
 <main class="main">
 <section class="topbar">
