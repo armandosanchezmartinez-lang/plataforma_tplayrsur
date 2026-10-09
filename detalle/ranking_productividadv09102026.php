@@ -1,37 +1,6 @@
+
+
 <?php
-/**
- * TALIA / RANKING PRODUCTIVIDAD - STAGING MOTOR HC v0.6.2
- * ====================================================
- * OBJETIVO: presentar ranking semanal/mensual con misma interfaz, filtros,
- * indicadores y navegacion que ranking_productividad.php productivo, pero
- * obteniendo las instalaciones certificadas desde Motor HC v0.6 candidato.
- *
- * UBICACION: /plataforma/detalle/ranking_productividad_STAGING.php
- * DEPENDENCIA: /plataforma/includes/motor_hc_STAGING.php
- * AUTORIZACION: sesion TalIA; roles ADMIN o DIRECTOR_REGIONAL.
- * PARAMETROS HTTP: periodo, anio, semana, mes, anio_mes, rango_mode,
- * fecha_inicio, fecha_fin, dias_semana, view, distrito, lider, coach,
- * coach_pos, vendedor y folio. Ver validacion y selectores a continuacion.
- *
- * FUENTES: Motor HC para cuentas/jerarquias y fotos HC, tablas HC,
- * instalaciones y dias_inhabiles para vista, plantilla y productividad.
- * FLUJO: selecciona BASE/ACTUAL; consulta motor en ambos periodos;
- * obtiene catalogo dinamico de plazas de lider; reconstruye HC activo;
- * agrega por lider / coach / vendedor y pinta la tabla.
- * SALIDA: HTML; no escribe archivos ni modifica tablas.
- * ALCANCE: comparacion visual frente a ranking_productividad.php.
- * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
- * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
- * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
- * reemplaza por el nombre de un colaborador escrito a mano.
- * FIX 09-OCT-2026 (v0.6.2): consume el contrato del motor que resuelve
- * unicamente autorreferencias HC verificables por nombre del superior
- * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
- * asigna ninguna cuenta ni cambia cifras por si mismo.
- *
- * IMPORTANTE: igualdad de cifras NO CERTIFICADA sin ejecutar ambos contra
- * la misma BD y periodos. No desplegar como reemplazo de produccion.
- */
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
@@ -831,18 +800,16 @@ lideres_activos AS (
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
-    $s = RankingAtribucionServiceV06::norm((string)$nombre);
+    $s = RankingAtribucionService::norm((string)$nombre);
     $p = array_values(array_filter(explode(' ', $s), static fn($x)=>$x!==''));
     sort($p, SORT_STRING);
     return implode(' ', $p);
 }
-function rank05_catalogo(RankingAtribucionServiceV06 $motor, string $desde, string $hasta): array {
-    return $motor->catalogoLideres($desde, $hasta);
-}
+function rank05_catalogo(): array { return RankingAtribucionService::lideresStaging(); }
 function rank05_ficha(array $catalogo, string $liderId): array {
     return $catalogo[$liderId] ?? ['distrito'=>'SIN_DISTRITO','hc'=>'','nombre'=>'LÍDER NO IDENTIFICADO','aliases'=>[],'plaza'=>null];
 }
-function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
+function rank05_foto_hc(RankingAtribucionService $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
     $info=$motor->cargarHc($desde,$hasta);
     $photos=$info['fotos'];
     $ultima=null;
@@ -863,9 +830,7 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
     foreach ($hcs as $h) {
         if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
         $nombreLineal=rank05_name_key($h['nombre_linea_reporte']??'');
-        // Misma clave canonica de distrito que utiliza Motor HC v0.6.1.
-        $distrito=RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null);
-        if ($distrito===null) continue;
+        $distrito=(string)($h['distrito']??'');
         $candidates=[];
         foreach ($idsPorNombre[$nombreLineal]??[] as $lid=>$_) {
             if ($distrito===($catalogo[$lid]['hc']??'')) $candidates[$lid]=true;
@@ -878,7 +843,7 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
         $pos=(string)($h['id_posicion']??'');
         if ($pos==='') continue;
         $k=$lid.'|'.$pos;
-        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
+        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionService::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
     }
     if (!$coaches) throw new RuntimeException('Ningún coach de Región SUR pudo relacionarse con HC '.$fotoKey);
     foreach ($hcs as $h) {
@@ -888,13 +853,13 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
         if ($posCoach==='' || $idPos==='') continue;
         foreach ($catalogo as $lid=>$l) {
             $coachKey=$lid.'|'.$posCoach;
-            if (!isset($coaches[$coachKey]) || RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
-            $vac=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'')==='VACANTE';
+            if (!isset($coaches[$coachKey]) || (string)($h['distrito']??'')!==$l['hc']) continue;
+            $vac=RankingAtribucionService::norm($h['nombre_colaborador']??'')==='VACANTE';
             $talento=(string)($h['numero_talento_gs']??'');
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
             // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
-            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
+            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionService::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
         }
     }
     return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
@@ -979,7 +944,7 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
                 if (($e['lider_id']??null)!==$lid) continue;
                 $co=(string)($e['coach_id']??'SIN_COACH');
                 $coachIds[$co]=true;
-                if (!isset($nombres[$co])) $nombres[$co]=RankingAtribucionServiceV06::norm($e['coach_evento']??'');
+                if (!isset($nombres[$co])) $nombres[$co]=RankingAtribucionService::norm($e['coach_evento']??'');
             }
             foreach (array_keys($coachIds) as $co) {
                 $nombre=$nombres[$co]??'';
@@ -2166,24 +2131,14 @@ $rank05_fotografias=[];
 $rank05_auditoria=[];
 if ($view !== 'ventas') {
     try {
-        require_once __DIR__.'/../includes/motor_hc_STAGING.php';
-        $motor05=new RankingAtribucionServiceV06($conexion);
-        $catalogo05=rank05_catalogo($motor05,$fecha_inicio_base_calc,$fecha_fin_actual_calc);
+        require_once __DIR__.'/motor_hc.php';
+        $motor05=new RankingAtribucionService($conexion);
+        $catalogo05=rank05_catalogo();
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.2: ambos periodos deben provenir de la version exacta
-        // desplegada de Motor HC STAGING. La verificacion protege la comparacion
-        // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.2-hc-position-staging';
-        if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
-            throw new RuntimeException(
-                'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
-                '; BASE='.($resBase05['version'] ?? 'SIN_VERSION').
-                '; ACTUAL='.($resActual05['version'] ?? 'SIN_VERSION')
-            );
-        }
-        $canonicos05=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
+        if (($resBase05['version']??'')!=='0.5.1-hc-certified' || ($resActual05['version']??'')!=='0.5.1-hc-certified') throw new RuntimeException('El motor HC certificado v0.5.1 requerido no está instalado');
+        $canonicos05=RankingAtribucionService::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
         $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
         $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
         $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
@@ -2576,7 +2531,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 
 <section class="table-card" style="padding:12px 18px;margin-bottom:12px">
-<strong>TalIA · MOTOR HC v0.6.2 · STAGING (NO PRODUCTIVO)</strong>
+<strong>TalIA · Concordancia HC v0.4 · STAGING</strong>
 <span style="font-size:12px;color:#475569;margin-left:12px">Instalaciones de Líder, Coach y Vendedor: MISMO universo por cuenta; HC independiente (fotografía BASE <?= h($rank05_fotografias['base']??'?') ?>, ACTUAL <?= h($rank05_fotografias['actual']??'?') ?>). Mix comercial aún no conectado.</span>
 </section>
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
