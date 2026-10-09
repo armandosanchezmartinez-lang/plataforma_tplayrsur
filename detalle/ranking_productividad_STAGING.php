@@ -2168,7 +2168,17 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        if (($resBase05['version']??'')!=='0.6.0-hc-position-staging' || ($resActual05['version']??'')!=='0.6.0-hc-position-staging') throw new RuntimeException('Motor HC v0.6 STAGING requerido no disponible');
+        // CONTRATO v0.6.1: ambos periodos deben provenir de la version exacta
+        // desplegada de Motor HC STAGING. La verificacion protege la comparacion
+        // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
+        $versionMotorRequerida05 = '0.6.1-hc-position-staging';
+        if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
+            throw new RuntimeException(
+                'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
+                '; BASE='.($resBase05['version'] ?? 'SIN_VERSION').
+                '; ACTUAL='.($resActual05['version'] ?? 'SIN_VERSION')
+            );
+        }
         $canonicos05=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
         $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
         $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
