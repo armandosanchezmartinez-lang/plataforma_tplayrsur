@@ -1,6 +1,6 @@
 <?php
 /**
- * TALIA / RANKING PRODUCTIVIDAD - STAGING MOTOR HC v0.6
+ * TALIA / RANKING PRODUCTIVIDAD - STAGING MOTOR HC v0.6.2
  * ====================================================
  * OBJETIVO: presentar ranking semanal/mensual con misma interfaz, filtros,
  * indicadores y navegacion que ranking_productividad.php productivo, pero
@@ -24,6 +24,10 @@
  * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
  * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
  * reemplaza por el nombre de un colaborador escrito a mano.
+ * FIX 09-OCT-2026 (v0.6.2): consume el contrato del motor que resuelve
+ * unicamente autorreferencias HC verificables por nombre del superior
+ * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
+ * asigna ninguna cuenta ni cambia cifras por si mismo.
  *
  * IMPORTANTE: igualdad de cifras NO CERTIFICADA sin ejecutar ambos contra
  * la misma BD y periodos. No desplegar como reemplazo de produccion.
@@ -2168,10 +2172,10 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.1: ambos periodos deben provenir de la version exacta
+        // CONTRATO v0.6.2: ambos periodos deben provenir de la version exacta
         // desplegada de Motor HC STAGING. La verificacion protege la comparacion
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.1-hc-position-staging';
+        $versionMotorRequerida05 = '0.6.2-hc-position-staging';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
@@ -2572,7 +2576,7 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 
 <section class="table-card" style="padding:12px 18px;margin-bottom:12px">
-<strong>TalIA · MOTOR HC v0.6.1 · STAGING (NO PRODUCTIVO)</strong>
+<strong>TalIA · MOTOR HC v0.6.2 · STAGING (NO PRODUCTIVO)</strong>
 <span style="font-size:12px;color:#475569;margin-left:12px">Instalaciones de Líder, Coach y Vendedor: MISMO universo por cuenta; HC independiente (fotografía BASE <?= h($rank05_fotografias['base']??'?') ?>, ACTUAL <?= h($rank05_fotografias['actual']??'?') ?>). Mix comercial aún no conectado.</span>
 </section>
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>

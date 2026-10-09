@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TALIA / MOTOR HC v0.6.0 - STAGING (NO PRODUCTIVO)
+ * TALIA / MOTOR HC v0.6.2 - STAGING (NO PRODUCTIVO)
  * =====================================================
  * OBJETIVO: asociar una instalacion unica (cuenta) al vendedor, coach y
  * posicion de lider que acredita Capital Humano (HC). No modifica la BD.
@@ -37,8 +37,26 @@ declare(strict_types=1);
  *   6) Certifica solo cadenas HC unicas; conserva casos ambiguos pendientes.
  *   7) Filtra la salida certificada por lider/coach/vendedor solicitados.
  *
+ * FIX v0.6.1 (09-OCT-2026):
+ *   Todas las claves de distrito del indice HC se consultan con el mismo
+ *   normalizador usado al construirlas. Antes Coatza-Mina mostraba ceros
+ *   porque la fila decia 'COATZA MINA' y el indice 'COATZA-MINA'.
+ *   No cambia identidad, criterio de certificacion ni alcance comercial.
+ *
+ * FIX v0.6.2 (09-OCT-2026) - HC AUTORREFERENCIADO:
+ *   Si la fila de un coach declara posicion_lr = id_posicion, esa relacion
+ *   es inconsistente y NO se interpreta como que sea su propio lider.
+ *   Excepcionalmente se busca el nombre_linea_reporte de ESA MISMA fila HC
+ *   entre los ocupantes de plazas de lider validadas por HC, en el MISMO
+ *   distrito normalizado y la MISMA fotografia. El cotejo exige coincidencia
+ *   exacta de tokens del nombre (sin depender del orden), UNA sola plaza
+ *   candidata y ocupante identificado. Sin coincidencia unica, la atribucion
+ *   queda pendiente; nunca se toma el nombre comercial de instalaciones.
+ *   El criterio es general: NO codifica nombres, talentos ni posiciones
+ *   particulares de ningun colaborador.
+ *
  * SALIDA / ARRAY:
- *   version: 0.6.0-hc-position-staging.
+ *   version: 0.6.2-hc-position-staging.
  *   cuentas: filas certificadas (una por cuenta), incluyendo cuenta, fecha,
  *       lider_id, lider_posicion, coach_id, vendedor_id, fuente, estado, hc_foto.
  *   conciliacion: sumatorias de las cuentas filtradas.
@@ -309,6 +327,18 @@ final class RankingAtribucionServiceV06
         foreach ($hc['datos'] as $foto=>$rows) {
             $byFolio=[]; $coachSeats=[]; $coachDuplicado=[];
             $plazas=self::plazasLideres($rows);
+            // Indice EXCLUSIVAMENTE de ocupantes de plazas de lider certificadas
+            // en la fotografia. Permite resolver autorreferencias de coach sin
+            // catalogos de personas fijos y sin consultar nombres del evento.
+            // Una misma firma de nombre puede corresponder a varias plazas:
+            // nunca elegir una de forma arbitraria.
+            $plazasPorNombre=[];
+            foreach ($plazas as $liderId=>$liderInfo) {
+                $nombreLider=(string)($liderInfo['nombre']??'');
+                $distritoLider=(string)($liderInfo['distrito']??'');
+                if (!self::isValidName($nombreLider) || $distritoLider==='') continue;
+                $plazasPorNombre[$distritoLider][self::nameKey($nombreLider)][$liderId]=true;
+            }
             foreach ($rows as $row) {
                 $district=self::normalizarDistrito($row['distrito']??null);
                 if (!$district) continue;
@@ -327,8 +357,24 @@ final class RankingAtribucionServiceV06
                 $coachPos=trim((string)($coach['id_posicion']??''));
                 $superPos=trim((string)($coach['posicion_lr']??''));
                 if ($coachPos==='' || $superPos==='') continue;
-                $lid=$district.'|'.$superPos;
-                if (!isset($plazas[$lid])) continue;
+                if ($superPos===$coachPos) {
+                    // Anomalia HC: posicion_lr apunta a la MISMA plaza del coach.
+                    // Fallback controlado: nombre del SUPERIOR contenido en HC,
+                    // no el nombre del coach ni el texto de instalaciones.
+                    // Unicamente si existe un ocupante de lider univoco y
+                    // validado por posicion en la misma foto y distrito.
+                    $superiorNombre=(string)($coach['nombre_linea_reporte']??'');
+                    if (!self::isValidName($superiorNombre)) continue;
+                    $posibles=array_keys($plazasPorNombre[$district][self::nameKey($superiorNombre)]??[]);
+                    if (count($posibles)!==1) continue;
+                    $lid=(string)$posibles[0];
+                    if (!isset($plazas[$lid]) || (string)$plazas[$lid]['plaza']===$coachPos) continue;
+                } else {
+                    // Regla ordinaria: la posicion superior determina el lider.
+                    // Un nombre solo NUNCA puede invalidar/cambiar este vinculo.
+                    $lid=$district.'|'.$superPos;
+                    if (!isset($plazas[$lid])) continue;
+                }
                 // Dos filas diferentes para la misma posición de coach => no asignar.
                 if (array_key_exists($coachPos,$coachSeats[$district]??[])) {
                     $coachDuplicado[$district][$coachPos]=true;
@@ -378,7 +424,12 @@ final class RankingAtribucionServiceV06
             $candidatos=[];
             if ($seller!==null && !$hicAmbiguo && !$fechaAmbigua && $fotoKey!==null) {
                 foreach ($indices[$fotoKey]['personas'][$seller]??[] as $h) {
-                    $district=(string)$h['distrito'];
+                    // CRITICO: las plazas/los coaches se indexaron por distrito CANONICO.
+                    // La fila HC puede decir COATZA MINA / COATZA-MINA / COATZA/MINA.
+                    // Consultar con el texto crudo provocaba perder TODA la atribucion
+                    // de Coatza-Mina pese a existir vendedor, coach y lider en HC.
+                    $district=self::normalizarDistrito($h['distrito']??null);
+                    if ($district===null) continue;
                     $coachPos=trim((string)($h['posicion_lr']??''));
                     $coach=$indices[$fotoKey]['coaches'][$district][$coachPos]??null;
                     if (!$coach) continue;
@@ -457,7 +508,7 @@ final class RankingAtribucionServiceV06
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.0-hc-position-staging',
+            'version'=>'0.6.2-hc-position-staging',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
