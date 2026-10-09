@@ -2130,7 +2130,7 @@ $rank05_estado='';
 $rank05_fotografias=[];
 if ($view !== 'ventas') {
     try {
-        require_once __DIR__.'/ranking_atribucion_service.php';
+        require_once __DIR__.'/ranking_atribucion_service_v04.php';
         $motor05=new RankingAtribucionService($conexion);
         $catalogo05=rank05_catalogo();
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
@@ -2538,7 +2538,9 @@ body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed;
 </section>
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
 
-<?php if (!$query_error && !in_array($view, ['ventas','vendedores'], true)): ?>
+<?php if ($query_error): ?>
+<section class="table-card" style="padding:20px"><strong>No se muestran indicadores porque el motor no pudo calcularlos.</strong><p>Corrige el error informado arriba y vuelve a cargar la página.</p></section>
+<?php elseif (!in_array($view, ['ventas','vendedores'], true)): ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
     <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
@@ -2797,7 +2799,7 @@ foreach ($coach_matrix as $v) {
     </div>
 </section>
 
-<?php else: ?>
+<?php elseif (!$query_error): ?>
 <?php
 $total_ventas_hist = 0;
 $best_week = 0;
