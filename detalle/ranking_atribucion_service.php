@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA Ranking — motor canónico v0.1 (AUDITORÍA / SOLO LECTURA).
+ * TalIA Ranking — motor canónico v0.3 (HC/HIC / SOLO LECTURA).
  * Basado en STAGING v1.1: eventos por cuenta; HC fotografía <= semana;
  * evento prevalece; HC/HIC solo fallback sin coach válido.
  * NO sustituye ni modifica ranking_productividad.php.
@@ -79,6 +79,65 @@ final class RankingAtribucionService
         return $out;
     }
 
+    /**
+     * HIC es identidad de PERSONA. Nunca relacionar individuos por id_posicion.
+     * Detecta bifurcaciones/ciclos y las deja expresamente sin certificación.
+     * $historial: pares numero_talento_anterior/numero_talento_nuevo.
+     */
+    public static function resolverEquivalenciasHic(array $historial): array
+    {
+        $next=[]; $previous=[]; $nodes=[]; $ambiguous=[];
+        foreach ($historial as $h) {
+            $a=trim((string)($h['numero_talento_anterior']??''));
+            $b=trim((string)($h['numero_talento_nuevo']??''));
+            if ($a==='' || $b==='' || $a===$b || $a==='-' || $b==='-') continue;
+            $nodes[$a]=true; $nodes[$b]=true;
+            $next[$a][$b]=true;
+            $previous[$b][$a]=true;
+        }
+        foreach ($next as $node=>$successors) if(count($successors)>1) $ambiguous[$node]=true;
+        foreach ($previous as $node=>$predecessors) if(count($predecessors)>1) $ambiguous[$node]=true;
+        $adj=[];
+        foreach ($next as $a=>$bs) foreach($bs as $b=>$_) {
+            $adj[$a][$b]=true; $adj[$b][$a]=true;
+        }
+        $aliases=[]; $canonical=[]; $status=[]; $visited=[];
+        foreach (array_keys($nodes) as $start) {
+            if (isset($visited[$start])) continue;
+            $stack=[$start]; $component=[];
+            while ($stack) {
+                $v=array_pop($stack);
+                if (isset($visited[$v])) continue;
+                $visited[$v]=true; $component[$v]=true;
+                foreach (array_keys($adj[$v]??[]) as $neighbor) if(!isset($visited[$neighbor])) $stack[]=$neighbor;
+            }
+            $ids=array_keys($component); sort($ids,SORT_STRING);
+            $isAmbiguous=false; $tips=[];
+            foreach ($ids as $id) {
+                if (isset($ambiguous[$id])) $isAmbiguous=true;
+                if (empty($next[$id])) $tips[]=$id;
+            }
+            if(count($tips)!==1) $isAmbiguous=true;
+            $end=$isAmbiguous?null:$tips[0];
+            foreach ($ids as $id) {
+                $status[$id]=$isAmbiguous?'HIC_AMBIGUA':'HIC_VERIFICABLE';
+                if (!$isAmbiguous) {
+                    $canonical[$id]=$end;
+                    $aliases[$id]=array_values(array_diff($ids,[$id]));
+                }
+            }
+        }
+        return ['equivalencias'=>$aliases,'canonicos'=>$canonical,'estados'=>$status,
+                'componentes_ambiguos'=>count(array_unique(array_filter(array_map(
+                    static fn($id)=>($status[$id]??'')==='HIC_AMBIGUA'?$id:null,array_keys($status)))) )];
+    }
+
+    /** Se ejecuta una única consulta HIC por selección, en modo lectura. */
+    public function cargarHic(): array
+    {
+        return $this->query('SELECT numero_talento_anterior, numero_talento_nuevo FROM historial_identidad_colaborador');
+    }
+
     /** Última fotografía <= semana de la FECHA del evento; nunca futura. */
     private function fotografia(string $fecha): ?array
     {
@@ -141,7 +200,7 @@ final class RankingAtribucionService
      * $equivalenciasTalento: solo relaciones HIC previamente validadas de la MISMA persona.
      * Si hay conflicto real, nunca lo resuelve alfabéticamente.
      */
-    public function resolverFilas(array $eventos, array $hc, array $equivalenciasTalento=[]): array
+    public function resolverFilas(array $eventos, array $hc, array $equivalenciasTalento=[], array $canonicosTalento=[], array $estadosHic=[]): array
     {
         $groups=[];
         foreach ($eventos as $e) {
@@ -161,7 +220,15 @@ final class RankingAtribucionService
                 $f=trim((string)($e['folio_empleado']??''));
                 if ($f!=='' && $f!=='VACANTE') $folios[$f]=true;
             }
-            $seller=count($folios)===1?(string)array_key_first($folios):null;
+            $personas=[];
+            foreach (array_keys($folios) as $folio) {
+                $identity=($estadosHic[$folio]??null)==='HIC_AMBIGUA' ? 'AMBIGUA|'.$folio : ($canonicosTalento[$folio]??$folio);
+                $personas[$identity]=true;
+            }
+            $seller=count($personas)===1?(string)array_key_first($personas):null;
+            $sellerOriginal=count($folios)===1?(string)array_key_first($folios):null;
+            $sellerAmbiguous=false;
+            foreach (array_keys($folios) as $folio) if(($estadosHic[$folio]??'')==='HIC_AMBIGUA') $sellerAmbiguous=true;
             $status='OK';$fuente='EVENTO';$coachId=null;$coachNombre=null;
             $photo=$hc['fotos'][implode('-',self::isoWeek($fecha))]??null;
             $photoKey=$photo?implode('-',$photo):null;
@@ -183,8 +250,12 @@ final class RankingAtribucionService
             } else {
                 $fuente='HC_HIC';
                 $candidates=[];
-                if ($seller!==null) {
-                    $aliases=array_unique(array_merge([$seller],$equivalenciasTalento[$seller]??[]));
+                if ($seller!==null && !$sellerAmbiguous) {
+                    $aliases=[$seller];
+                    foreach (array_keys($folios) as $f) {
+                        $aliases=array_merge($aliases,[$f],$equivalenciasTalento[$f]??[]);
+                    }
+                    $aliases=array_values(array_unique($aliases));
                     foreach ($hc['datos'][$photoKey]??[] as $h) {
                         if ($h['distrito']!==$this->lideres[$lid]['hc']) continue;
                         if (!in_array((string)$h['numero_talento_gs'],$aliases,true)) continue;
@@ -206,10 +277,13 @@ final class RankingAtribucionService
                     if (!self::isValidName($coachNombre)) {$coachId=null;$coachNombre=null;$status='SIN_COACH';}
                 } else $status=count($candidates)>1?'CONFLICTO_FALLBACK':'SIN_COACH';
             }
-            if (count($folios)>1 && $status==='OK') $status='CONFLICTO_VENDEDOR';
+            if (count($personas)>1 && $status==='OK') $status='CONFLICTO_VENDEDOR';
+            if ($sellerAmbiguous && $status==='OK') $status='HIC_AMBIGUA';
             $out[]=[
                 'cuenta'=>(string)$cuenta,'fecha'=>$fecha,
                 'lider_id'=>$lid,'coach_id'=>$coachId,'vendedor_id'=>$seller,
+                'vendedor_folio_original'=>$sellerOriginal,
+                'identidad_hic'=>$sellerAmbiguous?'HIC_AMBIGUA':($seller!==null && $seller!==$sellerOriginal?'HIC_VERIFICABLE':'DIRECTA_O_SIN_HIC'),
                 'coach_evento'=>$coachNombre,'fuente'=>$fuente,
                 'estado'=>$status,'hc_foto'=>$photoKey,'filas_origen'=>count($evs),
             ];
@@ -233,10 +307,18 @@ final class RankingAtribucionService
     ): array {
         $eventos=$this->cargarEventos($desde,$hasta,$diasIso);
         $hc=$this->cargarHc($desde,$hasta);
-        $filas=$this->resolverFilas($eventos,$hc,$equivalenciasTalento);
+        // Sólo consultar HIC si hay eventos; ante error se interrumpe, sin fabricar ceros.
+        $hic=$eventos ? self::resolverEquivalenciasHic($this->cargarHic()) : ['equivalencias'=>[],'canonicos'=>[],'estados'=>[]];
+        $map=$hic['equivalencias'];
+        foreach ($equivalenciasTalento as $folio=>$aliases) {
+            if (isset($hic['estados'][(string)$folio]) && $hic['estados'][(string)$folio]==='HIC_AMBIGUA') continue;
+            $map[(string)$folio]=array_values(array_unique(array_merge($map[(string)$folio]??[],(array)$aliases)));
+        }
+        $filas=$this->resolverFilas($eventos,$hc,$map,$hic['canonicos'],$hic['estados']);
         $seleccion=self::filtrar($filas,$idLider,$idCoach,$idVendedor);
         return [
-            'version'=>'0.1.0-auditoria',
+            'version'=>'0.3.0-hc-hic',
+            'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
             'conciliacion_global'=>self::conciliar($filas),
