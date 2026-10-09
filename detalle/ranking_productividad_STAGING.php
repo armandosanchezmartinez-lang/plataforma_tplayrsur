@@ -23,10 +23,6 @@
  * IMPORTANTE: igualdad de cifras NO CERTIFICADA sin ejecutar ambos contra
  * la misma BD y periodos. No desplegar como reemplazo de produccion.
  */
-?>
-
-
-<?php
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
