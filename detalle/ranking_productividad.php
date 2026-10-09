@@ -2576,7 +2576,6 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 
 <section class="table-card" style="padding:12px 18px;margin-bottom:12px">
-<strong>TalIA · MOTOR HC v0.6.2 · STAGING (NO PRODUCTIVO)</strong>
 <span style="font-size:12px;color:#475569;margin-left:12px">Instalaciones de Líder, Coach y Vendedor: MISMO universo por cuenta; HC independiente (fotografía BASE <?= h($rank05_fotografias['base']??'?') ?>, ACTUAL <?= h($rank05_fotografias['actual']??'?') ?>). Mix comercial aún no conectado.</span>
 </section>
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
