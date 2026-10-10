@@ -37,8 +37,10 @@
  *   permanecen intactos.
  * - Motor HC entrega las cuentas y atribuciones de BASE y ACTUAL.
  * - Motor Comercial clasifica esas cuentas mediante catalogo_paquetes.
- * - ARPU de ambos períodos; 2P/3P, Oferta y Bundle SOLO período ACTUAL.
- * - Cada porcentaje se calcula sobre las instalaciones HC certificadas.
+ * - ARPU, 2P/3P, Oferta y Bundles comparan BASE y ACTUAL.
+ * - Cada porcentaje usa el total HC certificado DEL MISMO período.
+ * - DIF ARPU = ACTUAL - BASE, %DIF ARPU = DIF / BASE * 100.
+ * - Sin ARPU en alguno de los períodos => diferencias no disponibles (—).
  * - Errores de clasificación NO ocultan las instalaciones HC del ranking.
  * - Ruta de aceptación STAGING: contrastar primero cuentas y luego mixes.
  */
@@ -2239,12 +2241,16 @@ if ($view !== 'ventas') {
                     $fila05['arpu_cuentas_actual'] = $a05['arpu_cuentas'];
                     $fila05['arpu_neto_base'] = $b05['arpu_ingreso_neto'];
                     $fila05['arpu_neto_actual'] = $a05['arpu_ingreso_neto'];
-                    foreach (['doble_play','triple_play','play_sin_clasificar',
-                              'residencial','negocios','oferta_sin_clasificar',
-                              'no_bundle','bundle','bundle_sin_clasificar',
-                              'catalogo_sin_match','catalogo_ambiguo',
-                              'arpu_fuente_catalogo','arpu_precio_ambiguo'] as $campo05) {
-                        $fila05[$campo05] = $a05[$campo05];
+                     // Conserva los contadores de AMBOS periodos. La atribucion
+                     // HC no cambia: solo anexa las propiedades comerciales.
+                     foreach (['doble_play','triple_play','play_sin_clasificar',
+                               'residencial','negocios','oferta_sin_clasificar',
+                               'no_bundle','bundle','bundle_sin_clasificar',
+                               'catalogo_sin_match','catalogo_ambiguo',
+                               'instalacion_no_encontrada','instalacion_plan_ambiguo',
+                               'arpu_fuente_catalogo','arpu_precio_ambiguo'] as $campo05) {
+                         $fila05[$campo05.'_base'] = $b05[$campo05];
+                         $fila05[$campo05.'_actual'] = $a05[$campo05];
                     }
                 }
                 unset($fila05);
@@ -2396,6 +2402,11 @@ body.page-ranking .calendar-day.adjacent-month.selected-start,
 body.page-ranking .calendar-day.adjacent-month.selected-end,
 body.page-ranking .calendar-day.adjacent-month.in-range { opacity:1; }
 body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed; }
+/* Solo tabla de vendedores: separación legible de 4 comparativos. */
+body.page-ranking .commercial-compare-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
+body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
+body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
+body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
 </style>
 
 </head>
@@ -2765,38 +2776,81 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 <?php elseif ($view === 'vendedores'): ?>
 <?php
-/*
- * VISTA COMERCIAL - NIVEL VENDEDOR.
- * Métricas HC de ambos periodos, ARPU de ambos periodos; distribución de
- * Play, Oferta y Bundle solo de ACTUAL. Las columnas no recalculan cuentas.
+/**
+ * TALIA - COMPARATIVO COMERCIAL VENDEDOR (STAGING 10-OCT-2026)
+ * ----------------------------------------------------------
+ * Mismo universo certificado del Motor HC para BASE y ACTUAL.
+ * Mix = cuentas clasificadas / TODAS las cuentas HC del MISMO periodo.
+ * ARPU se agrega por importe neto y cuentas validas (no por promedio simple
+ * de ARPU entre vendedores). Si no existe ARPU en BASE o ACTUAL, DIF/%DIF
+ * permanecen sin dato. Motor Comercial y Motor HC no se modifican aqui.
  */
 $total_coach = 0;
 $mejor_vendedor = '';
 $mejor_total = -1;
+$camposComerciales05 = [
+    'doble_play','triple_play','play_sin_clasificar',
+    'residencial','negocios','oferta_sin_clasificar',
+    'no_bundle','bundle','bundle_sin_clasificar',
+    'catalogo_sin_match','catalogo_ambiguo',
+    'instalacion_no_encontrada','instalacion_plan_ambiguo',
+    'arpu_fuente_catalogo','arpu_precio_ambiguo'
+];
 $sum05 = array_fill_keys([
- 'ins_base','ins_actual','doble_play','triple_play','play_sin_clasificar',
- 'residencial','negocios','oferta_sin_clasificar','no_bundle','bundle',
- 'bundle_sin_clasificar','arpu_cuentas_base','arpu_cuentas_actual',
- 'arpu_neto_base','arpu_neto_actual','catalogo_sin_match','catalogo_ambiguo',
- 'arpu_fuente_catalogo','arpu_precio_ambiguo'
+    'ins_base','ins_actual',
+    'arpu_cuentas_base','arpu_cuentas_actual',
+    'arpu_neto_base','arpu_neto_actual'
 ], 0);
+foreach ($camposComerciales05 as $campo05) {
+    $sum05[$campo05.'_base'] = 0;
+    $sum05[$campo05.'_actual'] = 0;
+}
 foreach ($coach_matrix as $v) {
     $ventas_actual_v = (int)($v['ins_actual'] ?? 0);
     $total_coach += $ventas_actual_v;
     if ($ventas_actual_v > $mejor_total) {
         $mejor_total = $ventas_actual_v;
-        $mejor_vendedor = $v['vendedor'];
+        $mejor_vendedor = (string)($v['vendedor'] ?? '');
     }
-    foreach ($sum05 as $campo05 => &$valor05) { $valor05 += (float)($v[$campo05] ?? 0); }
+    foreach ($sum05 as $campo05 => &$valor05) {
+        $valor05 += (float)($v[$campo05] ?? 0);
+    }
     unset($valor05);
 }
+// ARPU TOTAL = suma de importes netos / suma de cuentas con precio valido.
 $arpuTotBase05 = $sum05['arpu_cuentas_base'] > 0
     ? $sum05['arpu_neto_base'] / $sum05['arpu_cuentas_base'] : null;
 $arpuTotActual05 = $sum05['arpu_cuentas_actual'] > 0
     ? $sum05['arpu_neto_actual'] / $sum05['arpu_cuentas_actual'] : null;
 $pct_mc05 = static function($parte, $total): ?int {
-    return (int)$total > 0 ? (int)round(100 * (float)$parte / (float)$total) : null;
+    return (float)$total > 0 ? (int)round(100 * (float)$parte / (float)$total) : null;
 };
+$arpuDif05 = static function($base, $actual): ?float {
+    return $base === null || $actual === null ? null : (float)$actual-(float)$base;
+};
+$arpuPctDif05 = static function($base, $actual): ?float {
+    return $base === null || $actual === null || (float)$base <= 0
+        ? null : (100 * ((float)$actual-(float)$base) / (float)$base);
+};
+$fmtDifArpu05 = static function($dif): string {
+    if ($dif === null) return '—';
+    $v = (float)$dif;
+    return ($v > 0 ? '+' : ($v < 0 ? '−' : '')).'$'.fmt_num(abs($v), 2);
+};
+$fmtPctArpu05 = static function($pct): string {
+    if ($pct === null) return '—';
+    $v = (float)$pct;
+    return ($v > 0 ? '+' : ($v < 0 ? '−' : '')).fmt_num(abs($v), 1).'%';
+};
+// Orden solicitado: cada dimensión BASE y ACTUAL, seguida por la siguiente.
+$dimensiones05 = [
+    ['campo'=>'doble_play', 'rotulo'=>'% 2P'],
+    ['campo'=>'triple_play', 'rotulo'=>'% 3P'],
+    ['campo'=>'residencial', 'rotulo'=>'% RES.'],
+    ['campo'=>'negocios', 'rotulo'=>'% NEG.'],
+    ['campo'=>'no_bundle', 'rotulo'=>'% NO BUNDLE'],
+    ['campo'=>'bundle', 'rotulo'=>'% BUNDLE'],
+];
 ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
@@ -2813,11 +2867,11 @@ $pct_mc05 = static function($parte, $total): ?int {
 <?php endif; ?>
 <section class="table-card">
     <div class="table-head">
-        <strong>Resumen por vendedor del coach</strong>
-        <span>Instalaciones y ARPU: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Plays / Oferta / Bundles: <?= h($label_col_actual) ?> · Universo Motor HC v0.6.2</span>
+        <strong>Resumen comparativo por vendedor del coach</strong>
+        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.2</span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table" style="min-width:2100px">
+        <table class="sales-table commercial-compare-table" style="min-width:2390px">
             <thead>
                 <tr>
                     <th rowspan="2">Nombre vendedor</th>
@@ -2826,26 +2880,20 @@ $pct_mc05 = static function($parte, $total): ?int {
                     <th rowspan="2" class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
-                    <th colspan="2" class="group center">ARPU</th>
-                    <th colspan="4" class="group center">PLAYS · <?= h($label_col_actual) ?></th>
-                    <th colspan="4" class="group center">OFERTA · <?= h($label_col_actual) ?></th>
-                    <th colspan="4" class="group center">BUNDLES · <?= h($label_col_actual) ?></th>
+                    <th colspan="4" class="group center">ARPU</th>
+                    <th colspan="4" class="group center">PLAYS</th>
+                    <th colspan="4" class="group center">OFERTA (RESIDENCIAL / NEGOCIOS)</th>
+                    <th colspan="4" class="group center">BUNDLES</th>
                 </tr>
                 <tr>
                     <th class="num matrix-sortable" data-sort="arpu_base">$ARPU<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th class="num matrix-sortable" data-sort="arpu_actual">$ARPU<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="doble">2P <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_doble">% 2P <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="triple">3P <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_triple">% 3P <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="resid">RESIDENCIAL <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_resid">% RESIDENCIAL <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="neg">NEGOCIOS <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_neg">% NEGOCIOS <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="no_bundle">NO BUNDLE <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_no_bundle">% NO BUNDLE <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="bundle">BUNDLE <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_bundle">% BUNDLE <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="arpu_dif">DIF $ <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="arpu_pct_dif">% DIF <span class="sort-icon">↕</span></th>
+                    <?php foreach ($dimensiones05 as $dimension05): ?>
+                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_base"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_actual"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <?php endforeach; ?>
                 </tr>
             </thead>
             <tbody>
@@ -2857,19 +2905,16 @@ $pct_mc05 = static function($parte, $total): ?int {
                     $pct_v = $pct_mc05($dif_v, $ins_base_v);
                     $ab05 = $comercial05_ok ? ($v['arpu_base'] ?? null) : null;
                     $aa05 = $comercial05_ok ? ($v['arpu_actual'] ?? null) : null;
-                    $d05 = (int)($v['doble_play'] ?? 0);
-                    $t05 = (int)($v['triple_play'] ?? 0);
-                    $r05 = (int)($v['residencial'] ?? 0);
-                    $n05 = (int)($v['negocios'] ?? 0);
-                    $nb05 = (int)($v['no_bundle'] ?? 0);
-                    $bu05 = (int)($v['bundle'] ?? 0);
-                    // Denominador único: cuentas HC ACTUAL. Sin clasificar ocupa faltante.
-                    $pd05 = $pct_mc05($d05,$ins_actual_v);
-                    $pt05 = $pct_mc05($t05,$ins_actual_v);
-                    $pr05 = $pct_mc05($r05,$ins_actual_v);
-                    $pn05 = $pct_mc05($n05,$ins_actual_v);
-                    $pnb05 = $pct_mc05($nb05,$ins_actual_v);
-                    $pbu05 = $pct_mc05($bu05,$ins_actual_v);
+                    $difArpu05 = $arpuDif05($ab05, $aa05);
+                    $pctArpu05 = $arpuPctDif05($ab05, $aa05);
+                    $mixPct05 = [];
+                    foreach ($dimensiones05 as $dimension05) {
+                        $campo05 = $dimension05['campo'];
+                        $mixPct05[$campo05.'_base'] = $comercial05_ok
+                            ? $pct_mc05($v[$campo05.'_base'] ?? 0, $ins_base_v) : null;
+                        $mixPct05[$campo05.'_actual'] = $comercial05_ok
+                            ? $pct_mc05($v[$campo05.'_actual'] ?? 0, $ins_actual_v) : null;
+                    }
                     $antig_meses = 0;
                     if (is_numeric($v['antiguedad'])) $antig_meses = (float)$v['antiguedad'];
                     elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1]*12+(int)$m[2];
@@ -2878,69 +2923,80 @@ $pct_mc05 = static function($parte, $total): ?int {
                 <tr class="matrix-row"
                     data-antiguedad="<?= h($antig_meses) ?>"
                     data-ins_base="<?= h($ins_base_v) ?>" data-ins_actual="<?= h($ins_actual_v) ?>"
-                    data-dif="<?= h($dif_v) ?>" data-pct_dif="<?= h($pct_v ?? 0) ?>"
-                    data-arpu_base="<?= h($ab05 ?? -1) ?>" data-arpu_actual="<?= h($aa05 ?? -1) ?>"
-                    data-doble="<?= h($d05) ?>" data-pct_doble="<?= h($pd05 ?? -1) ?>"
-                    data-triple="<?= h($t05) ?>" data-pct_triple="<?= h($pt05 ?? -1) ?>"
-                    data-resid="<?= h($r05) ?>" data-pct_resid="<?= h($pr05 ?? -1) ?>"
-                    data-neg="<?= h($n05) ?>" data-pct_neg="<?= h($pn05 ?? -1) ?>"
-                    data-no_bundle="<?= h($nb05) ?>" data-pct_no_bundle="<?= h($pnb05 ?? -1) ?>"
-                    data-bundle="<?= h($bu05) ?>" data-pct_bundle="<?= h($pbu05 ?? -1) ?>">
+                    data-dif="<?= h($dif_v) ?>" data-pct_dif="<?= h($pct_v ?? -999999) ?>"
+                    data-arpu_base="<?= h($ab05 ?? -999999) ?>" data-arpu_actual="<?= h($aa05 ?? -999999) ?>"
+                    data-arpu_dif="<?= h($difArpu05 ?? -999999) ?>" data-arpu_pct_dif="<?= h($pctArpu05 ?? -999999) ?>"
+                    <?php foreach ($dimensiones05 as $dimension05):
+                        $campo05=$dimension05['campo']; ?>
+                        data-pct_<?= h($campo05) ?>_base="<?= h($mixPct05[$campo05.'_base'] ?? -999999) ?>"
+                        data-pct_<?= h($campo05) ?>_actual="<?= h($mixPct05[$campo05.'_actual'] ?? -999999) ?>"
+                    <?php endforeach; ?>>
                     <td class="entity"><?= h($v['vendedor']) ?></td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
                     <td class="num"><?= fmt_num($ins_base_v) ?></td>
                     <td class="num"><?= fmt_num($ins_actual_v) ?></td>
                     <td class="num"><?= fmt_num($dif_v) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '-' : fmt_num($pct_v).'%' ?></span></td>
+                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '—' : fmt_num($pct_v).'%' ?></span></td>
                     <td class="num"><?= $ab05 === null ? '—' : '$'.fmt_num($ab05,2) ?></td>
                     <td class="num"><?= $aa05 === null ? '—' : '$'.fmt_num($aa05,2) ?></td>
-                    <?php if ($comercial05_ok): ?>
-                        <td class="num"><?= fmt_num($d05) ?></td><td class="center"><?= $pd05 === null ? '—' : fmt_num($pd05).'%' ?></td>
-                        <td class="num"><?= fmt_num($t05) ?></td><td class="center"><?= $pt05 === null ? '—' : fmt_num($pt05).'%' ?></td>
-                        <td class="num"><?= fmt_num($r05) ?></td><td class="center"><?= $pr05 === null ? '—' : fmt_num($pr05).'%' ?></td>
-                        <td class="num"><?= fmt_num($n05) ?></td><td class="center"><?= $pn05 === null ? '—' : fmt_num($pn05).'%' ?></td>
-                        <td class="num"><?= fmt_num($nb05) ?></td><td class="center"><?= $pnb05 === null ? '—' : fmt_num($pnb05).'%' ?></td>
-                        <td class="num"><?= fmt_num($bu05) ?></td><td class="center"><?= $pbu05 === null ? '—' : fmt_num($pbu05).'%' ?></td>
-                    <?php else: ?>
-                        <?php for ($c05=0; $c05<12; $c05++): ?><td class="center">—</td><?php endfor; ?>
-                    <?php endif; ?>
+                    <td class="num"><?= $fmtDifArpu05($difArpu05) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($pctArpu05) ?>"><?= $fmtPctArpu05($pctArpu05) ?></span></td>
+                    <?php foreach ($dimensiones05 as $dimension05):
+                        $campo05=$dimension05['campo']; ?>
+                        <td class="center"><?= $mixPct05[$campo05.'_base'] === null ? '—' : fmt_num($mixPct05[$campo05.'_base']).'%' ?></td>
+                        <td class="center"><?= $mixPct05[$campo05.'_actual'] === null ? '—' : fmt_num($mixPct05[$campo05.'_actual']).'%' ?></td>
+                    <?php endforeach; ?>
                 </tr>
                 <?php endforeach; ?>
+                <?php
+                    $difTotArpu05 = $comercial05_ok ? $arpuDif05($arpuTotBase05, $arpuTotActual05) : null;
+                    $pctTotArpu05 = $comercial05_ok ? $arpuPctDif05($arpuTotBase05, $arpuTotActual05) : null;
+                    $difTot05=$pct_mc05($sum05['ins_actual']-$sum05['ins_base'],$sum05['ins_base']);
+                ?>
                 <tr class="total-row">
                     <td>TOTAL</td><td></td>
                     <td class="num"><?= fmt_num($sum05['ins_base']) ?></td>
                     <td class="num"><?= fmt_num($sum05['ins_actual']) ?></td>
                     <td class="num"><?= fmt_num($sum05['ins_actual']-$sum05['ins_base']) ?></td>
-                    <?php $difTot05=$pct_mc05($sum05['ins_actual']-$sum05['ins_base'],$sum05['ins_base']); ?>
                     <td class="center"><span class="badge <?= pct_class($difTot05) ?>"><?= $difTot05===null?'—':fmt_num($difTot05).'%' ?></span></td>
                     <td class="num"><?= $comercial05_ok && $arpuTotBase05!==null?'$'.fmt_num($arpuTotBase05,2):'—' ?></td>
                     <td class="num"><?= $comercial05_ok && $arpuTotActual05!==null?'$'.fmt_num($arpuTotActual05,2):'—' ?></td>
-                    <?php if ($comercial05_ok): ?>
-                        <?php foreach ([['doble_play'],['triple_play'],['residencial'],['negocios'],['no_bundle'],['bundle']] as $x05):
-                            $campo05=$x05[0];$porcentaje05=$pct_mc05($sum05[$campo05],$sum05['ins_actual']); ?>
-                        <td class="num"><?= fmt_num($sum05[$campo05]) ?></td>
-                        <td class="center"><?= $porcentaje05===null?'—':fmt_num($porcentaje05).'%' ?></td>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <?php for ($c05=0; $c05<12; $c05++): ?><td class="center">—</td><?php endfor; ?>
-                    <?php endif; ?>
+                    <td class="num"><?= $fmtDifArpu05($difTotArpu05) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($pctTotArpu05) ?>"><?= $fmtPctArpu05($pctTotArpu05) ?></span></td>
+                    <?php foreach ($dimensiones05 as $dimension05):
+                        $campo05=$dimension05['campo'];
+                        $pBase05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_base'],$sum05['ins_base']) : null;
+                        $pActual05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_actual'],$sum05['ins_actual']) : null;
+                    ?>
+                        <td class="center"><?= $pBase05===null?'—':fmt_num($pBase05).'%' ?></td>
+                        <td class="center"><?= $pActual05===null?'—':fmt_num($pActual05).'%' ?></td>
+                    <?php endforeach; ?>
                 </tr>
             </tbody>
         </table>
     </div>
     <?php if ($comercial05_ok): ?>
     <div style="padding:12px 20px; font-size:12px; opacity:.83; line-height:1.65">
-        <strong>Auditoría comercial (<?= h($label_col_actual) ?>):</strong>
+        <strong>Auditoría comercial · BASE <?= h($label_col_base) ?>:</strong>
+        <?= fmt_num($sum05['ins_base']) ?> instalaciones HC certificadas ·
+        Sin clasificar Plays: <?= fmt_num($sum05['play_sin_clasificar_base']) ?>,
+        Oferta: <?= fmt_num($sum05['oferta_sin_clasificar_base']) ?>,
+        Bundle: <?= fmt_num($sum05['bundle_sin_clasificar_base']) ?> ·
+        Plan sin coincidencia: <?= fmt_num($sum05['catalogo_sin_match_base']) ?> ·
+        Catálogo ambiguo: <?= fmt_num($sum05['catalogo_ambiguo_base']) ?> ·
+        ARPU: <?= fmt_num($sum05['arpu_cuentas_base']) ?>/<?= fmt_num($sum05['ins_base']) ?> cuentas con precio
+        (respaldo catálogo actual: <?= fmt_num($sum05['arpu_fuente_catalogo_base']) ?>).
+        <div style="height:4px"></div>
+        <strong>Auditoría comercial · ACTUAL <?= h($label_col_actual) ?>:</strong>
         <?= fmt_num($sum05['ins_actual']) ?> instalaciones HC certificadas ·
-        Sin clasificar Plays: <?= fmt_num($sum05['play_sin_clasificar']) ?> ·
-        Oferta: <?= fmt_num($sum05['oferta_sin_clasificar']) ?> ·
-        Bundle: <?= fmt_num($sum05['bundle_sin_clasificar']) ?> ·
-        Plan sin coincidencia: <?= fmt_num($sum05['catalogo_sin_match']) ?> ·
-        Catálogo ambiguo: <?= fmt_num($sum05['catalogo_ambiguo']) ?>.
-        ARPU: <?= fmt_num($sum05['arpu_cuentas_base']) ?>/<?= fmt_num($sum05['ins_base']) ?> cuentas con precio BASE,
-        <?= fmt_num($sum05['arpu_cuentas_actual']) ?>/<?= fmt_num($sum05['ins_actual']) ?> ACTUAL
-        (precio de catálogo vigente como respaldo: <?= fmt_num($sum05['arpu_fuente_catalogo']) ?>).
-        Porcentajes calculados sobre el total HC certificado, no solo los clasificados.
+        Sin clasificar Plays: <?= fmt_num($sum05['play_sin_clasificar_actual']) ?>,
+        Oferta: <?= fmt_num($sum05['oferta_sin_clasificar_actual']) ?>,
+        Bundle: <?= fmt_num($sum05['bundle_sin_clasificar_actual']) ?> ·
+        Plan sin coincidencia: <?= fmt_num($sum05['catalogo_sin_match_actual']) ?> ·
+        Catálogo ambiguo: <?= fmt_num($sum05['catalogo_ambiguo_actual']) ?> ·
+        ARPU: <?= fmt_num($sum05['arpu_cuentas_actual']) ?>/<?= fmt_num($sum05['ins_actual']) ?> cuentas con precio
+        (respaldo catálogo actual: <?= fmt_num($sum05['arpu_fuente_catalogo_actual']) ?>).
+        <div>Porcentajes sobre instalaciones HC del período correspondiente; el total no necesariamente suma 100% si existen planes sin clasificar. ARPU ponderado por cuentas con precio válido.</div>
     </div>
     <?php endif; ?>
 </section>
