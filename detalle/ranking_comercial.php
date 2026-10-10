@@ -1,6 +1,6 @@
 <?php
 /**
- * TALIA / RANKING COMERCIAL v0.1.0 STAGING - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
+ * TALIA / RANKING COMERCIAL v0.1.1 STAGING - AJUSTE DE COLUMNAS - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
  * ====================================================
  * MODULO INDEPENDIENTE (10-OCT-2026):
  * - Base fiel de ranking_productividad.php aportado para esta iteracion.
@@ -2525,6 +2525,44 @@ body.page-ranking .rc-summary-table td { padding-left:8px; padding-right:8px; wh
 body.page-ranking .rc-summary-table td.entity { min-width:210px; white-space:normal; font-weight:700; }
 body.page-ranking .rc-summary-table tbody tr.rc-row { cursor:pointer; }
 body.page-ranking .rc-summary-table tbody tr.rc-row:hover { background:#f1efff; }
+/*
+ * AJUSTE VISUAL 10-OCT-2026 - columnas de Líder y Coach.
+ * La hoja corporativa y el zoom del navegador podían expandir la columna #
+ * y dejar el nombre con apenas unos caracteres por renglón.
+ * Se fija una distribución estable ÚNICAMENTE en el resumen comercial:
+ * # = 56px; Distrito = 135px; Nombre = 368px.
+ * No aplica a Vendedor ni altera SQL, Motor HC, Motor Comercial o métricas.
+ */
+body.page-ranking #rcRankingTable {
+    width: 2450px !important;
+    min-width: 2450px !important;
+    table-layout: fixed !important;
+}
+body.page-ranking #rcRankingTable thead tr:first-child > th:first-child,
+body.page-ranking #rcRankingTable tbody > tr > td:first-child {
+    width: 56px !important;
+    min-width: 56px !important;
+    max-width: 56px !important;
+    text-align: center;
+}
+body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(2),
+body.page-ranking #rcRankingTable tbody > tr > td:nth-child(2) {
+    width: 135px !important;
+    min-width: 135px !important;
+    max-width: 135px !important;
+}
+body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(3),
+body.page-ranking #rcRankingTable tbody > tr > td:nth-child(3) {
+    width: 368px !important;
+    min-width: 368px !important;
+    max-width: 368px !important;
+    white-space: normal !important;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+body.page-ranking #rcRankingTable tbody > tr > td.entity {
+    line-height: 1.4;
+}
 
 </style>
 
@@ -2857,7 +2895,32 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
         <span>Comparativo comercial <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · <?= $view === 'lideres' ? 'Selecciona un líder para ver coaches' : 'Selecciona un coach para ver vendedores' ?></span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table commercial-compare-table rc-summary-table" id="rcRankingTable" style="min-width:2450px">
+        <table class="sales-table commercial-compare-table rc-summary-table" id="rcRankingTable" style="min-width:2450px; width:2450px; table-layout:fixed">
+        <colgroup>
+            <col style="width:56px">
+            <col style="width:135px">
+            <col style="width:368px">
+            <col style="width:87px">
+            <col style="width:87px">
+            <col style="width:74px">
+            <col style="width:83px">
+            <col style="width:110px">
+            <col style="width:110px">
+            <col style="width:112px">
+            <col style="width:100px">
+            <col style="width:86px">
+            <col style="width:86px">
+            <col style="width:86px">
+            <col style="width:86px">
+            <col style="width:92px">
+            <col style="width:92px">
+            <col style="width:92px">
+            <col style="width:92px">
+            <col style="width:104px">
+            <col style="width:104px">
+            <col style="width:104px">
+            <col style="width:104px">
+        </colgroup>
             <thead>
                 <tr>
                     <th rowspan="2" class="center">#</th>
