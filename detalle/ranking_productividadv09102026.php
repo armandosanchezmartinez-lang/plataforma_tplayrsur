@@ -1,49 +1,6 @@
+
+
 <?php
-/**
- * TALIA / RANKING PRODUCTIVIDAD - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0 | PRODUCCION
- * ====================================================
- * OBJETIVO: presentar ranking semanal/mensual con misma interfaz, filtros,
- * indicadores y navegacion que ranking_productividad.php productivo, pero
- * obteniendo las instalaciones certificadas desde Motor HC v0.6 candidato.
- *
- * UBICACION: /plataforma/detalle/ranking_productividad.php
- * DEPENDENCIAS: /plataforma/includes/motor_hc.php (SIN CAMBIOS)
- *               /plataforma/includes/motor_comercial.php (NUEVO)
- * AUTORIZACION: sesion TalIA; roles ADMIN o DIRECTOR_REGIONAL.
- * PARAMETROS HTTP: periodo, anio, semana, mes, anio_mes, rango_mode,
- * fecha_inicio, fecha_fin, dias_semana, view, distrito, lider, coach,
- * coach_pos, vendedor y folio. Ver validacion y selectores a continuacion.
- *
- * FUENTES: Motor HC para cuentas/jerarquias y fotos HC, tablas HC,
- * instalaciones y dias_inhabiles para vista, plantilla y productividad.
- * FLUJO: selecciona BASE/ACTUAL; consulta motor en ambos periodos;
- * obtiene catalogo dinamico de plazas de lider; reconstruye HC activo;
- * agrega por lider / coach / vendedor y pinta la tabla.
- * SALIDA: HTML; no escribe archivos ni modifica tablas.
- * ALCANCE: vista productiva; actualizacion visual del comparativo comercial.
- * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
- * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
- * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
- * reemplaza por el nombre de un colaborador escrito a mano.
- * FIX 09-OCT-2026 (v0.6.2): consume el contrato del motor que resuelve
- * unicamente autorreferencias HC verificables por nombre del superior
- * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
- * asigna ninguna cuenta ni cambia cifras por si mismo.
- *
- * IMPORTANTE: la presente actualización es visual. HC y Comercial preservan
- * sus reglas; validar funcionamiento tras publicar la vista.
- * EXTENSIÓN COMERCIAL (10-OCT-2026):
- * - Solamente view=vendedores ejecuta el Motor Comercial; los otros niveles
- *   permanecen intactos.
- * - Motor HC entrega las cuentas y atribuciones de BASE y ACTUAL.
- * - Motor Comercial clasifica esas cuentas mediante catalogo_paquetes.
- * - ARPU, 2P/3P, Oferta y Bundles comparan BASE y ACTUAL.
- * - Cada porcentaje usa el total HC certificado DEL MISMO período.
- * - DIF ARPU = ACTUAL - BASE, %DIF ARPU = DIF / BASE * 100.
- * - Sin ARPU en alguno de los períodos => diferencias no disponibles (—).
- * - Errores de clasificación NO ocultan las instalaciones HC del ranking.
- * - Control de despliegue: verificar cuentas e indicadores tras publicación.
- */
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
@@ -104,7 +61,7 @@ if (empty($_SESSION['usuario'])) {
 include '../conexion.php';
 
 $rol = $_SESSION['rol'] ?? 'vendedor';
-if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('Ranking reservado a ADMIN / Dirección Regional.'); }
+if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('STAGING canónico reservado a ADMIN / Dirección Regional.'); }
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -843,18 +800,16 @@ lideres_activos AS (
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
-    $s = RankingAtribucionServiceV06::norm((string)$nombre);
+    $s = RankingAtribucionService::norm((string)$nombre);
     $p = array_values(array_filter(explode(' ', $s), static fn($x)=>$x!==''));
     sort($p, SORT_STRING);
     return implode(' ', $p);
 }
-function rank05_catalogo(RankingAtribucionServiceV06 $motor, string $desde, string $hasta): array {
-    return $motor->catalogoLideres($desde, $hasta);
-}
+function rank05_catalogo(): array { return RankingAtribucionService::lideresStaging(); }
 function rank05_ficha(array $catalogo, string $liderId): array {
     return $catalogo[$liderId] ?? ['distrito'=>'SIN_DISTRITO','hc'=>'','nombre'=>'LÍDER NO IDENTIFICADO','aliases'=>[],'plaza'=>null];
 }
-function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
+function rank05_foto_hc(RankingAtribucionService $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
     $info=$motor->cargarHc($desde,$hasta);
     $photos=$info['fotos'];
     $ultima=null;
@@ -875,9 +830,7 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
     foreach ($hcs as $h) {
         if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
         $nombreLineal=rank05_name_key($h['nombre_linea_reporte']??'');
-        // Misma clave canonica de distrito que utiliza Motor HC v0.6.1.
-        $distrito=RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null);
-        if ($distrito===null) continue;
+        $distrito=(string)($h['distrito']??'');
         $candidates=[];
         foreach ($idsPorNombre[$nombreLineal]??[] as $lid=>$_) {
             if ($distrito===($catalogo[$lid]['hc']??'')) $candidates[$lid]=true;
@@ -890,7 +843,7 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
         $pos=(string)($h['id_posicion']??'');
         if ($pos==='') continue;
         $k=$lid.'|'.$pos;
-        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
+        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionService::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
     }
     if (!$coaches) throw new RuntimeException('Ningún coach de Región SUR pudo relacionarse con HC '.$fotoKey);
     foreach ($hcs as $h) {
@@ -900,13 +853,13 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
         if ($posCoach==='' || $idPos==='') continue;
         foreach ($catalogo as $lid=>$l) {
             $coachKey=$lid.'|'.$posCoach;
-            if (!isset($coaches[$coachKey]) || RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
-            $vac=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'')==='VACANTE';
+            if (!isset($coaches[$coachKey]) || (string)($h['distrito']??'')!==$l['hc']) continue;
+            $vac=RankingAtribucionService::norm($h['nombre_colaborador']??'')==='VACANTE';
             $talento=(string)($h['numero_talento_gs']??'');
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
             // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
-            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
+            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionService::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
         }
     }
     return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
@@ -991,7 +944,7 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
                 if (($e['lider_id']??null)!==$lid) continue;
                 $co=(string)($e['coach_id']??'SIN_COACH');
                 $coachIds[$co]=true;
-                if (!isset($nombres[$co])) $nombres[$co]=RankingAtribucionServiceV06::norm($e['coach_evento']??'');
+                if (!isset($nombres[$co])) $nombres[$co]=RankingAtribucionService::norm($e['coach_evento']??'');
             }
             foreach (array_keys($coachIds) as $co) {
                 $nombre=$nombres[$co]??'';
@@ -2176,29 +2129,16 @@ $coach_matrix = [];
 $rank05_estado='';
 $rank05_fotografias=[];
 $rank05_auditoria=[];
-$comercial05_ok=false;
-$comercial05_error='';
-$comercial05_auditoria=[];
 if ($view !== 'ventas') {
     try {
-        require_once __DIR__.'/../includes/motor_hc.php';
-        $motor05=new RankingAtribucionServiceV06($conexion);
-        $catalogo05=rank05_catalogo($motor05,$fecha_inicio_base_calc,$fecha_fin_actual_calc);
+        require_once __DIR__.'/motor_hc.php';
+        $motor05=new RankingAtribucionService($conexion);
+        $catalogo05=rank05_catalogo();
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.2: ambos periodos deben provenir de la version exacta
-        // desplegada de Motor HC STAGING. La verificacion protege la comparacion
-        // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.2-hc-position-staging';
-        if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
-            throw new RuntimeException(
-                'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
-                '; BASE='.($resBase05['version'] ?? 'SIN_VERSION').
-                '; ACTUAL='.($resActual05['version'] ?? 'SIN_VERSION')
-            );
-        }
-        $canonicos05=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
+        if (($resBase05['version']??'')!=='0.5.1-hc-certified' || ($resActual05['version']??'')!=='0.5.1-hc-certified') throw new RuntimeException('El motor HC certificado v0.5.1 requerido no está instalado');
+        $canonicos05=RankingAtribucionService::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
         $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
         $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
         $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
@@ -2207,62 +2147,6 @@ if ($view !== 'ventas') {
         $coach_matrix=$datos05['matrix'];
         $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
         $rank05_auditoria=['base'=>$resBase05['conciliacion_comercial'],'actual'=>$resActual05['conciliacion_comercial']];
-        /*
-         * MOTOR COMERCIAL v0.2.0: ENRIQUECIMIENTO, NO REATRIBUCIÓN.
-         * Nunca modifica $resBase05/$resActual05 ni Motor HC. En caso de error
-         * mantiene íntegro el ranking de instalaciones y muestra advertencia.
-         */
-        if ($view === 'vendedores') {
-            try {
-                require_once __DIR__.'/../includes/motor_comercial.php';
-                $motorComercial05 = new MotorComercial($conexion);
-                $mixBase05 = $motorComercial05->resumirVendedores(
-                    $resBase05['cuentas'], $fecha_inicio_base_calc, $fecha_fin_base_calc, $dias05
-                );
-                $mixActual05 = $motorComercial05->resumirVendedores(
-                    $resActual05['cuentas'], $fecha_inicio_actual_calc, $fecha_fin_actual_calc, $dias05
-                );
-                // Preparamos toda la matriz fuera de la vista; commit atómico.
-                $nuevaMatrix05 = $coach_matrix;
-                foreach ($nuevaMatrix05 as $clave05 => &$fila05) {
-                    $b05 = $mixBase05[$clave05] ?? MotorComercial::resumenVacio();
-                    $a05 = $mixActual05[$clave05] ?? MotorComercial::resumenVacio();
-                    if ((int)$b05['total'] !== (int)$fila05['ins_base'] ||
-                        (int)$a05['total'] !== (int)$fila05['ins_actual']) {
-                        throw new LogicException(
-                            'CONTRASTE NO CONCILIADO en vendedor '.($fila05['vendedor'] ?? $clave05).
-                            ' (HC BASE/ACTUAL='.$fila05['ins_base'].'/'.$fila05['ins_actual'].
-                            ', Comercial='.$b05['total'].'/'.$a05['total'].')'
-                        );
-                    }
-                    $fila05['arpu_base'] = $b05['arpu'];
-                    $fila05['arpu_actual'] = $a05['arpu'];
-                    $fila05['arpu_cuentas_base'] = $b05['arpu_cuentas'];
-                    $fila05['arpu_cuentas_actual'] = $a05['arpu_cuentas'];
-                    $fila05['arpu_neto_base'] = $b05['arpu_ingreso_neto'];
-                    $fila05['arpu_neto_actual'] = $a05['arpu_ingreso_neto'];
-                     // Conserva los contadores de AMBOS periodos. La atribucion
-                     // HC no cambia: solo anexa las propiedades comerciales.
-                     foreach (['doble_play','triple_play','play_sin_clasificar',
-                               'residencial','negocios','oferta_sin_clasificar',
-                               'no_bundle','bundle','bundle_sin_clasificar',
-                               'catalogo_sin_match','catalogo_ambiguo',
-                               'instalacion_no_encontrada','instalacion_plan_ambiguo',
-                               'arpu_fuente_catalogo','arpu_precio_ambiguo'] as $campo05) {
-                         $fila05[$campo05.'_base'] = $b05[$campo05];
-                         $fila05[$campo05.'_actual'] = $a05[$campo05];
-                    }
-                }
-                unset($fila05);
-                $coach_matrix = $nuevaMatrix05;
-                $comercial05_ok = true;
-                $comercial05_auditoria = ['base_grupos'=>count($mixBase05), 'actual_grupos'=>count($mixActual05)];
-            } catch (Throwable $comError05) {
-                $comercial05_error = $comError05->getMessage();
-                // NO se borra $coach_matrix: HC v0.6.2 sigue siendo autoridad.
-            }
-        }
-
     } catch (Throwable $e) {
         $query_error='Motor canónico: '.$e->getMessage();
         $rows=[]; $coach_matrix=[];
@@ -2402,11 +2286,6 @@ body.page-ranking .calendar-day.adjacent-month.selected-start,
 body.page-ranking .calendar-day.adjacent-month.selected-end,
 body.page-ranking .calendar-day.adjacent-month.in-range { opacity:1; }
 body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed; }
-/* Solo tabla de vendedores: separación legible de 4 comparativos. */
-body.page-ranking .commercial-compare-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
-body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
-body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
-body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
 </style>
 
 </head>
@@ -2651,6 +2530,10 @@ include __DIR__ . '/../includes/sidebar.php';
     </div>
 </section>
 
+<section class="table-card" style="padding:12px 18px;margin-bottom:12px">
+<strong>TalIA · Concordancia HC v0.4 · STAGING</strong>
+<span style="font-size:12px;color:#475569;margin-left:12px">Instalaciones de Líder, Coach y Vendedor: MISMO universo por cuenta; HC independiente (fotografía BASE <?= h($rank05_fotografias['base']??'?') ?>, ACTUAL <?= h($rank05_fotografias['actual']??'?') ?>). Mix comercial aún no conectado.</span>
+</section>
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
 
 <?php
@@ -2776,81 +2659,18 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 <?php elseif ($view === 'vendedores'): ?>
 <?php
-/**
- * TALIA - COMPARATIVO COMERCIAL VENDEDOR (FORMATO PROD 10-OCT-2026)
- * ----------------------------------------------------------
- * Mismo universo certificado del Motor HC para BASE y ACTUAL.
- * Mix = cuentas clasificadas / TODAS las cuentas HC del MISMO periodo.
- * ARPU se agrega por importe neto y cuentas validas (no por promedio simple
- * de ARPU entre vendedores). Si no existe ARPU en BASE o ACTUAL, DIF/%DIF
- * permanecen sin dato. Motor Comercial y Motor HC no se modifican aqui.
- */
 $total_coach = 0;
 $mejor_vendedor = '';
 $mejor_total = -1;
-$camposComerciales05 = [
-    'doble_play','triple_play','play_sin_clasificar',
-    'residencial','negocios','oferta_sin_clasificar',
-    'no_bundle','bundle','bundle_sin_clasificar',
-    'catalogo_sin_match','catalogo_ambiguo',
-    'instalacion_no_encontrada','instalacion_plan_ambiguo',
-    'arpu_fuente_catalogo','arpu_precio_ambiguo'
-];
-$sum05 = array_fill_keys([
-    'ins_base','ins_actual',
-    'arpu_cuentas_base','arpu_cuentas_actual',
-    'arpu_neto_base','arpu_neto_actual'
-], 0);
-foreach ($camposComerciales05 as $campo05) {
-    $sum05[$campo05.'_base'] = 0;
-    $sum05[$campo05.'_actual'] = 0;
-}
 foreach ($coach_matrix as $v) {
+    // KPI del Coach = únicamente periodo ACTUAL; BASE sólo sirve para comparativo.
     $ventas_actual_v = (int)($v['ins_actual'] ?? 0);
     $total_coach += $ventas_actual_v;
     if ($ventas_actual_v > $mejor_total) {
         $mejor_total = $ventas_actual_v;
-        $mejor_vendedor = (string)($v['vendedor'] ?? '');
+        $mejor_vendedor = $v['vendedor'];
     }
-    foreach ($sum05 as $campo05 => &$valor05) {
-        $valor05 += (float)($v[$campo05] ?? 0);
-    }
-    unset($valor05);
 }
-// ARPU TOTAL = suma de importes netos / suma de cuentas con precio valido.
-$arpuTotBase05 = $sum05['arpu_cuentas_base'] > 0
-    ? $sum05['arpu_neto_base'] / $sum05['arpu_cuentas_base'] : null;
-$arpuTotActual05 = $sum05['arpu_cuentas_actual'] > 0
-    ? $sum05['arpu_neto_actual'] / $sum05['arpu_cuentas_actual'] : null;
-$pct_mc05 = static function($parte, $total): ?int {
-    return (float)$total > 0 ? (int)round(100 * (float)$parte / (float)$total) : null;
-};
-$arpuDif05 = static function($base, $actual): ?float {
-    return $base === null || $actual === null ? null : (float)$actual-(float)$base;
-};
-$arpuPctDif05 = static function($base, $actual): ?float {
-    return $base === null || $actual === null || (float)$base <= 0
-        ? null : (100 * ((float)$actual-(float)$base) / (float)$base);
-};
-$fmtDifArpu05 = static function($dif): string {
-    if ($dif === null) return '—';
-    $v = (float)$dif;
-    return ($v > 0 ? '+' : ($v < 0 ? '−' : '')).'$'.fmt_num(abs($v), 2);
-};
-$fmtPctArpu05 = static function($pct): string {
-    if ($pct === null) return '—';
-    $v = (float)$pct;
-    return ($v > 0 ? '+' : ($v < 0 ? '−' : '')).fmt_num(abs($v), 1).'%';
-};
-// Orden solicitado: cada dimensión BASE y ACTUAL, seguida por la siguiente.
-$dimensiones05 = [
-    ['campo'=>'doble_play', 'rotulo'=>'% 2P'],
-    ['campo'=>'triple_play', 'rotulo'=>'% 3P'],
-    ['campo'=>'residencial', 'rotulo'=>'% RES.'],
-    ['campo'=>'negocios', 'rotulo'=>'% NEG.'],
-    ['campo'=>'no_bundle', 'rotulo'=>'% NO BUNDLE'],
-    ['campo'=>'bundle', 'rotulo'=>'% BUNDLE'],
-];
 ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
@@ -2858,119 +2678,127 @@ $dimensiones05 = [
     <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> instalaciones</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
 </section>
-<?php if (!$comercial05_ok): ?>
-<section class="table-card" style="padding:15px 20px; margin-bottom:16px">
-    <strong>Motor HC operativo · Mix comercial no disponible.</strong>
-    <p><?= h($comercial05_error ?: 'No se ha podido obtener clasificación comercial.') ?></p>
-    <p>No se alteran las instalaciones de los vendedores. Verifica el motor en <code>includes/motor_comercial.php</code>.</p>
-</section>
-<?php endif; ?>
+
 <section class="table-card">
     <div class="table-head">
-        <strong>Resumen comparativo por vendedor del coach</strong>
-        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.2</span>
+        <strong>Resumen por vendedor del coach</strong>
+        <span>Comparativo <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Mix 2P/3P pendiente de conectar al mismo universo</span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table commercial-compare-table" style="min-width:2390px">
+        <table class="sales-table" style="min-width:1280px">
             <thead>
                 <tr>
-                    <th rowspan="2">Nombre vendedor</th>
-                    <th rowspan="2" class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num matrix-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
-                    <th colspan="4" class="group center">ARPU</th>
-                    <th colspan="4" class="group center">PLAYS</th>
-                    <th colspan="4" class="group center">OFERTA (RESIDENCIAL / NEGOCIOS)</th>
-                    <th colspan="4" class="group center">BUNDLES</th>
-                </tr>
-                <tr>
-                    <th class="num matrix-sortable" data-sort="arpu_base">$ARPU<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="arpu_actual">$ARPU<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="arpu_dif">DIF $ <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="arpu_pct_dif">% DIF <span class="sort-icon">↕</span></th>
-                    <?php foreach ($dimensiones05 as $dimension05): ?>
-                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_base"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_actual"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <?php endforeach; ?>
+                    <th>Nombre vendedor</th>
+                    <th class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="doble">2P <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_doble">% 2P <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="triple">3P <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_triple">% 3P <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="resid">Resid. <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_resid">% Resid. <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="neg">Neg. <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="pct_neg">% Neg. <span class="sort-icon">↕</span></th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($coach_matrix as $v): ?>
                 <?php
-                    $ins_base_v = (int)($v['ins_base'] ?? 0);
-                    $ins_actual_v = (int)($v['ins_actual'] ?? 0);
-                    $dif_v = $ins_actual_v - $ins_base_v;
-                    $pct_v = $pct_mc05($dif_v, $ins_base_v);
-                    $ab05 = $comercial05_ok ? ($v['arpu_base'] ?? null) : null;
-                    $aa05 = $comercial05_ok ? ($v['arpu_actual'] ?? null) : null;
-                    $difArpu05 = $arpuDif05($ab05, $aa05);
-                    $pctArpu05 = $arpuPctDif05($ab05, $aa05);
-                    $mixPct05 = [];
-                    foreach ($dimensiones05 as $dimension05) {
-                        $campo05 = $dimension05['campo'];
-                        $mixPct05[$campo05.'_base'] = $comercial05_ok
-                            ? $pct_mc05($v[$campo05.'_base'] ?? 0, $ins_base_v) : null;
-                        $mixPct05[$campo05.'_actual'] = $comercial05_ok
-                            ? $pct_mc05($v[$campo05.'_actual'] ?? 0, $ins_actual_v) : null;
-                    }
-                    $antig_meses = 0;
-                    if (is_numeric($v['antiguedad'])) $antig_meses = (float)$v['antiguedad'];
-                    elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1]*12+(int)$m[2];
-                    elseif (preg_match('/(\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1];
-                ?>
+                        $ins_base_v = (int)($v['ins_base'] ?? 0);
+                        $ins_actual_v = (int)($v['ins_actual'] ?? 0);
+                        $dif_v = $ins_actual_v - $ins_base_v;
+                        $pct_v = $ins_base_v > 0 ? round(($dif_v / $ins_base_v) * 100, 0) : null;
+                        $total_v = (int)$v['total'];
+                        $doble_v = (int)$v['doble_play'];
+                        $triple_v = (int)$v['triple_play'];
+                        $resid_v = (int)$v['residencial'];
+                        $neg_v = (int)$v['negocios'];
+                        $mix_total_v = $doble_v + $triple_v;
+                        $segmento_total_v = $resid_v + $neg_v;
+                        $pct_doble = $mix_total_v > 0 ? round(($doble_v / $mix_total_v) * 100, 0) : null;
+                        $pct_triple = $mix_total_v > 0 ? round(($triple_v / $mix_total_v) * 100, 0) : null;
+                        $pct_resid = $segmento_total_v > 0 ? round(($resid_v / $segmento_total_v) * 100, 0) : null;
+                        $pct_neg = $segmento_total_v > 0 ? round(($neg_v / $segmento_total_v) * 100, 0) : null;
+                        $antig_meses = 0;
+                        if (is_numeric($v['antiguedad'])) {
+                            $antig_meses = (float)$v['antiguedad'];
+                        } elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) {
+                            $antig_meses = ((int)$m[1] * 12) + (int)$m[2];
+                        } elseif (preg_match('/(\d+) meses/', (string)$v['antiguedad'], $m)) {
+                            $antig_meses = (int)$m[1];
+                        }
+                    ?>
                 <tr class="matrix-row"
                     data-antiguedad="<?= h($antig_meses) ?>"
-                    data-ins_base="<?= h($ins_base_v) ?>" data-ins_actual="<?= h($ins_actual_v) ?>"
-                    data-dif="<?= h($dif_v) ?>" data-pct_dif="<?= h($pct_v ?? -999999) ?>"
-                    data-arpu_base="<?= h($ab05 ?? -999999) ?>" data-arpu_actual="<?= h($aa05 ?? -999999) ?>"
-                    data-arpu_dif="<?= h($difArpu05 ?? -999999) ?>" data-arpu_pct_dif="<?= h($pctArpu05 ?? -999999) ?>"
-                    <?php foreach ($dimensiones05 as $dimension05):
-                        $campo05=$dimension05['campo']; ?>
-                        data-pct_<?= h($campo05) ?>_base="<?= h($mixPct05[$campo05.'_base'] ?? -999999) ?>"
-                        data-pct_<?= h($campo05) ?>_actual="<?= h($mixPct05[$campo05.'_actual'] ?? -999999) ?>"
-                    <?php endforeach; ?>>
+                    data-ins_base="<?= h($ins_base_v) ?>"
+                    data-ins_actual="<?= h($ins_actual_v) ?>"
+                    data-dif="<?= h($dif_v) ?>"
+                    data-pct_dif="<?= h($pct_v ?? 0) ?>"
+                    data-doble="<?= h($doble_v) ?>"
+                    data-pct_doble="<?= h($pct_doble ?? 0) ?>"
+                    data-triple="<?= h($triple_v) ?>"
+                    data-pct_triple="<?= h($pct_triple ?? 0) ?>"
+                    data-resid="<?= h($resid_v) ?>"
+                    data-pct_resid="<?= h($pct_resid ?? 0) ?>"
+                    data-neg="<?= h($neg_v) ?>"
+                    data-pct_neg="<?= h($pct_neg ?? 0) ?>">
                     <td class="entity"><?= h($v['vendedor']) ?></td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
                     <td class="num"><?= fmt_num($ins_base_v) ?></td>
                     <td class="num"><?= fmt_num($ins_actual_v) ?></td>
                     <td class="num"><?= fmt_num($dif_v) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '—' : fmt_num($pct_v).'%' ?></span></td>
-                    <td class="num"><?= $ab05 === null ? '—' : '$'.fmt_num($ab05,2) ?></td>
-                    <td class="num"><?= $aa05 === null ? '—' : '$'.fmt_num($aa05,2) ?></td>
-                    <td class="num"><?= $fmtDifArpu05($difArpu05) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($pctArpu05) ?>"><?= $fmtPctArpu05($pctArpu05) ?></span></td>
-                    <?php foreach ($dimensiones05 as $dimension05):
-                        $campo05=$dimension05['campo']; ?>
-                        <td class="center"><?= $mixPct05[$campo05.'_base'] === null ? '—' : fmt_num($mixPct05[$campo05.'_base']).'%' ?></td>
-                        <td class="center"><?= $mixPct05[$campo05.'_actual'] === null ? '—' : fmt_num($mixPct05[$campo05.'_actual']).'%' ?></td>
-                    <?php endforeach; ?>
+                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '-' : fmt_num($pct_v).'%' ?></span></td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
                 </tr>
                 <?php endforeach; ?>
-                <?php
-                    $difTotArpu05 = $comercial05_ok ? $arpuDif05($arpuTotBase05, $arpuTotActual05) : null;
-                    $pctTotArpu05 = $comercial05_ok ? $arpuPctDif05($arpuTotBase05, $arpuTotActual05) : null;
-                    $difTot05=$pct_mc05($sum05['ins_actual']-$sum05['ins_base'],$sum05['ins_base']);
-                ?>
                 <tr class="total-row">
-                    <td>TOTAL</td><td></td>
-                    <td class="num"><?= fmt_num($sum05['ins_base']) ?></td>
-                    <td class="num"><?= fmt_num($sum05['ins_actual']) ?></td>
-                    <td class="num"><?= fmt_num($sum05['ins_actual']-$sum05['ins_base']) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($difTot05) ?>"><?= $difTot05===null?'—':fmt_num($difTot05).'%' ?></span></td>
-                    <td class="num"><?= $comercial05_ok && $arpuTotBase05!==null?'$'.fmt_num($arpuTotBase05,2):'—' ?></td>
-                    <td class="num"><?= $comercial05_ok && $arpuTotActual05!==null?'$'.fmt_num($arpuTotActual05,2):'—' ?></td>
-                    <td class="num"><?= $fmtDifArpu05($difTotArpu05) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($pctTotArpu05) ?>"><?= $fmtPctArpu05($pctTotArpu05) ?></span></td>
-                    <?php foreach ($dimensiones05 as $dimension05):
-                        $campo05=$dimension05['campo'];
-                        $pBase05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_base'],$sum05['ins_base']) : null;
-                        $pActual05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_actual'],$sum05['ins_actual']) : null;
+                    <?php
+                        $t_base = 0; $t_actual = 0; $t_doble = 0; $t_triple = 0; $t_resid = 0; $t_neg = 0;
+                        foreach ($coach_matrix as $v) {
+                            $t_base += (int)($v['ins_base'] ?? 0);
+                            $t_actual += (int)($v['ins_actual'] ?? 0);
+                            $t_doble += (int)($v['doble_play'] ?? 0);
+                            $t_triple += (int)($v['triple_play'] ?? 0);
+                            $t_resid += (int)($v['residencial'] ?? 0);
+                            $t_neg += (int)($v['negocios'] ?? 0);
+                        }
+                        $t_dif = $t_actual - $t_base;
+                        $t_pct = $t_base > 0 ? round(($t_dif / $t_base) * 100, 0) : null;
                     ?>
-                        <td class="center"><?= $pBase05===null?'—':fmt_num($pBase05).'%' ?></td>
-                        <td class="center"><?= $pActual05===null?'—':fmt_num($pActual05).'%' ?></td>
-                    <?php endforeach; ?>
+                    <td>TOTAL</td>
+                    <td></td>
+                    <td class="num"><?= fmt_num($t_base) ?></td>
+                    <td class="num"><?= fmt_num($t_actual) ?></td>
+                    <td class="num"><?= fmt_num($t_dif) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($t_pct) ?>"><?= $t_pct === null ? '-' : fmt_num($t_pct).'%' ?></span></td>
+                    <?php
+                        $t_mix = $t_doble + $t_triple;
+                        $t_segmento = $t_resid + $t_neg;
+
+                        $pct_t_doble = $t_mix > 0 ? round(($t_doble / $t_mix) * 100, 0) : null;
+                        $pct_t_triple = $t_mix > 0 ? round(($t_triple / $t_mix) * 100, 0) : null;
+
+                        $pct_t_resid = $t_segmento > 0 ? round(($t_resid / $t_segmento) * 100, 0) : null;
+                        $pct_t_neg = $t_segmento > 0 ? round(($t_neg / $t_segmento) * 100, 0) : null;
+                    ?>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
+                    <td class="num">—</td>
+                    <td class="center">—</td>
                 </tr>
             </tbody>
         </table>

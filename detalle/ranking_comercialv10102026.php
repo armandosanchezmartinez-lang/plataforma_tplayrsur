@@ -1,12 +1,29 @@
 <?php
 /**
- * TALIA / RANKING PRODUCTIVIDAD - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0 | PRODUCCION
+ * TALIA / RANKING COMERCIAL v0.1.3 - MINI BARRAS HORIZONTALES - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
  * ====================================================
- * OBJETIVO: presentar ranking semanal/mensual con misma interfaz, filtros,
- * indicadores y navegacion que ranking_productividad.php productivo, pero
- * obteniendo las instalaciones certificadas desde Motor HC v0.6 candidato.
+ * MODULO INDEPENDIENTE (10-OCT-2026):
+ * - Base fiel de ranking_productividad.php aportado para esta iteracion.
+ * - Vendedores: bloque original conservado sin cambios funcionales.
+ * - Lider y Coach (incluye ranking_coach): encabezados e indicadores
+ *   comerciales equivalentes a Vendedor, por periodos BASE/ACTUAL.
+ * - Los agregados parten EXCLUSIVAMENTE de las cuentas del Motor HC.
+ * - Motor Comercial devuelve sumarios por vendedor, consolidados por
+ *   id de lider o por pareja (lider_id, coach_id). NO reatribuye ventas.
+ * - ARPU global = SUM(importe_neto) / SUM(cuentas_con_precio_valido);
+ *   nunca promedio simple de ARPU por vendedor.
+ * - Porcentajes = cuentas de categoria / instalaciones certificadas.
+ * - Valida contra HC por cada fila y periodo; sin concordancia, se
+ *   bloquea el enriquecimiento comercial y se preservan las INS HC.
+ * - Totales y tarjetas se recalculan al filtrar distrito.
+ * - No se modifica ni Motor HC ni Motor Comercial ni el Ranking original.
+ * - Requiere PHP 8.1+ y los 2 motores en /plataforma/includes/.
+ * - Validar resultados contra produccion antes de publicar en menu.
  *
- * UBICACION: /plataforma/detalle/ranking_productividad.php
+ * OBJETIVO: nuevo Ranking Comercial semanal/mensual con la misma navegacion
+ * y universo certificado que el ranking_productividad.php existente.
+ *
+ * UBICACION: /plataforma/detalle/ranking_comercial.php
  * DEPENDENCIAS: /plataforma/includes/motor_hc.php (SIN CAMBIOS)
  *               /plataforma/includes/motor_comercial.php (NUEVO)
  * AUTORIZACION: sesion TalIA; roles ADMIN o DIRECTOR_REGIONAL.
@@ -20,7 +37,7 @@
  * obtiene catalogo dinamico de plazas de lider; reconstruye HC activo;
  * agrega por lider / coach / vendedor y pinta la tabla.
  * SALIDA: HTML; no escribe archivos ni modifica tablas.
- * ALCANCE: vista productiva; actualizacion visual del comparativo comercial.
+ * ALCANCE: nuevo modulo STAGING independiente, no sobreescribe produccion.
  * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
  * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
  * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
@@ -33,8 +50,8 @@
  * IMPORTANTE: la presente actualización es visual. HC y Comercial preservan
  * sus reglas; validar funcionamiento tras publicar la vista.
  * EXTENSIÓN COMERCIAL (10-OCT-2026):
- * - Solamente view=vendedores ejecuta el Motor Comercial; los otros niveles
- *   permanecen intactos.
+ * - Todas las vistas ejecutan Motor Comercial sobre las cuentas HC,
+ *   pero la plantilla del nivel Vendedor conserva su implementacion original.
  * - Motor HC entrega las cuentas y atribuciones de BASE y ACTUAL.
  * - Motor Comercial clasifica esas cuentas mediante catalogo_paquetes.
  * - ARPU, 2P/3P, Oferta y Bundles comparan BASE y ACTUAL.
@@ -118,6 +135,21 @@ $roles_labels = [
 function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 function fmt_num($v, $d=0) { return number_format((float)($v ?? 0), $d); }
 function fmt_prod($v) { return ($v === null || $v === '') ? '-' : number_format((float)$v, 2); }
+/**
+ * Presentación gráfica exclusivamente (0-100%): etiqueta sobre minigráfico.
+ * Valores nulos muestran raya y NO dibujan barra. Compatible con filtros.
+ */
+function rc_mini_pct(?int $pct, string $campo): string {
+    $dim = in_array($campo, ['doble_play','triple_play'], true) ? 'plays'
+        : (in_array($campo, ['residencial','negocios'], true) ? 'oferta' : 'bundle');
+    $p = $pct === null ? null : max(0, min(100, (int)$pct));
+    $text = $p === null ? '—' : $p.'%';
+    return '<span class="rc-mini-pct rc-mini-pct--'.$dim.($p === null ? ' rc-mini-no-data' : '').'">'
+        .'<span class="rc-mini-pct-label">'.$text.'</span>'
+        .'<span class="rc-mini-pct-track" aria-hidden="true"><span class="rc-mini-pct-fill" style="width:'.($p ?? 0).'%"></span></span>'
+        .'</span>';
+}
+
 function pct_class($pct) {
     if ($pct === null || $pct === '') return 'flat';
     $n = (float)$pct;
@@ -950,6 +982,7 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
     $dif=$insActual-$insBase;
     return [
         'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],
+        'lider_id'=>$lider, 'coach_id'=>$coachId,
         'coach'=>$coachId!==''?$nombre:'','coach_pos'=>$coachId,'folio_empleado'=>'',
         'ins_sem_base'=>$insBase,'ins_sem_actual'=>$insActual,'dif'=>$dif,
         'pct_dif'=>$insBase>0?round(100*$dif/$insBase):null,
@@ -2172,6 +2205,61 @@ ORDER BY semana ASC
 ";
 }
 
+/**
+ * Acumula el resultado de UN vendedor ya certificado por Motor HC.
+ * Nunca suma ARPUs; acumula importes netos y denominador real.
+ * @param array $target Resumen agrupado por lider o coach.
+ * @param array $part   Resumen de vendedor de motor_comercial.php.
+ */
+function rc_agregar_comercial(array &$target, array $part): void {
+    foreach ([
+        'total','doble_play','triple_play','play_sin_clasificar',
+        'residencial','negocios','oferta_sin_clasificar',
+        'no_bundle','bundle','bundle_sin_clasificar',
+        'arpu_ingreso_neto','arpu_cuentas',
+        'arpu_fuente_catalogo','arpu_precio_ambiguo',
+        'instalacion_no_encontrada','instalacion_plan_ambiguo',
+        'catalogo_sin_match','catalogo_ambiguo'
+    ] as $field) {
+        $target[$field] += $part[$field] ?? 0;
+    }
+    $target['arpu'] = $target['arpu_cuentas'] > 0
+        ? $target['arpu_ingreso_neto'] / $target['arpu_cuentas'] : null;
+}
+/**
+ * Contrato: un vendedor HC => un único grupo del nivel seleccionado.
+ * No se confía en separar la clave por '|', ya que EVENT|... es válida.
+ */
+function rc_agrupar_por_nivel(array $eventos, array $sumarios, string $nivel): array {
+    $map = [];
+    foreach ($eventos as $ev) {
+        $lid = (string)$ev['lider_id'];
+        $cid = (string)$ev['coach_id'];
+        $vid = (string)$ev['vendedor_id'];
+        $sellerKey = $lid.'|'.$cid.'|'.$vid;
+        $groupKey = $nivel === 'lideres' ? $lid : $lid.'|'.$cid;
+        if (isset($map[$sellerKey]) && $map[$sellerKey] !== $groupKey) {
+            throw new LogicException('Motor Comercial: vendedor vinculado a múltiples grupos');
+        }
+        $map[$sellerKey] = $groupKey;
+    }
+    $out = [];
+    foreach ($sumarios as $sellerKey => $sumario) {
+        if (!array_key_exists($sellerKey, $map)) {
+            throw new LogicException('Motor Comercial: resumen sin atribución HC: '.$sellerKey);
+        }
+        $key = $map[$sellerKey];
+        $out[$key] ??= MotorComercial::resumenVacio();
+        rc_agregar_comercial($out[$key], $sumario);
+    }
+    $expected = count($eventos);
+    $observed = array_sum(array_column($out, 'total'));
+    if ($expected !== $observed) {
+        throw new LogicException('Conciliación regional comercial fallida: HC '.$expected.' vs Comercial '.$observed);
+    }
+    return $out;
+}
+
 $coach_matrix = [];
 $rank05_estado='';
 $rank05_fotografias=[];
@@ -2212,7 +2300,7 @@ if ($view !== 'ventas') {
          * Nunca modifica $resBase05/$resActual05 ni Motor HC. En caso de error
          * mantiene íntegro el ranking de instalaciones y muestra advertencia.
          */
-        if ($view === 'vendedores') {
+        if (in_array($view, ['lideres','ranking_coach','coaches','vendedores'], true)) {
             try {
                 require_once __DIR__.'/../includes/motor_comercial.php';
                 $motorComercial05 = new MotorComercial($conexion);
@@ -2222,6 +2310,8 @@ if ($view !== 'ventas') {
                 $mixActual05 = $motorComercial05->resumirVendedores(
                     $resActual05['cuentas'], $fecha_inicio_actual_calc, $fecha_fin_actual_calc, $dias05
                 );
+                if ($view === 'vendedores') {
+                // Vendedor: misma implementación funcional que ranking_productividad.php.
                 // Preparamos toda la matriz fuera de la vista; commit atómico.
                 $nuevaMatrix05 = $coach_matrix;
                 foreach ($nuevaMatrix05 as $clave05 => &$fila05) {
@@ -2255,6 +2345,42 @@ if ($view !== 'ventas') {
                 }
                 unset($fila05);
                 $coach_matrix = $nuevaMatrix05;
+                } else {
+                    // Lideres/Coaches: sumar contadores de vendedor por la atribución
+                    // certificada del mismo período; no introducir nuevas cuentas.
+                    $nivelRc05 = $view === 'lideres' ? 'lideres' : 'coaches';
+                    $sumaBaseRc05 = rc_agrupar_por_nivel($resBase05['cuentas'], $mixBase05, $nivelRc05);
+                    $sumaActualRc05 = rc_agrupar_por_nivel($resActual05['cuentas'], $mixActual05, $nivelRc05);
+                    $nuevasFilasRc05 = $rows;
+                    $contBaseRc05 = 0; $contActualRc05 = 0;
+                    foreach ($nuevasFilasRc05 as &$filaRc05) {
+                        $grupoRc05 = $view === 'lideres'
+                            ? (string)$filaRc05['lider_id']
+                            : (string)$filaRc05['lider_id'].'|'.(string)$filaRc05['coach_id'];
+                        $bRc05 = $sumaBaseRc05[$grupoRc05] ?? MotorComercial::resumenVacio();
+                        $aRc05 = $sumaActualRc05[$grupoRc05] ?? MotorComercial::resumenVacio();
+                        if ((int)$bRc05['total'] !== (int)$filaRc05['ins_sem_base'] ||
+                            (int)$aRc05['total'] !== (int)$filaRc05['ins_sem_actual']) {
+                            throw new LogicException(
+                                'CONTRASTE HC/COMERCIAL NO CONCILIADO: '.($filaRc05['entidad'] ?? $grupoRc05).
+                                ' [HC '.$filaRc05['ins_sem_base'].'/'.$filaRc05['ins_sem_actual'].
+                                '; comercial '.$bRc05['total'].'/'.$aRc05['total'].']'
+                            );
+                        }
+                        $contBaseRc05 += (int)$bRc05['total'];
+                        $contActualRc05 += (int)$aRc05['total'];
+                        $filaRc05['_mc_base'] = $bRc05;
+                        $filaRc05['_mc_actual'] = $aRc05;
+                    }
+                    unset($filaRc05);
+                    if ($view === 'lideres' || $view === 'ranking_coach') {
+                        if ($contBaseRc05 !== count($resBase05['cuentas']) ||
+                            $contActualRc05 !== count($resActual05['cuentas'])) {
+                            throw new LogicException('El nivel regional no conserva el total de cuentas certificadas');
+                        }
+                    }
+                    $rows = $nuevasFilasRc05;
+                }
                 $comercial05_ok = true;
                 $comercial05_auditoria = ['base_grupos'=>count($mixBase05), 'actual_grupos'=>count($mixActual05)];
             } catch (Throwable $comError05) {
@@ -2334,9 +2460,9 @@ if (in_array($view, ['lideres','ranking_coach'], true)) {
 $fecha_label = date('d/m/Y');
 $entity_label = $view === 'lideres' ? 'Líder' : (in_array($view, ['coaches','ranking_coach'], true) ? 'Coach' : 'Semana');
 $title_label = [
-    'lideres'        => 'Ranking de Productividad',
-    'ranking_coach'  => 'Ranking Coach',
-    'coaches'        => 'Ranking por Coach',
+    'lideres'        => 'Ranking Comercial',
+    'ranking_coach'  => 'Ranking Comercial · Coaches',
+    'coaches'        => 'Ranking Comercial por Coach',
     'vendedores' => 'Instalaciones del Coach',
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
@@ -2396,6 +2522,11 @@ $calendar_max_date = !empty($row_ultima_fecha['ultima_fecha'])
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
 
 <style>
+/*
+ * Ajuste UI v0.1.3: barras horizontales compactas debajo de cada porcentaje.
+ * El valor numérico permanece visible y es la misma cifra certificada.
+ * Las barras son decorativas y no cambian la base del porcentaje.
+ */
 /* Calendario continuo: los días adyacentes siguen siendo seleccionables. */
 body.page-ranking .calendar-day.adjacent-month { opacity:.48; }
 body.page-ranking .calendar-day.adjacent-month.selected-start,
@@ -2407,6 +2538,140 @@ body.page-ranking .commercial-compare-table thead th { vertical-align:middle; fo
 body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
 body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
 body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
+/* Ranking Comercial: idéntico acabado suave del nivel Vendedor. */
+body.page-ranking .rc-summary-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
+body.page-ranking .rc-summary-table thead th.group { font-size:11px; letter-spacing:.025em; }
+body.page-ranking .rc-summary-table td { padding-left:8px; padding-right:8px; white-space:nowrap; }
+body.page-ranking .rc-summary-table td.entity { min-width:210px; white-space:normal; font-weight:700; }
+body.page-ranking .rc-summary-table tbody tr.rc-row { cursor:pointer; }
+body.page-ranking .rc-summary-table tbody tr.rc-row:hover { background:#f1efff; }
+/*
+ * AJUSTE EXCLUSIVAMENTE VISUAL 10-OCT-2026 | VISTAS LÍDER / COACH.
+ * Referencia de las tres primeras columnas: Ranking de Productividad.
+ * La tabla se adapta al ancho disponible: sin width/min-width de 2450px.
+ * Los 23 campos conservan su orden y sus valores; no se toca el Vendedor,
+ * la atribución de Motor HC, Motor Comercial ni las rutinas de cálculo.
+ */
+body.page-ranking #rcRankingTable {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+body.page-ranking #rcRankingTable thead th {
+    padding: 9px 2px !important;
+    font-size: 10px !important;
+    line-height: 1.28 !important;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+body.page-ranking #rcRankingTable thead th.group {
+    font-size: 10.5px !important;
+    letter-spacing: 0;
+}
+body.page-ranking #rcRankingTable tbody > tr > td {
+    padding: 13px 2px !important;
+    font-size: 10.5px;
+    line-height: 1.32;
+    white-space: nowrap;
+    text-align: center;
+    vertical-align: middle;
+}
+/* # ~40px; distrito ~95px; nombre ~235px a 1390px de ancho. */
+body.page-ranking #rcRankingTable thead tr:first-child > th:first-child,
+body.page-ranking #rcRankingTable tbody > tr > td:first-child {
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: center;
+}
+body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(2),
+body.page-ranking #rcRankingTable tbody > tr > td:nth-child(2) {
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: normal;
+}
+body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(3),
+body.page-ranking #rcRankingTable tbody > tr > td:nth-child(3) {
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: left;
+    white-space: normal !important;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+body.page-ranking #rcRankingTable tbody > tr > td.entity {
+    min-width: 0 !important;
+    font-size: 11px;
+    font-weight: 700;
+}
+body.page-ranking #rcRankingTable tbody > tr > td.num {
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+body.page-ranking #rcRankingTable tbody > tr > td .badge {
+    padding: 5px 6px;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* Los nombres siempre parten del margen izquierdo; corrige centrado externo. */
+body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(3),
+body.page-ranking #rcRankingTable tbody > tr > td:nth-child(3),
+body.page-ranking #rcRankingTable tbody > tr > td.entity {
+    text-align: left !important;
+    padding-left: 10px !important;
+    padding-right: 3px !important;
+}
+body.page-ranking table.commercial-compare-table:not(#rcRankingTable) thead tr:first-child > th:first-child,
+body.page-ranking table.commercial-compare-table:not(#rcRankingTable) tbody > tr > td.entity {
+    text-align: left !important;
+    padding-left: 10px !important;
+}
+/* Barras independientes POR CELDA (no trazos separadores de filas). */
+body.page-ranking .commercial-compare-table .rc-mini-cell { text-align: center !important; }
+body.page-ranking .commercial-compare-table .rc-mini-pct {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    line-height: 1.1;
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct-label {
+    display: block;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct-track {
+    display: block;
+    width: 100%;
+    max-width: 52px;
+    height: 4px;
+    border-radius: 6px;
+    background: rgba(133, 145, 174, .18);
+    overflow: hidden;
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct-fill {
+    display: block;
+    height: 100%;
+    max-width: 100%;
+    border-radius: inherit;
+    background: var(--rc-mini-accent, #8b5cf6);
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct--plays  { --rc-mini-accent: #7c6ade; }
+body.page-ranking .commercial-compare-table .rc-mini-pct--oferta { --rc-mini-accent: #21a6b6; }
+body.page-ranking .commercial-compare-table .rc-mini-pct--bundle { --rc-mini-accent: #d077b5; }
+body.page-ranking .commercial-compare-table .rc-mini-pct.rc-mini-no-data .rc-mini-pct-track { visibility: hidden; }
+/* Totales: barra algo más visible, sin alterar el suave fondo existente. */
+body.page-ranking .commercial-compare-table tr.total-row .rc-mini-pct-fill { filter: saturate(1.1); }
+
 </style>
 
 </head>
@@ -2664,111 +2929,191 @@ include __DIR__ . '/../includes/sidebar.php';
 <?php if ($query_error): ?>
 <section class="table-card" style="padding:20px"><strong>No se muestran indicadores porque el motor no pudo calcularlos.</strong><p>Corrige el error informado arriba y vuelve a cargar la página.</p></section>
 <?php elseif (!in_array($view, ['ventas','vendedores'], true)): ?>
+<?php
+// Misma taxonomia y orden que el nivel Vendedor del archivo base.
+$dimensionesRc = [
+    ['campo'=>'doble_play','rotulo'=>'% 2P'],
+    ['campo'=>'triple_play','rotulo'=>'% 3P'],
+    ['campo'=>'residencial','rotulo'=>'% RES.'],
+    ['campo'=>'negocios','rotulo'=>'% NEG.'],
+    ['campo'=>'no_bundle','rotulo'=>'% NO BUNDLE'],
+    ['campo'=>'bundle','rotulo'=>'% BUNDLE'],
+];
+$rcPct = static fn($n,$total): ?int => (float)$total > 0 ? (int)round(100*(float)$n/(float)$total) : null;
+$rcArpu = static fn($a): ?float => (int)($a['arpu_cuentas']??0)>0
+    ? (float)$a['arpu_ingreso_neto']/(int)$a['arpu_cuentas'] : null;
+$rcDif = static fn($a,$b): ?float => $a === null || $b === null ? null : $b-$a;
+$rcPctDif = static fn($a,$b): ?float => $a === null || $b === null || $a<=0 ? null : ($b-$a)/$a*100;
+$rcFmtDif = static fn($d): string => $d === null ? '—'
+    : (($d>0?'+':($d<0?'−':'')) . '$'.fmt_num(abs($d),2));
+$rcFmtPctDif = static fn($d): string => $d === null ? '—'
+    : (($d>0?'+':($d<0?'−':'')) . fmt_num(abs($d),1).'%');
+// La vista HC permanece utilizable aun si falta el archivo del Motor Comercial.
+$rcEmpty = class_exists('MotorComercial') ? MotorComercial::resumenVacio() : [
+    'total'=>0,'doble_play'=>0,'triple_play'=>0,'play_sin_clasificar'=>0,
+    'residencial'=>0,'negocios'=>0,'oferta_sin_clasificar'=>0,
+    'no_bundle'=>0,'bundle'=>0,'bundle_sin_clasificar'=>0,
+    'arpu'=>null,'arpu_ingreso_neto'=>0.0,'arpu_cuentas'=>0,
+    'arpu_fuente_catalogo'=>0,'arpu_precio_ambiguo'=>0,
+    'instalacion_no_encontrada'=>0,'instalacion_plan_ambiguo'=>0,
+    'catalogo_sin_match'=>0,'catalogo_ambiguo'=>0
+];
+$rcTotalBase = $rcEmpty;
+$rcTotalActual = $rcEmpty;
+if ($comercial05_ok) {
+    foreach ($rows as $rr) {
+        rc_agregar_comercial($rcTotalBase,$rr['_mc_base']);
+        rc_agregar_comercial($rcTotalActual,$rr['_mc_actual']);
+    }
+}
+$rcHead = $view === 'lideres' ? 'Líder' : 'Coach';
+$rcCardArpuBase = $comercial05_ok ? $rcArpu($rcTotalBase) : null;
+$rcCardArpuActual = $comercial05_ok ? $rcArpu($rcTotalActual) : null;
+$rcCardMix3pBase = $comercial05_ok ? $rcPct($rcTotalBase['triple_play'], $tot['ins_sem_base']) : null;
+$rcCardMix3pActual = $comercial05_ok ? $rcPct($rcTotalActual['triple_play'], $tot['ins_sem_actual']) : null;
+$rcCardBundleBase = $comercial05_ok ? $rcPct($rcTotalBase['bundle'], $tot['ins_sem_base']) : null;
+$rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['ins_sem_actual']) : null;
+?>
 <section class="cards">
-    <div class="card"><div class="label">Instalaciones <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
-    <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
-    <div class="card"><div class="label">Prod. diaria <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-prod-actual"><?= fmt_prod($tot['prod_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-prod-base"><?= fmt_prod($tot['prod_base']) ?></span></div></div>
-    <div class="card"><div class="label">Headcount <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-hc-total"><?= fmt_num($tot['hc_total_actual']) ?></div><div class="hint">Activos <span id="kpi-activo"><?= fmt_num($tot['activo_actual']) ?></span> · Vacantes <span id="kpi-vacante"><?= fmt_num($tot['vacante_actual']) ?></span></div></div>
+    <div class="card"><div class="label">Instalaciones <?= h($label_col_actual) ?></div><div class="value" id="rc-kpi-ins"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_col_base) ?>: <span id="rc-kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
+    <div class="card"><div class="label">ARPU <?= h($label_col_actual) ?></div><div class="value" id="rc-kpi-arpu"><?= $rcCardArpuActual === null ? '—' : '$'.fmt_num($rcCardArpuActual,2) ?></div><div class="hint"><?= h($label_col_base) ?>: <span id="rc-kpi-arpu-base"><?= $rcCardArpuBase === null ? '—' : '$'.fmt_num($rcCardArpuBase,2) ?></span></div></div>
+    <div class="card"><div class="label">Mix 3P <?= h($label_col_actual) ?></div><div class="value" id="rc-kpi-3p"><?= $rcCardMix3pActual === null ? '—' : fmt_num($rcCardMix3pActual).'%' ?></div><div class="hint"><?= h($label_col_base) ?>: <span id="rc-kpi-3p-base"><?= $rcCardMix3pBase === null ? '—' : fmt_num($rcCardMix3pBase).'%' ?></span></div></div>
+    <div class="card"><div class="label">Mix Bundle <?= h($label_col_actual) ?></div><div class="value" id="rc-kpi-bundle"><?= $rcCardBundleActual === null ? '—' : fmt_num($rcCardBundleActual).'%' ?></div><div class="hint"><?= h($label_col_base) ?>: <span id="rc-kpi-bundle-base"><?= $rcCardBundleBase === null ? '—' : fmt_num($rcCardBundleBase).'%' ?></span></div></div>
 </section>
-
+<?php if (!$comercial05_ok): ?>
+<section class="table-card" style="padding:15px 20px; margin-bottom:16px">
+  <strong>Motor HC operativo · Indicadores comerciales no disponibles.</strong>
+  <p><?= h($comercial05_error ?: 'No fue posible conciliar los datos comerciales con el HC certificado.') ?></p>
+  <p>Las instalaciones certificadas continúan visibles, sin atribución comercial no verificada.</p>
+</section>
+<?php endif; ?>
 <section class="filters">
-    <?php if (in_array($view, ['lideres','ranking_coach'], true) && count($districts) > 1): ?>
+    <?php if (count($districts) > 1): ?>
         <span class="filter-label">Distrito:</span>
         <button class="filter-btn active" data-district="ALL">Todos</button>
         <?php foreach ($districts as $d): ?><button class="filter-btn" data-district="<?= h($d) ?>"><?= h($d) ?></button><?php endforeach; ?>
     <?php else: ?>
-        <span class="filter-label">Vista:</span>
-        <span class="context-chip"><?= h($title_label) ?></span>
+        <span class="filter-label">Vista:</span><span class="context-chip"><?= h($title_label) ?></span>
     <?php endif; ?>
     <span class="counter" id="visibleCounter">Mostrando <?= count($rows) ?> registros</span>
 </section>
-
 <section class="table-card">
     <div class="table-head">
         <strong><?= h($title_label) ?></strong>
-        <span><?= $view === 'lideres' ? 'Click en líder para ver coaches' : (in_array($view, ['coaches','ranking_coach'], true) ? 'Click en coach para ver vendedores' : 'Click en vendedor para ver historial semanal') ?></span>
+        <span>Comparativo comercial <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · <?= $view === 'lideres' ? 'Selecciona un líder para ver coaches' : 'Selecciona un coach para ver vendedores' ?></span>
     </div>
     <div class="table-wrap">
-        <table id="rankingTable">
+        <table class="sales-table commercial-compare-table rc-summary-table" id="rcRankingTable" style="width:100%; min-width:0; table-layout:fixed">
+        <colgroup>
+            <col style="width:2.87977%">
+            <col style="width:6.83945%">
+            <col style="width:16.91865%">
+            <col style="width:4.24766%">
+            <col style="width:4.24766%">
+            <col style="width:3.16775%">
+            <col style="width:4.10367%">
+            <col style="width:5.18359%">
+            <col style="width:5.18359%">
+            <col style="width:5.47156%">
+            <col style="width:4.60763%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+        </colgroup>
             <thead>
                 <tr>
                     <th rowspan="2" class="center">#</th>
                     <th rowspan="2">Distrito</th>
-                    <th rowspan="2"><?= h($entity_label) ?></th>
-                    <th rowspan="2" class="num sortable" data-key="ins_sem_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="ins_sem_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="dif">Dif. <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_activo_base">HC Activo<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_activo_actual">HC Activo<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_base">HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="num sortable" data-key="hc_sin_venta_actual">HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="pct_hc_sin_ins_base">% HC sin INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="pct_hc_sin_ins_actual">% HC sin INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="prod_base">PROD. DIARIA<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center sortable" data-key="prod_actual">PROD. DIARIA<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th colspan="2" class="group">Head Count <?= h($label_col_base) ?></th>
-                    <th colspan="2" class="group">Head Count <?= h($label_col_actual) ?></th>
+                    <th rowspan="2"><?= h($rcHead) ?></th>
+                    <th rowspan="2" class="num rc-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num rc-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num rc-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center rc-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
+                    <th colspan="4" class="group center">ARPU</th>
+                    <th colspan="4" class="group center">PLAYS</th>
+                    <th colspan="4" class="group center">OFERTA (RESIDENCIAL / NEGOCIOS)</th>
+                    <th colspan="4" class="group center">BUNDLES</th>
                 </tr>
                 <tr>
-                    <th class="num sub-gray">HC Vacante<br><?= h($label_col_base) ?></th><th class="num sub-gray">HC Total<br><?= h($label_col_base) ?></th>
-                    <th class="num sub-gray">HC Vacante<br><?= h($label_col_actual) ?></th><th class="num sub-gray">HC Total<br><?= h($label_col_actual) ?></th>
+                    <th class="num rc-sortable" data-sort="arpu_base">$ARPU<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num rc-sortable" data-sort="arpu_actual">$ARPU<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num rc-sortable" data-sort="arpu_dif">DIF $ <span class="sort-icon">↕</span></th>
+                    <th class="center rc-sortable" data-sort="arpu_pct_dif">% DIF <span class="sort-icon">↕</span></th>
+                    <?php foreach ($dimensionesRc as $dim): ?>
+                        <th class="center rc-sortable" data-sort="pct_<?= h($dim['campo']) ?>_base"><?= h($dim['rotulo']) ?><br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                        <th class="center rc-sortable" data-sort="pct_<?= h($dim['campo']) ?>_actual"><?= h($dim['rotulo']) ?><br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <?php endforeach; ?>
                 </tr>
             </thead>
             <tbody>
-                <?php $rank=1; foreach($rows as $r):
-                    $href = '';
-                    if ($view === 'lideres') {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]));
-                    } elseif (in_array($view, ['coaches','ranking_coach'], true)) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
-                    } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]));
+                <?php $rcRank=1; foreach ($rows as $r):
+                    $nb=(int)$r['ins_sem_base']; $na=(int)$r['ins_sem_actual'];
+                    $nd=$na-$nb; $np=$rcPct($nd,$nb);
+                    $cb=$comercial05_ok ? $r['_mc_base'] : $rcEmpty;
+                    $ca=$comercial05_ok ? $r['_mc_actual'] : $rcEmpty;
+                    $ab=$comercial05_ok ? $rcArpu($cb) : null;
+                    $aa=$comercial05_ok ? $rcArpu($ca) : null;
+                    $ad=$rcDif($ab,$aa); $ap=$rcPctDif($ab,$aa);
+                    $rcUrl = $view === 'lideres'
+                        ? '?' . qs(array_merge($nav_estado,['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]))
+                        : '?' . qs(array_merge($nav_estado,['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
+                    $rcData = [ 'ins_base'=>$nb, 'ins_actual'=>$na, 'base'=>$cb, 'actual'=>$ca ];
+                    $rcSort = ['ins_base'=>$nb,'ins_actual'=>$na,'dif'=>$nd,'pct_dif'=>$np,
+                        'arpu_base'=>$ab,'arpu_actual'=>$aa,'arpu_dif'=>$ad,'arpu_pct_dif'=>$ap];
+                    foreach ($dimensionesRc as $dim) {
+                        $f=$dim['campo'];
+                        $rcSort['pct_'.$f.'_base']=$comercial05_ok?$rcPct($cb[$f],$nb):null;
+                        $rcSort['pct_'.$f.'_actual']=$comercial05_ok?$rcPct($ca[$f],$na):null;
                     }
                 ?>
-                <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
-                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
-                    data-<?= h($k) ?>="<?= h($r[$k] ?? 0) ?>"
-                    <?php endforeach; ?>>
-                    <td class="center"><span class="rank"><?= $rank++ ?></span></td>
+                <tr class="rc-row" data-district="<?= h($r['distrito']) ?>" data-href="<?= h($rcUrl) ?>"
+                    data-rc-metrics="<?= h(json_encode($rcData,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE)) ?>"
+                    <?php foreach ($rcSort as $k=>$v): ?>data-<?= h($k) ?>="<?= $v===null?'-999999':h($v) ?>" <?php endforeach; ?>>
+                    <td class="center"><span class="rank"><?= $rcRank++ ?></span></td>
                     <td class="district"><?= h($r['distrito']) ?></td>
                     <td class="entity"><?= h($r['entidad']) ?></td>
-                    <td class="num"><?= fmt_num($r['ins_sem_base']) ?></td>
-                    <td class="num"><?= fmt_num($r['ins_sem_actual']) ?></td>
-                    <td class="num"><?= fmt_num($r['dif']) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($r['pct_dif']) ?>"><?= $r['pct_dif'] === null ? '-' : fmt_num($r['pct_dif']).'%' ?></span></td>
-                    <td class="num"><?= fmt_num($r['hc_activo_base']) ?></td>
-                    <td class="num"><?= fmt_num($r['hc_activo_actual']) ?></td>
-                    <td class="num"><?= fmt_num($r['hc_sin_venta_base']) ?></td>
-                    <td class="num"><?= fmt_num($r['hc_sin_venta_actual']) ?></td>
-                    <td class="center"><span class="badge <?= pct_hc_sin_ins_class($r['pct_hc_sin_ins_base'] ?? null) ?>"><?= ($r['pct_hc_sin_ins_base'] ?? null) === null ? '-' : fmt_num($r['pct_hc_sin_ins_base']).'%' ?></span></td>
-                    <td class="center"><span class="badge <?= pct_hc_sin_ins_class($r['pct_hc_sin_ins_actual'] ?? null) ?>"><?= ($r['pct_hc_sin_ins_actual'] ?? null) === null ? '-' : fmt_num($r['pct_hc_sin_ins_actual']).'%' ?></span></td>
-                    <td class="center"><span class="prod <?= prod_class($r['prod_base']) ?>"><?= fmt_prod($r['prod_base']) ?></span></td>
-                    <td class="center"><span class="prod <?= prod_class($r['prod_actual']) ?>"><?= fmt_prod($r['prod_actual']) ?></span></td>
-                    <td class="num gray-cell"><?= fmt_num($r['vacante_base']) ?></td>
-                    <td class="num gray-cell"><?= fmt_num($r['hc_total_base']) ?></td>
-                    <td class="num gray-cell"><?= fmt_num($r['vacante_actual']) ?></td>
-                    <td class="num gray-cell"><?= fmt_num($r['hc_total_actual']) ?></td>
+                    <td class="num"><?= fmt_num($nb) ?></td>
+                    <td class="num"><?= fmt_num($na) ?></td>
+                    <td class="num"><?= fmt_num($nd) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($np) ?>"><?= $np===null?'—':fmt_num($np).'%' ?></span></td>
+                    <td class="num"><?= $ab===null?'—':'$'.fmt_num($ab,2) ?></td>
+                    <td class="num"><?= $aa===null?'—':'$'.fmt_num($aa,2) ?></td>
+                    <td class="num"><?= $rcFmtDif($ad) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($ap) ?>"><?= $rcFmtPctDif($ap) ?></span></td>
+                    <?php foreach ($dimensionesRc as $dim): $f=$dim['campo'];
+                        $pb=$comercial05_ok?$rcPct($cb[$f],$nb):null;
+                        $pa=$comercial05_ok?$rcPct($ca[$f],$na):null; ?>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pb, $f) ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pa, $f) ?></td>
+                    <?php endforeach; ?>
                 </tr>
                 <?php endforeach; ?>
-                <tr class="total-row" id="totalRow">
+                <tr class="total-row" id="rcTotalRow">
                     <td></td><td></td><td>TOTAL</td>
-                    <td class="num" data-total-key="ins_sem_base"><?= fmt_num($tot['ins_sem_base']) ?></td>
-                    <td class="num" data-total-key="ins_sem_actual"><?= fmt_num($tot['ins_sem_actual']) ?></td>
-                    <td class="num" data-total-key="dif"><?= fmt_num($tot['dif']) ?></td>
-                    <td class="center"><span id="total-pct" class="badge <?= pct_class($tot['pct_dif']) ?>"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span></td>
-                    <td class="num" data-total-key="hc_activo_base"><?= fmt_num($tot['hc_activo_base']) ?></td>
-                    <td class="num" data-total-key="hc_activo_actual"><?= fmt_num($tot['hc_activo_actual']) ?></td>
-                    <td class="num" id="total-hc-sin-base"><?= fmt_num($tot['hc_sin_venta_base']) ?></td>
-                    <td class="num" id="total-hc-sin-actual"><?= fmt_num($tot['hc_sin_venta_actual']) ?></td>
-                    <td class="center"><span id="total-pct-hc-sin-base" class="badge <?= pct_hc_sin_ins_class($tot['pct_hc_sin_ins_base'] ?? null) ?>"><?= ($tot['pct_hc_sin_ins_base'] ?? null) === null ? '-' : fmt_num($tot['pct_hc_sin_ins_base']).'%' ?></span></td>
-                    <td class="center"><span id="total-pct-hc-sin-actual" class="badge <?= pct_hc_sin_ins_class($tot['pct_hc_sin_ins_actual'] ?? null) ?>"><?= ($tot['pct_hc_sin_ins_actual'] ?? null) === null ? '-' : fmt_num($tot['pct_hc_sin_ins_actual']).'%' ?></span></td>
-                    <td class="center"><span id="total-prod-base" class="prod <?= prod_class($tot['prod_base']) ?>"><?= fmt_prod($tot['prod_base']) ?></span></td>
-                    <td class="center"><span id="total-prod-actual" class="prod <?= prod_class($tot['prod_actual']) ?>"><?= fmt_prod($tot['prod_actual']) ?></span></td>
-                    <td class="num gray-cell" data-total-key="vacante_base"><?= fmt_num($tot['vacante_base']) ?></td>
-                    <td class="num gray-cell" data-total-key="hc_total_base"><?= fmt_num($tot['hc_total_base']) ?></td>
-                    <td class="num gray-cell" data-total-key="vacante_actual"><?= fmt_num($tot['vacante_actual']) ?></td>
-                    <td class="num gray-cell" data-total-key="hc_total_actual"><?= fmt_num($tot['hc_total_actual']) ?></td>
+                    <td class="num" data-rc-total="ins_base"><?= fmt_num($tot['ins_sem_base']) ?></td>
+                    <td class="num" data-rc-total="ins_actual"><?= fmt_num($tot['ins_sem_actual']) ?></td>
+                    <td class="num" data-rc-total="dif"><?= fmt_num($tot['dif']) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($tot['pct_dif']) ?>" data-rc-total="pct_dif"><?= $tot['pct_dif']===null?'—':fmt_num($tot['pct_dif']).'%' ?></span></td>
+                    <?php $tAb=$comercial05_ok?$rcArpu($rcTotalBase):null; $tAa=$comercial05_ok?$rcArpu($rcTotalActual):null; ?>
+                    <td class="num" data-rc-total="arpu_base"><?= $tAb===null?'—':'$'.fmt_num($tAb,2) ?></td>
+                    <td class="num" data-rc-total="arpu_actual"><?= $tAa===null?'—':'$'.fmt_num($tAa,2) ?></td>
+                    <td class="num" data-rc-total="arpu_dif"><?= $rcFmtDif($rcDif($tAb,$tAa)) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($rcPctDif($tAb,$tAa)) ?>" data-rc-total="arpu_pct_dif"><?= $rcFmtPctDif($tAb===null||$tAa===null?null:$rcPctDif($tAb,$tAa)) ?></span></td>
+                    <?php foreach ($dimensionesRc as $dim): $f=$dim['campo'];
+                        $tb=$comercial05_ok?$rcPct($rcTotalBase[$f],$tot['ins_sem_base']):null;
+                        $ta=$comercial05_ok?$rcPct($rcTotalActual[$f],$tot['ins_sem_actual']):null; ?>
+                        <td class="center rc-mini-cell" data-rc-total="pct_<?= h($f) ?>_base"><?= rc_mini_pct($tb, $f) ?></td>
+                        <td class="center rc-mini-cell" data-rc-total="pct_<?= h($f) ?>_actual"><?= rc_mini_pct($ta, $f) ?></td>
+                    <?php endforeach; ?>
                 </tr>
             </tbody>
         </table>
@@ -2943,8 +3288,8 @@ $dimensiones05 = [
                     <td class="center"><span class="badge <?= pct_class($pctArpu05) ?>"><?= $fmtPctArpu05($pctArpu05) ?></span></td>
                     <?php foreach ($dimensiones05 as $dimension05):
                         $campo05=$dimension05['campo']; ?>
-                        <td class="center"><?= $mixPct05[$campo05.'_base'] === null ? '—' : fmt_num($mixPct05[$campo05.'_base']).'%' ?></td>
-                        <td class="center"><?= $mixPct05[$campo05.'_actual'] === null ? '—' : fmt_num($mixPct05[$campo05.'_actual']).'%' ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($mixPct05[$campo05.'_base'], $campo05) ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($mixPct05[$campo05.'_actual'], $campo05) ?></td>
                     <?php endforeach; ?>
                 </tr>
                 <?php endforeach; ?>
@@ -2968,8 +3313,8 @@ $dimensiones05 = [
                         $pBase05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_base'],$sum05['ins_base']) : null;
                         $pActual05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_actual'],$sum05['ins_actual']) : null;
                     ?>
-                        <td class="center"><?= $pBase05===null?'—':fmt_num($pBase05).'%' ?></td>
-                        <td class="center"><?= $pActual05===null?'—':fmt_num($pActual05).'%' ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pBase05, $campo05) ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pActual05, $campo05) ?></td>
                     <?php endforeach; ?>
                 </tr>
             </tbody>
@@ -3018,71 +3363,117 @@ foreach ($ventas_hist as $vh) {
 
 <?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
 <script>
-const table=document.getElementById('rankingTable');
-const DIAS_HABILES_BASE = <?= (int)$dias_habiles_base ?>;
-const DIAS_HABILES_ACTUAL = <?= (int)$dias_habiles_actual ?>;
-const tbody=table.querySelector('tbody');
-const totalRow=document.getElementById('totalRow');
-const dataRows=()=>[...tbody.querySelectorAll('tr.data-row')];
-let activeDistrict='ALL';
-let sortState={key:'prod_actual',dir:'desc'};
-function num(v){const n=parseFloat(v);return isNaN(n)?0:n}
-function fmt0(n){return Math.round(n).toLocaleString('en-US')}
-function fmt2(n){return (Math.round(n*100)/100).toFixed(2)}
-function pctClass(n){if(n>=5)return'badge up';if(n<=-10)return'badge down-hard';if(n<0)return'badge down';return'badge flat'}
-function prodClass(n){if(n>=0.70)return'prod tier-1';if(n>=0.55)return'prod tier-2';if(n>=0.40)return'prod tier-3';return'prod tier-4'}
-function hcClass(n){if(n<=2)return'hc-indicator hc-good';if(n<=5)return'hc-indicator hc-mid';return'hc-indicator hc-bad'}
-function pctHcClass(n){if(n===null)return'badge flat';if(n<=5)return'badge up';if(n<=10)return'badge flat';return'badge down-hard'}
-function visibleRows(){return dataRows().filter(r=>r.style.display!=='none')}
-function applyFilter(){
- dataRows().forEach(r=>{r.style.display=(activeDistrict==='ALL'||r.dataset.district===activeDistrict)?'':'none'});
- recalc();
-}
-function recalc(){
- const rows=visibleRows();
- rows.forEach((r,i)=>{const rk=r.querySelector('.rank');if(rk)rk.textContent=i+1});
- const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
- const t={};keys.forEach(k=>t[k]=0);
- rows.forEach(r=>keys.forEach(k=>t[k]+=num(r.dataset[k])));
- const pct=t.ins_sem_base>0?Math.round(((t.ins_sem_actual-t.ins_sem_base)/t.ins_sem_base)*100):null;
- const pctHcSinBase=t.hc_activo_base>0?Math.round((t.hc_sin_venta_base/t.hc_activo_base)*100):null;
- const pctHcSinActual=t.hc_activo_actual>0?Math.round((t.hc_sin_venta_actual/t.hc_activo_actual)*100):null;
- const pb=(t.hc_activo_base>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/t.hc_activo_base/DIAS_HABILES_BASE:null;
- const pa=(t.hc_activo_actual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/t.hc_activo_actual/DIAS_HABILES_ACTUAL:null;
- document.querySelectorAll('[data-total-key]').forEach(td=>td.textContent=fmt0(t[td.dataset.totalKey]||0));
- const p=document.getElementById('total-pct');p.textContent=pct===null?'-':fmt0(pct)+'%';p.className=pct===null?'badge flat':pctClass(pct);
- const hb=document.getElementById('total-hc-sin-base');hb.textContent=fmt0(t.hc_sin_venta_base);
- const ha=document.getElementById('total-hc-sin-actual');ha.textContent=fmt0(t.hc_sin_venta_actual);
- const phb=document.getElementById('total-pct-hc-sin-base');if(phb){phb.textContent=pctHcSinBase===null?'-':fmt0(pctHcSinBase)+'%';phb.className=pctHcClass(pctHcSinBase);}
- const pha=document.getElementById('total-pct-hc-sin-actual');if(pha){pha.textContent=pctHcSinActual===null?'-':fmt0(pctHcSinActual)+'%';pha.className=pctHcClass(pctHcSinActual);}
- const tb=document.getElementById('total-prod-base');tb.textContent=pb===null?'-':fmt2(pb);tb.className=pb===null?'prod muted':prodClass(pb);
- const ta=document.getElementById('total-prod-actual');ta.textContent=pa===null?'-':fmt2(pa);ta.className=pa===null?'prod muted':prodClass(pa);
- document.getElementById('kpi-ins-actual').textContent=fmt0(t.ins_sem_actual);
- document.getElementById('kpi-ins-base').textContent=fmt0(t.ins_sem_base);
- document.getElementById('kpi-dif').textContent=fmt0(t.dif);
- document.getElementById('kpi-pct').textContent=pct===null?'-':fmt0(pct)+'%';
- document.getElementById('kpi-prod-actual').textContent=pa===null?'-':fmt2(pa);
- document.getElementById('kpi-prod-base').textContent=pb===null?'-':fmt2(pb);
- document.getElementById('kpi-hc-total').textContent=fmt0(t.hc_total_actual);
- document.getElementById('kpi-activo').textContent=fmt0(t.activo_actual);
- document.getElementById('kpi-vacante').textContent=fmt0(t.vacante_actual);
- const c=document.getElementById('visibleCounter');
- if(c){const label=activeDistrict==='ALL'?'':' · '+activeDistrict;c.textContent='Mostrando '+rows.length+' de '+dataRows().length+' registros'+label}
-}
-document.querySelectorAll('.filter-btn').forEach(btn=>btn.addEventListener('click',()=>{
- document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
- btn.classList.add('active');activeDistrict=btn.dataset.district||'ALL';applyFilter();
-}));
-document.querySelectorAll('th.sortable').forEach(th=>th.addEventListener('click',()=>{
- const key=th.dataset.key;const dir=(sortState.key===key&&sortState.dir==='desc')?'asc':'desc';sortState={key,dir};
- const rows=dataRows();rows.sort((a,b)=>dir==='desc'?num(b.dataset[key])-num(a.dataset[key]):num(a.dataset[key])-num(b.dataset[key]));
- rows.forEach(r=>tbody.insertBefore(r,totalRow));
- document.querySelectorAll('.sort-icon').forEach(i=>i.textContent='↕');
- const icon=th.querySelector('.sort-icon');if(icon)icon.textContent=dir==='desc'?'↓':'↑';
- applyFilter();
-}));
-dataRows().forEach(r=>r.addEventListener('click',()=>{const href=r.dataset.href;if(href)window.location.href=href}));
-recalc();
+/* Ranking Comercial: filtros y ordenación sin alterar la matriz certificada. */
+(function(){
+ const table=document.getElementById('rcRankingTable');
+ if(!table)return;
+ const body=table.querySelector('tbody'), totalRow=document.getElementById('rcTotalRow');
+ const validCommercial=<?= $comercial05_ok ? 'true' : 'false' ?>;
+ const fields=['total','doble_play','triple_play','play_sin_clasificar','residencial','negocios',
+   'oferta_sin_clasificar','no_bundle','bundle','bundle_sin_clasificar','arpu_ingreso_neto',
+   'arpu_cuentas','catalogo_sin_match','catalogo_ambiguo','instalacion_no_encontrada',
+   'instalacion_plan_ambiguo','arpu_fuente_catalogo','arpu_precio_ambiguo'];
+ const dims=['doble_play','triple_play','residencial','negocios','no_bundle','bundle'];
+ const allRows=()=>[...body.querySelectorAll('.rc-row')];
+ let district='ALL',sortKey='ins_actual',sortDir='desc';
+ function number(v){const n=Number(v);return Number.isFinite(n)?n:0;}
+ function format0(n){return Math.round(n).toLocaleString('en-US');}
+ function format2(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+ function percent(n,d){return d>0?Math.round(100*n/d):null;}
+ function arpu(o){return o.arpu_cuentas>0?o.arpu_ingreso_neto/o.arpu_cuentas:null;}
+ function pctDiff(a,b){return a!==null&&b!==null&&a>0?100*(b-a)/a:null;}
+ function signed(n,d=2,prefix='$'){
+   if(n===null)return '—';return (n>0?'+':n<0?'−':'')+prefix+(d===2?format2(Math.abs(n)):(Math.abs(n)).toFixed(d));
+ }
+ function badgeClass(n){return n===null?'flat':n>=5?'up':n<=-10?'down-hard':n<0?'down':'flat';}
+ function updateField(k,value){
+   const el=table.querySelector('[data-rc-total="'+k+'"]');if(!el)return;
+   // La barra conserva exactamente el porcentaje recalculado al filtrar.
+   if(el.classList.contains('rc-mini-cell')){
+     const holder=el.querySelector('.rc-mini-pct');
+     const label=el.querySelector('.rc-mini-pct-label');
+     const bar=el.querySelector('.rc-mini-pct-fill');
+     if(holder&&label&&bar){
+       const parsed=value==='—'?null:Number(String(value).replace('%',''));
+       const pct=parsed===null||!Number.isFinite(parsed)?null:Math.min(100,Math.max(0,parsed));
+       label.textContent=value;
+       bar.style.width=(pct===null?0:pct)+'%';
+       holder.classList.toggle('rc-mini-no-data',pct===null);
+       return;
+     }
+   }
+   el.textContent=value;
+ }
+ function setBadge(k,val,value){
+   updateField(k,value);
+   const el=table.querySelector('[data-rc-total="'+k+'"]');if(el)el.className='badge '+badgeClass(val);
+ }
+ function calc(){
+   const visible=allRows().filter(r=>r.style.display!=='none');
+   const empty=()=>Object.fromEntries(fields.map(f=>[f,0]));
+   const base=empty(),actual=empty();let insBase=0,insActual=0;
+   visible.forEach((r,index)=>{
+     const rn=r.querySelector('.rank');if(rn)rn.textContent=index+1;
+     const m=JSON.parse(r.dataset.rcMetrics);
+     insBase+=number(m.ins_base);insActual+=number(m.ins_actual);
+     if(validCommercial)for(const f of fields){base[f]+=number(m.base[f]);actual[f]+=number(m.actual[f]);}
+   });
+   const diff=insActual-insBase, pd=percent(diff,insBase);
+   const a=validCommercial?arpu(base):null,z=validCommercial?arpu(actual):null;
+   const d=a===null||z===null?null:z-a,p=pctDiff(a,z);
+   updateField('ins_base',format0(insBase));
+   updateField('ins_actual',format0(insActual));
+   updateField('dif',format0(diff));
+   setBadge('pct_dif',pd,pd===null?'—':format0(pd)+'%');
+   updateField('arpu_base',a===null?'—':'$'+format2(a));
+   updateField('arpu_actual',z===null?'—':'$'+format2(z));
+   updateField('arpu_dif',signed(d));
+   setBadge('arpu_pct_dif',p,p===null?'—':signed(p,1,'')+'%');
+   for(const f of dims){
+     const x=validCommercial?percent(base[f],insBase):null;
+     const y=validCommercial?percent(actual[f],insActual):null;
+     updateField('pct_'+f+'_base',x===null?'—':format0(x)+'%');
+     updateField('pct_'+f+'_actual',y===null?'—':format0(y)+'%');
+   }
+   document.getElementById('rc-kpi-ins').textContent=format0(insActual);
+   document.getElementById('rc-kpi-ins-base').textContent=format0(insBase);
+   document.getElementById('rc-kpi-arpu').textContent=z===null?'—':'$'+format2(z);
+   document.getElementById('rc-kpi-arpu-base').textContent=a===null?'—':'$'+format2(a);
+   for(const [f,id] of [['triple_play','3p'],['bundle','bundle']]){
+     const x=validCommercial?percent(base[f],insBase):null;
+     const y=validCommercial?percent(actual[f],insActual):null;
+     document.getElementById('rc-kpi-'+id).textContent=y===null?'—':format0(y)+'%';
+     document.getElementById('rc-kpi-'+id+'-base').textContent=x===null?'—':format0(x)+'%';
+   }
+   const counter=document.getElementById('visibleCounter');
+   if(counter)counter.textContent='Mostrando '+visible.length+' de '+allRows().length+' registros'+
+       (district==='ALL'?'':' · '+district);
+ }
+ function apply(){
+   allRows().forEach(r=>r.style.display=district==='ALL'||r.dataset.district===district?'':'none');
+   calc();
+ }
+ document.querySelectorAll('.filter-btn').forEach(btn=>btn.addEventListener('click',()=>{
+   document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+   btn.classList.add('active');district=btn.dataset.district||'ALL';apply();
+ }));
+ document.querySelectorAll('#rcRankingTable .rc-sortable').forEach(th=>th.addEventListener('click',()=>{
+   const key=th.dataset.sort;
+   sortDir=sortKey===key&&sortDir==='desc'?'asc':'desc';sortKey=key;
+   allRows().sort((a,b)=>{
+     const av=number(a.getAttribute('data-'+key)),bv=number(b.getAttribute('data-'+key));
+     const delta=sortDir==='desc'?bv-av:av-bv;
+     return delta!==0?delta:a.querySelector('.entity').textContent.localeCompare(b.querySelector('.entity').textContent);
+   }).forEach(r=>body.insertBefore(r,totalRow));
+   document.querySelectorAll('#rcRankingTable .rc-sortable .sort-icon').forEach(i=>i.textContent='↕');
+   const icon=th.querySelector('.sort-icon');if(icon)icon.textContent=sortDir==='desc'?'↓':'↑';
+   apply();
+ }));
+ allRows().forEach(r=>r.addEventListener('click',()=>{
+   if(r.dataset.href)window.location.href=r.dataset.href;
+ }));
+ apply();
+})();
 </script>
 <?php endif; ?>
 

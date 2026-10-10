@@ -1,12 +1,12 @@
 <?php
 /**
- * TALIA / RANKING PRODUCTIVIDAD - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0 | PRODUCCION
+ * TALIA / RANKING PRODUCTIVIDAD - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0 | STAGING
  * ====================================================
  * OBJETIVO: presentar ranking semanal/mensual con misma interfaz, filtros,
  * indicadores y navegacion que ranking_productividad.php productivo, pero
  * obteniendo las instalaciones certificadas desde Motor HC v0.6 candidato.
  *
- * UBICACION: /plataforma/detalle/ranking_productividad.php
+ * UBICACION: /plataforma/detalle/ranking_productividad_COMERCIAL_STAGING.php
  * DEPENDENCIAS: /plataforma/includes/motor_hc.php (SIN CAMBIOS)
  *               /plataforma/includes/motor_comercial.php (NUEVO)
  * AUTORIZACION: sesion TalIA; roles ADMIN o DIRECTOR_REGIONAL.
@@ -20,7 +20,7 @@
  * obtiene catalogo dinamico de plazas de lider; reconstruye HC activo;
  * agrega por lider / coach / vendedor y pinta la tabla.
  * SALIDA: HTML; no escribe archivos ni modifica tablas.
- * ALCANCE: vista productiva; actualizacion visual del comparativo comercial.
+ * ALCANCE: comparacion visual frente a ranking_productividad.php.
  * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
  * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
  * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
@@ -30,8 +30,8 @@
  * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
  * asigna ninguna cuenta ni cambia cifras por si mismo.
  *
- * IMPORTANTE: la presente actualización es visual. HC y Comercial preservan
- * sus reglas; validar funcionamiento tras publicar la vista.
+ * IMPORTANTE: igualdad de cifras NO CERTIFICADA sin ejecutar ambos contra
+ * la misma BD y periodos. No desplegar como reemplazo de produccion.
  * EXTENSIÓN COMERCIAL (10-OCT-2026):
  * - Solamente view=vendedores ejecuta el Motor Comercial; los otros niveles
  *   permanecen intactos.
@@ -42,7 +42,7 @@
  * - DIF ARPU = ACTUAL - BASE, %DIF ARPU = DIF / BASE * 100.
  * - Sin ARPU en alguno de los períodos => diferencias no disponibles (—).
  * - Errores de clasificación NO ocultan las instalaciones HC del ranking.
- * - Control de despliegue: verificar cuentas e indicadores tras publicación.
+ * - Ruta de aceptación STAGING: contrastar primero cuentas y luego mixes.
  */
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
@@ -104,7 +104,7 @@ if (empty($_SESSION['usuario'])) {
 include '../conexion.php';
 
 $rol = $_SESSION['rol'] ?? 'vendedor';
-if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('Ranking reservado a ADMIN / Dirección Regional.'); }
+if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('STAGING canónico reservado a ADMIN / Dirección Regional.'); }
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -2777,7 +2777,7 @@ include __DIR__ . '/../includes/sidebar.php';
 <?php elseif ($view === 'vendedores'): ?>
 <?php
 /**
- * TALIA - COMPARATIVO COMERCIAL VENDEDOR (FORMATO PROD 10-OCT-2026)
+ * TALIA - COMPARATIVO COMERCIAL VENDEDOR (STAGING 10-OCT-2026)
  * ----------------------------------------------------------
  * Mismo universo certificado del Motor HC para BASE y ACTUAL.
  * Mix = cuentas clasificadas / TODAS las cuentas HC del MISMO periodo.
@@ -2975,6 +2975,30 @@ $dimensiones05 = [
             </tbody>
         </table>
     </div>
+    <?php if ($comercial05_ok): ?>
+    <div style="padding:12px 20px; font-size:12px; opacity:.83; line-height:1.65">
+        <strong>Auditoría comercial · BASE <?= h($label_col_base) ?>:</strong>
+        <?= fmt_num($sum05['ins_base']) ?> instalaciones HC certificadas ·
+        Sin clasificar Plays: <?= fmt_num($sum05['play_sin_clasificar_base']) ?>,
+        Oferta: <?= fmt_num($sum05['oferta_sin_clasificar_base']) ?>,
+        Bundle: <?= fmt_num($sum05['bundle_sin_clasificar_base']) ?> ·
+        Plan sin coincidencia: <?= fmt_num($sum05['catalogo_sin_match_base']) ?> ·
+        Catálogo ambiguo: <?= fmt_num($sum05['catalogo_ambiguo_base']) ?> ·
+        ARPU: <?= fmt_num($sum05['arpu_cuentas_base']) ?>/<?= fmt_num($sum05['ins_base']) ?> cuentas con precio
+        (respaldo catálogo actual: <?= fmt_num($sum05['arpu_fuente_catalogo_base']) ?>).
+        <div style="height:4px"></div>
+        <strong>Auditoría comercial · ACTUAL <?= h($label_col_actual) ?>:</strong>
+        <?= fmt_num($sum05['ins_actual']) ?> instalaciones HC certificadas ·
+        Sin clasificar Plays: <?= fmt_num($sum05['play_sin_clasificar_actual']) ?>,
+        Oferta: <?= fmt_num($sum05['oferta_sin_clasificar_actual']) ?>,
+        Bundle: <?= fmt_num($sum05['bundle_sin_clasificar_actual']) ?> ·
+        Plan sin coincidencia: <?= fmt_num($sum05['catalogo_sin_match_actual']) ?> ·
+        Catálogo ambiguo: <?= fmt_num($sum05['catalogo_ambiguo_actual']) ?> ·
+        ARPU: <?= fmt_num($sum05['arpu_cuentas_actual']) ?>/<?= fmt_num($sum05['ins_actual']) ?> cuentas con precio
+        (respaldo catálogo actual: <?= fmt_num($sum05['arpu_fuente_catalogo_actual']) ?>).
+        <div>Porcentajes sobre instalaciones HC del período correspondiente; el total no necesariamente suma 100% si existen planes sin clasificar. ARPU ponderado por cuentas con precio válido.</div>
+    </div>
+    <?php endif; ?>
 </section>
 
 <?php elseif (!$query_error): ?>
