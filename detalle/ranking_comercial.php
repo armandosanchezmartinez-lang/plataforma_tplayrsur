@@ -1,6 +1,6 @@
 <?php
 /**
- * TALIA / RANKING COMERCIAL v0.1.2 - AJUSTE VISUAL RESPONSIVO - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
+ * TALIA / RANKING COMERCIAL v0.1.3 - MINI BARRAS HORIZONTALES - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
  * ====================================================
  * MODULO INDEPENDIENTE (10-OCT-2026):
  * - Base fiel de ranking_productividad.php aportado para esta iteracion.
@@ -135,6 +135,21 @@ $roles_labels = [
 function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 function fmt_num($v, $d=0) { return number_format((float)($v ?? 0), $d); }
 function fmt_prod($v) { return ($v === null || $v === '') ? '-' : number_format((float)$v, 2); }
+/**
+ * Presentación gráfica exclusivamente (0-100%): etiqueta sobre minigráfico.
+ * Valores nulos muestran raya y NO dibujan barra. Compatible con filtros.
+ */
+function rc_mini_pct(?int $pct, string $campo): string {
+    $dim = in_array($campo, ['doble_play','triple_play'], true) ? 'plays'
+        : (in_array($campo, ['residencial','negocios'], true) ? 'oferta' : 'bundle');
+    $p = $pct === null ? null : max(0, min(100, (int)$pct));
+    $text = $p === null ? '—' : $p.'%';
+    return '<span class="rc-mini-pct rc-mini-pct--'.$dim.($p === null ? ' rc-mini-no-data' : '').'">'
+        .'<span class="rc-mini-pct-label">'.$text.'</span>'
+        .'<span class="rc-mini-pct-track" aria-hidden="true"><span class="rc-mini-pct-fill" style="width:'.($p ?? 0).'%"></span></span>'
+        .'</span>';
+}
+
 function pct_class($pct) {
     if ($pct === null || $pct === '') return 'flat';
     $n = (float)$pct;
@@ -2507,6 +2522,11 @@ $calendar_max_date = !empty($row_ultima_fecha['ultima_fecha'])
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
 
 <style>
+/*
+ * Ajuste UI v0.1.3: barras horizontales compactas debajo de cada porcentaje.
+ * El valor numérico permanece visible y es la misma cifra certificada.
+ * Las barras son decorativas y no cambian la base del porcentaje.
+ */
 /* Calendario continuo: los días adyacentes siguen siendo seleccionables. */
 body.page-ranking .calendar-day.adjacent-month { opacity:.48; }
 body.page-ranking .calendar-day.adjacent-month.selected-start,
@@ -2598,6 +2618,59 @@ body.page-ranking #rcRankingTable tbody > tr > td .badge {
     font-size: 10px;
     white-space: nowrap;
 }
+
+/* Los nombres siempre parten del margen izquierdo; corrige centrado externo. */
+body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(3),
+body.page-ranking #rcRankingTable tbody > tr > td:nth-child(3),
+body.page-ranking #rcRankingTable tbody > tr > td.entity {
+    text-align: left !important;
+    padding-left: 10px !important;
+    padding-right: 3px !important;
+}
+body.page-ranking table.commercial-compare-table:not(#rcRankingTable) thead tr:first-child > th:first-child,
+body.page-ranking table.commercial-compare-table:not(#rcRankingTable) tbody > tr > td.entity {
+    text-align: left !important;
+    padding-left: 10px !important;
+}
+/* Barras independientes POR CELDA (no trazos separadores de filas). */
+body.page-ranking .commercial-compare-table .rc-mini-cell { text-align: center !important; }
+body.page-ranking .commercial-compare-table .rc-mini-pct {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    line-height: 1.1;
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct-label {
+    display: block;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct-track {
+    display: block;
+    width: 100%;
+    max-width: 52px;
+    height: 4px;
+    border-radius: 6px;
+    background: rgba(133, 145, 174, .18);
+    overflow: hidden;
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct-fill {
+    display: block;
+    height: 100%;
+    max-width: 100%;
+    border-radius: inherit;
+    background: var(--rc-mini-accent, #8b5cf6);
+}
+body.page-ranking .commercial-compare-table .rc-mini-pct--plays  { --rc-mini-accent: #7c6ade; }
+body.page-ranking .commercial-compare-table .rc-mini-pct--oferta { --rc-mini-accent: #21a6b6; }
+body.page-ranking .commercial-compare-table .rc-mini-pct--bundle { --rc-mini-accent: #d077b5; }
+body.page-ranking .commercial-compare-table .rc-mini-pct.rc-mini-no-data .rc-mini-pct-track { visibility: hidden; }
+/* Totales: barra algo más visible, sin alterar el suave fondo existente. */
+body.page-ranking .commercial-compare-table tr.total-row .rc-mini-pct-fill { filter: saturate(1.1); }
 
 </style>
 
@@ -3019,8 +3092,8 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                     <?php foreach ($dimensionesRc as $dim): $f=$dim['campo'];
                         $pb=$comercial05_ok?$rcPct($cb[$f],$nb):null;
                         $pa=$comercial05_ok?$rcPct($ca[$f],$na):null; ?>
-                        <td class="center"><?= $pb===null?'—':fmt_num($pb).'%' ?></td>
-                        <td class="center"><?= $pa===null?'—':fmt_num($pa).'%' ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pb, $f) ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pa, $f) ?></td>
                     <?php endforeach; ?>
                 </tr>
                 <?php endforeach; ?>
@@ -3038,8 +3111,8 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                     <?php foreach ($dimensionesRc as $dim): $f=$dim['campo'];
                         $tb=$comercial05_ok?$rcPct($rcTotalBase[$f],$tot['ins_sem_base']):null;
                         $ta=$comercial05_ok?$rcPct($rcTotalActual[$f],$tot['ins_sem_actual']):null; ?>
-                        <td class="center" data-rc-total="pct_<?= h($f) ?>_base"><?= $tb===null?'—':fmt_num($tb).'%' ?></td>
-                        <td class="center" data-rc-total="pct_<?= h($f) ?>_actual"><?= $ta===null?'—':fmt_num($ta).'%' ?></td>
+                        <td class="center rc-mini-cell" data-rc-total="pct_<?= h($f) ?>_base"><?= rc_mini_pct($tb, $f) ?></td>
+                        <td class="center rc-mini-cell" data-rc-total="pct_<?= h($f) ?>_actual"><?= rc_mini_pct($ta, $f) ?></td>
                     <?php endforeach; ?>
                 </tr>
             </tbody>
@@ -3215,8 +3288,8 @@ $dimensiones05 = [
                     <td class="center"><span class="badge <?= pct_class($pctArpu05) ?>"><?= $fmtPctArpu05($pctArpu05) ?></span></td>
                     <?php foreach ($dimensiones05 as $dimension05):
                         $campo05=$dimension05['campo']; ?>
-                        <td class="center"><?= $mixPct05[$campo05.'_base'] === null ? '—' : fmt_num($mixPct05[$campo05.'_base']).'%' ?></td>
-                        <td class="center"><?= $mixPct05[$campo05.'_actual'] === null ? '—' : fmt_num($mixPct05[$campo05.'_actual']).'%' ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($mixPct05[$campo05.'_base'], $campo05) ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($mixPct05[$campo05.'_actual'], $campo05) ?></td>
                     <?php endforeach; ?>
                 </tr>
                 <?php endforeach; ?>
@@ -3240,8 +3313,8 @@ $dimensiones05 = [
                         $pBase05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_base'],$sum05['ins_base']) : null;
                         $pActual05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_actual'],$sum05['ins_actual']) : null;
                     ?>
-                        <td class="center"><?= $pBase05===null?'—':fmt_num($pBase05).'%' ?></td>
-                        <td class="center"><?= $pActual05===null?'—':fmt_num($pActual05).'%' ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pBase05, $campo05) ?></td>
+                        <td class="center rc-mini-cell"><?= rc_mini_pct($pActual05, $campo05) ?></td>
                     <?php endforeach; ?>
                 </tr>
             </tbody>
@@ -3315,6 +3388,20 @@ foreach ($ventas_hist as $vh) {
  function badgeClass(n){return n===null?'flat':n>=5?'up':n<=-10?'down-hard':n<0?'down':'flat';}
  function updateField(k,value){
    const el=table.querySelector('[data-rc-total="'+k+'"]');if(!el)return;
+   // La barra conserva exactamente el porcentaje recalculado al filtrar.
+   if(el.classList.contains('rc-mini-cell')){
+     const holder=el.querySelector('.rc-mini-pct');
+     const label=el.querySelector('.rc-mini-pct-label');
+     const bar=el.querySelector('.rc-mini-pct-fill');
+     if(holder&&label&&bar){
+       const parsed=value==='—'?null:Number(String(value).replace('%',''));
+       const pct=parsed===null||!Number.isFinite(parsed)?null:Math.min(100,Math.max(0,parsed));
+       label.textContent=value;
+       bar.style.width=(pct===null?0:pct)+'%';
+       holder.classList.toggle('rc-mini-no-data',pct===null);
+       return;
+     }
+   }
    el.textContent=value;
  }
  function setBadge(k,val,value){
