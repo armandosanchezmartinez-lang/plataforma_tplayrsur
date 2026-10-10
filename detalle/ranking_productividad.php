@@ -2402,138 +2402,11 @@ body.page-ranking .calendar-day.adjacent-month.selected-start,
 body.page-ranking .calendar-day.adjacent-month.selected-end,
 body.page-ranking .calendar-day.adjacent-month.in-range { opacity:1; }
 body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed; }
-/* -------------------------------------------------------------------------
- * FORMATO COMERCIAL: nivel vendedor solamente (10-OCT-2026).
- * Objetivo: reproducir la lectura por bandas del comparativo en Excel.
- * CSS PRESENTACIONAL: no cambia motor, cuentas, porcentajes ni JS de orden.
- * 22 columnas: 6 generales + ARPU(4) + PLAYS(4) + OFERTA(4) + BUNDLES(4).
- * ------------------------------------------------------------------------- */
-body.page-ranking .commercial-compare-table {
-    border-collapse: separate !important;
-    border-spacing: 0 !important;
-    table-layout: fixed;
-    min-width: 2390px;
-    width: 100%;
-    font-variant-numeric: tabular-nums;
-    --mc-borde: #d6deea;
-    --mc-separador: #53617b;
-}
-/* Anchos explícitos: evitar que el navegador comprima 22 métricas. */
-body.page-ranking .commercial-compare-table col.mc-col-vendedor { width: 268px; }
-body.page-ranking .commercial-compare-table col.mc-col-antiguedad { width: 104px; }
-body.page-ranking .commercial-compare-table col.mc-col-ins { width: 84px; }
-body.page-ranking .commercial-compare-table col.mc-col-dif { width: 83px; }
-body.page-ranking .commercial-compare-table col.mc-col-pct-ins { width: 93px; }
-body.page-ranking .commercial-compare-table col.mc-col-arpu { width: 110px; }
-body.page-ranking .commercial-compare-table col.mc-col-arpu-dif { width: 116px; }
-body.page-ranking .commercial-compare-table col.mc-col-arpu-pct { width: 105px; }
-body.page-ranking .commercial-compare-table col.mc-col-mix { width: 91px; }
-body.page-ranking .commercial-compare-table col.mc-col-bundle { width: 102px; }
-body.page-ranking .commercial-compare-table :is(th,td) {
-    box-sizing: border-box;
-    border-right: 1px solid var(--mc-borde) !important;
-    border-bottom: 1px solid var(--mc-borde) !important;
-    vertical-align: middle;
-}
-body.page-ranking .commercial-compare-table thead th {
-    font-size: 11px;
-    line-height: 1.35;
-    padding: 9px 7px !important;
-    text-align: center;
-    white-space: normal;
-    overflow-wrap: normal;
-    color: #25334f;
-}
-body.page-ranking .commercial-compare-table thead tr.mc-grupos th.mc-grupo {
-    height: 38px;
-    font-size: 11.5px;
-    font-weight: 800;
-    letter-spacing: .035em;
-    background: #e7ebf6;
-    border-bottom: 1px solid #aebbd0 !important;
-}
-body.page-ranking .commercial-compare-table thead tr.mc-metricas th {
-    height: 39px;
-    background: #f0f3fa;
-    font-weight: 750;
-}
-body.page-ranking .commercial-compare-table thead tr.mc-periodos th {
-    height: 33px;
-    font-size: 10.5px;
-    font-weight: 750;
-    padding: 6px 4px !important;
-    background: #f9faff;
-}
-body.page-ranking .commercial-compare-table thead tr.mc-periodos th.mc-periodo-actual {
-    background: #edf1fd;
-}
-body.page-ranking .commercial-compare-table thead th.mc-fija {
-    background: #edf0f7;
-    font-weight: 760;
-}
-body.page-ranking .commercial-compare-table thead th.mc-fija.mc-vendedor-titulo {
-    text-align: left;
-    padding-left: 12px !important;
-}
-body.page-ranking .commercial-compare-table thead th .sort-icon { opacity: .65; }
-/* Separador fuerte antes de cada bloque, como el trazo del archivo Excel. */
-body.page-ranking .commercial-compare-table thead tr.mc-grupos th.mc-grupo,
-body.page-ranking .commercial-compare-table thead tr.mc-metricas th.mc-grupo-inicio,
-body.page-ranking .commercial-compare-table thead tr.mc-periodos th.mc-grupo-inicio,
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(7),
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(11),
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(15),
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(19) {
-    border-left: 2px solid var(--mc-separador) !important;
-}
-/* Subgrupos 2P/3P, RES/NEG y NO BUNDLE/BUNDLE. */
-body.page-ranking .commercial-compare-table thead tr.mc-metricas th.mc-subgrupo-inicio,
-body.page-ranking .commercial-compare-table thead tr.mc-periodos th.mc-subgrupo-inicio,
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(13),
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(17),
-body.page-ranking .commercial-compare-table tbody tr > td:nth-child(21) {
-    border-left: 1px solid #a4b1c8 !important;
-}
-body.page-ranking .commercial-compare-table tbody tr > td {
-    font-size: 11.5px;
-    line-height: 1.4;
-    padding: 12px 8px !important;
-    white-space: nowrap;
-    background: #fff;
-}
-body.page-ranking .commercial-compare-table tbody tr.matrix-row:nth-child(even) > td { background: #f8f9fd; }
-body.page-ranking .commercial-compare-table tbody tr.matrix-row:hover > td { background: #eef2ff; }
-body.page-ranking .commercial-compare-table tbody td.entity {
-    white-space: normal;
-    overflow-wrap: break-word;
-    line-height: 1.35;
-    padding-left: 11px !important;
-    font-weight: 700;
-}
-body.page-ranking .commercial-compare-table tbody tr.total-row > td {
-    background: #efebfc !important;
-    font-weight: 800;
-    border-top: 2px solid #4a5470 !important;
-    border-bottom: 2px solid #4a5470 !important;
-}
-body.page-ranking .commercial-compare-table tbody td .badge { white-space: nowrap; }
-/* El nombre permanece visible cuando la tabla ancha se desplaza a la derecha. */
-body.page-ranking .commercial-compare-table thead th.mc-vendedor-titulo,
-body.page-ranking .commercial-compare-table tbody td:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-    box-shadow: 2px 0 0 #c4cddd;
-}
-body.page-ranking .commercial-compare-table thead th.mc-vendedor-titulo { z-index: 4; }
-/* Scroll horizontal propio: no comprime las columnas de la tabla. */
-body.page-ranking .mc-tabla-scroll {
-    overflow-x: auto;
-    overflow-y: visible;
-    max-width: 100%;
-    scrollbar-width: thin;
-}
-
+/* Solo tabla de vendedores: separación legible de 4 comparativos. */
+body.page-ranking .commercial-compare-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
+body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
+body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
+body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
 </style>
 
 </head>
@@ -2997,53 +2870,29 @@ $dimensiones05 = [
         <strong>Resumen comparativo por vendedor del coach</strong>
         <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.2</span>
     </div>
-    <div class="table-wrap mc-tabla-scroll">
-        <table class="sales-table commercial-compare-table" aria-label="Ranking comercial por vendedor: comparativo entre períodos">
-            <!-- Anchuras por columna independientes del contenido para no comprimir cifras. -->
-            <colgroup>
-                <col class="mc-col-vendedor">
-                <col class="mc-col-antiguedad">
-                <col class="mc-col-ins"><col class="mc-col-ins">
-                <col class="mc-col-dif"><col class="mc-col-pct-ins">
-                <col class="mc-col-arpu"><col class="mc-col-arpu">
-                <col class="mc-col-arpu-dif"><col class="mc-col-arpu-pct">
-                <col class="mc-col-mix"><col class="mc-col-mix"><col class="mc-col-mix"><col class="mc-col-mix">
-                <col class="mc-col-mix"><col class="mc-col-mix"><col class="mc-col-mix"><col class="mc-col-mix">
-                <col class="mc-col-bundle"><col class="mc-col-bundle"><col class="mc-col-bundle"><col class="mc-col-bundle">
-            </colgroup>
+    <div class="table-wrap">
+        <table class="sales-table commercial-compare-table" style="min-width:2390px">
             <thead>
-                <!-- Fila 1: grupos, con el mismo orden lógico del Excel de referencia. -->
-                <tr class="mc-grupos">
-                    <th rowspan="3" class="mc-fija mc-vendedor-titulo" scope="col">Nombre vendedor</th>
-                    <th rowspan="3" class="center mc-fija matrix-sortable" data-sort="antiguedad" scope="col">Antigüedad <span class="sort-icon">↕</span></th>
-                    <th rowspan="3" class="num mc-fija matrix-sortable" data-sort="ins_base" scope="col">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="3" class="num mc-fija matrix-sortable" data-sort="ins_actual" scope="col">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th rowspan="3" class="num mc-fija matrix-sortable" data-sort="dif" scope="col">Dif. <span class="sort-icon">↕</span></th>
-                    <th rowspan="3" class="center mc-fija matrix-sortable" data-sort="pct_dif" scope="col">% Dif. <span class="sort-icon">↕</span></th>
-                    <th colspan="4" class="group center mc-grupo" scope="colgroup">ARPU</th>
-                    <th colspan="4" class="group center mc-grupo" scope="colgroup">PLAYS</th>
-                    <th colspan="4" class="group center mc-grupo" scope="colgroup">OFERTA (RESIDENCIAL / NEGOCIOS)</th>
-                    <th colspan="4" class="group center mc-grupo" scope="colgroup">BUNDLES</th>
+                <tr>
+                    <th rowspan="2">Nombre vendedor</th>
+                    <th rowspan="2" class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num matrix-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
+                    <th colspan="4" class="group center">ARPU</th>
+                    <th colspan="4" class="group center">PLAYS</th>
+                    <th colspan="4" class="group center">OFERTA (RESIDENCIAL / NEGOCIOS)</th>
+                    <th colspan="4" class="group center">BUNDLES</th>
                 </tr>
-                <!-- Fila 2: métrica; fila 3: los períodos de comparación. -->
-                <tr class="mc-metricas">
-                    <th colspan="2" class="center mc-grupo-inicio" scope="colgroup">$ARPU</th>
-                    <th rowspan="2" class="num matrix-sortable" data-sort="arpu_dif" scope="col">DIF $ <span class="sort-icon">↕</span></th>
-                    <th rowspan="2" class="center matrix-sortable" data-sort="arpu_pct_dif" scope="col">% DIF <span class="sort-icon">↕</span></th>
-                    <th colspan="2" class="center mc-grupo-inicio" scope="colgroup">% 2P</th>
-                    <th colspan="2" class="center mc-subgrupo-inicio" scope="colgroup">% 3P</th>
-                    <th colspan="2" class="center mc-grupo-inicio" scope="colgroup">% RES.</th>
-                    <th colspan="2" class="center mc-subgrupo-inicio" scope="colgroup">% NEG.</th>
-                    <th colspan="2" class="center mc-grupo-inicio" scope="colgroup">% NO BUNDLE</th>
-                    <th colspan="2" class="center mc-subgrupo-inicio" scope="colgroup">% BUNDLE</th>
-                </tr>
-                <tr class="mc-periodos">
-                    <th class="center mc-grupo-inicio matrix-sortable" data-sort="arpu_base" scope="col"><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th class="center mc-periodo-actual matrix-sortable" data-sort="arpu_actual" scope="col"><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <?php foreach ($dimensiones05 as $indice05 => $dimension05):
-                        $claseInicio05 = $indice05 % 2 === 0 ? 'mc-grupo-inicio' : 'mc-subgrupo-inicio'; ?>
-                        <th class="center <?= h($claseInicio05) ?> matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_base" scope="col"><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                        <th class="center mc-periodo-actual matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_actual" scope="col"><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                <tr>
+                    <th class="num matrix-sortable" data-sort="arpu_base">$ARPU<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="arpu_actual">$ARPU<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="arpu_dif">DIF $ <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="arpu_pct_dif">% DIF <span class="sort-icon">↕</span></th>
+                    <?php foreach ($dimensiones05 as $dimension05): ?>
+                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_base"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_actual"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <?php endforeach; ?>
                 </tr>
             </thead>
