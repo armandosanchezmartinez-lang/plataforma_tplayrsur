@@ -1,6 +1,6 @@
 <?php
 /**
- * TALIA / RANKING COMERCIAL v0.1.1 STAGING - AJUSTE DE COLUMNAS - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
+ * TALIA / RANKING COMERCIAL v0.1.2 - AJUSTE VISUAL RESPONSIVO - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
  * ====================================================
  * MODULO INDEPENDIENTE (10-OCT-2026):
  * - Base fiel de ranking_productividad.php aportado para esta iteracion.
@@ -2526,42 +2526,77 @@ body.page-ranking .rc-summary-table td.entity { min-width:210px; white-space:nor
 body.page-ranking .rc-summary-table tbody tr.rc-row { cursor:pointer; }
 body.page-ranking .rc-summary-table tbody tr.rc-row:hover { background:#f1efff; }
 /*
- * AJUSTE VISUAL 10-OCT-2026 - columnas de Líder y Coach.
- * La hoja corporativa y el zoom del navegador podían expandir la columna #
- * y dejar el nombre con apenas unos caracteres por renglón.
- * Se fija una distribución estable ÚNICAMENTE en el resumen comercial:
- * # = 56px; Distrito = 135px; Nombre = 368px.
- * No aplica a Vendedor ni altera SQL, Motor HC, Motor Comercial o métricas.
+ * AJUSTE EXCLUSIVAMENTE VISUAL 10-OCT-2026 | VISTAS LÍDER / COACH.
+ * Referencia de las tres primeras columnas: Ranking de Productividad.
+ * La tabla se adapta al ancho disponible: sin width/min-width de 2450px.
+ * Los 23 campos conservan su orden y sus valores; no se toca el Vendedor,
+ * la atribución de Motor HC, Motor Comercial ni las rutinas de cálculo.
  */
 body.page-ranking #rcRankingTable {
-    width: 2450px !important;
-    min-width: 2450px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
     table-layout: fixed !important;
+    border-collapse: separate;
+    border-spacing: 0;
 }
+body.page-ranking #rcRankingTable thead th {
+    padding: 9px 2px !important;
+    font-size: 10px !important;
+    line-height: 1.28 !important;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+body.page-ranking #rcRankingTable thead th.group {
+    font-size: 10.5px !important;
+    letter-spacing: 0;
+}
+body.page-ranking #rcRankingTable tbody > tr > td {
+    padding: 13px 2px !important;
+    font-size: 10.5px;
+    line-height: 1.32;
+    white-space: nowrap;
+    text-align: center;
+    vertical-align: middle;
+}
+/* # ~40px; distrito ~95px; nombre ~235px a 1390px de ancho. */
 body.page-ranking #rcRankingTable thead tr:first-child > th:first-child,
 body.page-ranking #rcRankingTable tbody > tr > td:first-child {
-    width: 56px !important;
-    min-width: 56px !important;
-    max-width: 56px !important;
+    min-width: 0 !important;
+    max-width: none !important;
     text-align: center;
 }
 body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(2),
 body.page-ranking #rcRankingTable tbody > tr > td:nth-child(2) {
-    width: 135px !important;
-    min-width: 135px !important;
-    max-width: 135px !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: normal;
 }
 body.page-ranking #rcRankingTable thead tr:first-child > th:nth-child(3),
 body.page-ranking #rcRankingTable tbody > tr > td:nth-child(3) {
-    width: 368px !important;
-    min-width: 368px !important;
-    max-width: 368px !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: left;
     white-space: normal !important;
     overflow-wrap: normal;
     word-break: normal;
 }
 body.page-ranking #rcRankingTable tbody > tr > td.entity {
-    line-height: 1.4;
+    min-width: 0 !important;
+    font-size: 11px;
+    font-weight: 700;
+}
+body.page-ranking #rcRankingTable tbody > tr > td.num {
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+body.page-ranking #rcRankingTable tbody > tr > td .badge {
+    padding: 5px 6px;
+    font-size: 10px;
+    white-space: nowrap;
 }
 
 </style>
@@ -2895,31 +2930,31 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
         <span>Comparativo comercial <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · <?= $view === 'lideres' ? 'Selecciona un líder para ver coaches' : 'Selecciona un coach para ver vendedores' ?></span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table commercial-compare-table rc-summary-table" id="rcRankingTable" style="min-width:2450px; width:2450px; table-layout:fixed">
+        <table class="sales-table commercial-compare-table rc-summary-table" id="rcRankingTable" style="width:100%; min-width:0; table-layout:fixed">
         <colgroup>
-            <col style="width:56px">
-            <col style="width:135px">
-            <col style="width:368px">
-            <col style="width:87px">
-            <col style="width:87px">
-            <col style="width:74px">
-            <col style="width:83px">
-            <col style="width:110px">
-            <col style="width:110px">
-            <col style="width:112px">
-            <col style="width:100px">
-            <col style="width:86px">
-            <col style="width:86px">
-            <col style="width:86px">
-            <col style="width:86px">
-            <col style="width:92px">
-            <col style="width:92px">
-            <col style="width:92px">
-            <col style="width:92px">
-            <col style="width:104px">
-            <col style="width:104px">
-            <col style="width:104px">
-            <col style="width:104px">
+            <col style="width:2.87977%">
+            <col style="width:6.83945%">
+            <col style="width:16.91865%">
+            <col style="width:4.24766%">
+            <col style="width:4.24766%">
+            <col style="width:3.16775%">
+            <col style="width:4.10367%">
+            <col style="width:5.18359%">
+            <col style="width:5.18359%">
+            <col style="width:5.47156%">
+            <col style="width:4.60763%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
+            <col style="width:3.09575%">
         </colgroup>
             <thead>
                 <tr>
