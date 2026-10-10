@@ -2672,13 +2672,6 @@ body.page-ranking .commercial-compare-table .rc-mini-pct.rc-mini-no-data .rc-min
 /* Totales: barra algo más visible, sin alterar el suave fondo existente. */
 body.page-ranking .commercial-compare-table tr.total-row .rc-mini-pct-fill { filter: saturate(1.1); }
 
-/* UX: mostrar la manita solo en encabezados con ordenacion activa.
- * Misma indicacion visual que Ranking de Productividad; sin cambiar el JS. */
-body.page-ranking #rcRankingTable thead th.rc-sortable,
-body.page-ranking .commercial-compare-table thead th.matrix-sortable {
-    cursor: pointer !important;
-}
-
 </style>
 
 </head>
