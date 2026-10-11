@@ -9,7 +9,7 @@
  * UBICACION: /plataforma/detalle/ranking_productividad.php
  * DEPENDENCIAS: /plataforma/includes/motor_hc.php (SIN CAMBIOS)
  *               /plataforma/includes/motor_comercial.php (NUEVO)
- * AUTORIZACION: sesion TalIA; roles ADMIN o DIRECTOR_REGIONAL.
+ * AUTORIZACION: sesion TalIA; todos los seis perfiles. Ranking REGIONAL, no jerarquico.
  * PARAMETROS HTTP: periodo, anio, semana, mes, anio_mes, rango_mode,
  * fecha_inicio, fecha_fin, dias_semana, view, distrito, lider, coach,
  * coach_pos, vendedor y folio. Ver validacion y selectores a continuacion.
@@ -103,8 +103,23 @@ if (empty($_SESSION['usuario'])) {
 
 include '../conexion.php';
 
-$rol = $_SESSION['rol'] ?? 'vendedor';
-if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('Ranking reservado a ADMIN / Dirección Regional.'); }
+/*
+ * TalIA - Rankings competitivos de la Region SUR (11-OCT-2026).
+ * Los seis perfiles autenticados consultan el MISMO universo regional.
+ * El rol se utiliza solo para AUTENTICACION/AUTORIZACION DE ENTRADA,
+ * nunca como filtro de distrito, HC, cuentas, lider, coach o vendedor.
+ * Motor HC y Motor Comercial conservan sus reglas de atribucion.
+ * El dashboard index.php sigue siendo jerarquico e independiente.
+ */
+$rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$roles_ranking = [
+    'admin', 'director_regional', 'director_distrital',
+    'lider', 'coach', 'vendedor'
+];
+if (!in_array($rol, $roles_ranking, true)) {
+    http_response_code(403);
+    exit('Perfil de TalIA no autorizado para Ranking.');
+}
 
 $roles_labels = [
     'admin'              => 'Administrador',
