@@ -392,118 +392,196 @@ if ($scope_pos !== '') {
 
 $rol_consulta = $scope_activo ? 'scoped' : $rol;
 
-// Fecha de corte única para todo el dashboard.
-// Default: día vencido actual. Ahora permite consultar meses/años anteriores
-// usando parámetros GET mes/anio, por ejemplo: ?mes=5&anio=2026.
-$fecha_corte_real_timestamp = strtotime('-1 day');
-
-$mes_actual = isset($_GET['mes']) ? (int)$_GET['mes'] : (int)date('n', $fecha_corte_real_timestamp);
-$anio_query = isset($_GET['anio']) ? (int)$_GET['anio'] : (int)date('Y', $fecha_corte_real_timestamp);
-
-if ($mes_actual < 1 || $mes_actual > 12) {
-    $mes_actual = (int)date('n', $fecha_corte_real_timestamp);
-}
-if ($anio_query < 2020 || $anio_query > (int)date('Y', $fecha_corte_real_timestamp)) {
-    $anio_query = (int)date('Y', $fecha_corte_real_timestamp);
-}
-
-// No permitir meses futuros respecto al corte real.
-$yyyymm_sel = ((int)$anio_query * 100) + (int)$mes_actual;
-$yyyymm_now = ((int)date('Y', $fecha_corte_real_timestamp) * 100) + (int)date('n', $fecha_corte_real_timestamp);
-if ($yyyymm_sel > $yyyymm_now) {
-    $mes_actual = (int)date('n', $fecha_corte_real_timestamp);
-    $anio_query = (int)date('Y', $fecha_corte_real_timestamp);
-}
-
-// $fecha_corte_timestamp se ajusta más abajo al fin del rango seleccionado,
-// para que ARPU, TOP y productividad 3M respeten el mes analizado.
-$fecha_corte_timestamp = $fecha_corte_real_timestamp;
-$semana_operativa_dashboard = (int)date('W', $fecha_corte_timestamp);
-$anio_operativo_dashboard   = (int)date('Y', $fecha_corte_timestamp);
-
+// ── NAVEGACIÓN CANÓNICA — PARIDAD CON RANKING PRODUCTIVIDAD ──────────────
+// Semana ISO (lunes-domingo), días comparables y calendario de 42 celdas.
+// Los filtros son siempre fechas reales; una selección cruzada no se trunca
+// a los días de un único mes. El rol/jerarquía continúa independiente.
+$periodo = ($_GET['periodo'] ?? 'mensual') === 'semanal' ? 'semanal' : 'mensual';
 $meses_es = [
     1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',
     7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'
 ];
-
-// Selector de rango operativo del dashboard.
-// Default: MTD vencido, comparando todos los meses contra el mismo corte de días.
-// Mes completo: muestra la evolución como corte mensual completo.
-$ultimo_dia_mes_actual = (int)date('t', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-$es_mes_actual_real = ((int)$anio_query === (int)date('Y', $fecha_corte_real_timestamp)
-    && (int)$mes_actual === (int)date('n', $fecha_corte_real_timestamp));
-
-// En el mes actual sólo se permite hasta el día vencido.
-// En meses anteriores se permite navegar el mes completo.
-$dia_max_corte = $es_mes_actual_real
-    ? min((int)date('j', $fecha_corte_real_timestamp), $ultimo_dia_mes_actual)
-    : $ultimo_dia_mes_actual;
-
-$primer_dia_semana_mes = (int)date('N', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-
+$tx_hoy = new DateTimeImmutable('today');
+$tx_ayer = $tx_hoy->modify('-1 day');
+$res_tx_ultima = mysqli_query($conexion, 'SELECT MAX(fecha) AS ultima_fecha FROM instalaciones WHERE fecha <= CURDATE()');
+$row_tx_ultima = $res_tx_ultima ? mysqli_fetch_assoc($res_tx_ultima) : null;
+$tx_ultima_fecha_operativa = (string)($row_tx_ultima['ultima_fecha'] ?? '');
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tx_ultima_fecha_operativa)) {
+    $tx_ultima_fecha_operativa = $tx_ayer->format('Y-m-d');
+}
+$tx_fecha_limite = new DateTimeImmutable($tx_ultima_fecha_operativa);
+$fecha_corte_real_timestamp = strtotime($tx_ultima_fecha_operativa);
+$tx_fin_datos_mes = $tx_fecha_limite->format('Y-m');
+$tx_nav_semana_max = (int)$tx_fecha_limite->format('W');
+$tx_nav_anio_semana_max = (int)$tx_fecha_limite->format('o');
+$tx_nav_anio_semana = isset($_GET['anio_semana']) ? (int)$_GET['anio_semana']
+    : (($periodo === 'semanal' && isset($_GET['anio'])) ? (int)$_GET['anio'] : $tx_nav_anio_semana_max);
+$tx_nav_semana = isset($_GET['semana']) ? (int)$_GET['semana'] : $tx_nav_semana_max;
+$tx_nav_anio_semana = max(2020,min(2100,$tx_nav_anio_semana));
+$tx_nav_semana = max(1,min(53,$tx_nav_semana));
+$tx_semana_lunes = (new DateTimeImmutable('today'))->setISODate($tx_nav_anio_semana,$tx_nav_semana,1);
+if ((int)$tx_semana_lunes->format('W') !== $tx_nav_semana || (int)$tx_semana_lunes->format('o') !== $tx_nav_anio_semana) {
+    $tx_semana_lunes = $tx_fecha_limite->modify('monday this week');
+    $tx_nav_anio_semana = (int)$tx_semana_lunes->format('o');
+    $tx_nav_semana = (int)$tx_semana_lunes->format('W');
+}
+$tx_semana_max_lunes = $tx_fecha_limite->modify('monday this week');
+if ($tx_semana_lunes > $tx_semana_max_lunes) {
+    $tx_semana_lunes = $tx_semana_max_lunes;
+    $tx_nav_anio_semana = (int)$tx_semana_lunes->format('o');
+    $tx_nav_semana = (int)$tx_semana_lunes->format('W');
+}
+$tx_semana_domingo = $tx_semana_lunes->modify('+6 days');
+$tx_prev_lunes = $tx_semana_lunes->modify('-7 days');
+$tx_next_lunes = $tx_semana_lunes->modify('+7 days');
+$tx_semana_has_next = $tx_next_lunes <= $tx_semana_max_lunes;
+$tx_dias_semana_labels = [1=>'LUN',2=>'MAR',3=>'MIÉ',4=>'JUE',5=>'VIE',6=>'SÁB',7=>'DOM'];
+$tx_dias_semana_disponibles = range(1,7);
+if ($tx_semana_lunes == $tx_semana_max_lunes) {
+    $tx_dias_semana_disponibles = range(1, (int)$tx_fecha_limite->format('N'));
+}
+$tx_dias_semana_seleccionados = $tx_dias_semana_disponibles;
+if ($periodo === 'semanal' && isset($_GET['dias_semana'])) {
+    $tx_dias_solicitados = array_unique(array_map('intval',explode(',',(string)$_GET['dias_semana'])));
+    $tx_dias_validos = array_values(array_intersect($tx_dias_semana_disponibles,$tx_dias_solicitados));
+    if ($tx_dias_validos) $tx_dias_semana_seleccionados = $tx_dias_validos;
+}
+$mes_actual = isset($_GET['mes']) ? max(1,min(12,(int)$_GET['mes'])) : (int)$tx_fecha_limite->format('n');
+$anio_query = isset($_GET['anio_mes']) ? (int)$_GET['anio_mes'] : (
+    isset($_GET['anio']) && $periodo !== 'semanal' ? (int)$_GET['anio'] : (int)$tx_fecha_limite->format('Y'));
+$anio_query = max(2020,min((int)$tx_fecha_limite->format('Y'),$anio_query));
+if (sprintf('%04d-%02d',$anio_query,$mes_actual) > $tx_fin_datos_mes) {
+    $anio_query = (int)$tx_fecha_limite->format('Y');
+    $mes_actual = (int)$tx_fecha_limite->format('n');
+}
 $rango_mode = $_GET['rango_mode'] ?? 'mtd';
-if (!in_array($rango_mode, ['mtd','completo','custom'], true)) {
-    $rango_mode = 'mtd';
-}
+if (!in_array($rango_mode,['mtd','completo','custom'],true)) $rango_mode = 'mtd';
+$ultimo_dia_mes_actual = (int)date('t',strtotime(sprintf('%04d-%02d-01',$anio_query,$mes_actual)));
+$es_mes_actual_real = sprintf('%04d-%02d',$anio_query,$mes_actual) === $tx_fin_datos_mes;
+$dia_max_corte = $es_mes_actual_real ? (int)$tx_fecha_limite->format('j') : $ultimo_dia_mes_actual;
+// Ranking Productividad: MTD histórico conserva el mismo corte de día del último mes operativo.
+$tx_dia_default_mtd = min($ultimo_dia_mes_actual, (int)$tx_fecha_limite->format('j'));
+$primer_dia_semana_mes = (int)date('N',strtotime(sprintf('%04d-%02d-01',$anio_query,$mes_actual)));
+$tx_dashboard_dias_iso = [];
 
-if ($rango_mode === 'completo') {
-    $dia_inicio_dashboard = 1;
-    $dia_fin_dashboard = $ultimo_dia_mes_actual;
+if ($periodo === 'semanal') {
+    $rango_mode = 'semanal';
+    $tx_fechas_seleccionadas = [];
+    foreach ($tx_dias_semana_seleccionados as $diaISO) {
+        $f = $tx_semana_lunes->modify('+'.($diaISO-1).' days')->format('Y-m-d');
+        if ($f <= $tx_ultima_fecha_operativa) $tx_fechas_seleccionadas[] = $f;
+    }
+    sort($tx_fechas_seleccionadas);
+    $fecha_inicio_dashboard = $tx_fechas_seleccionadas[0];
+    $fecha_fin_dashboard = end($tx_fechas_seleccionadas);
+    $tx_dashboard_dias_iso = $tx_dias_semana_seleccionados;
+    $dias_rango_dashboard = count($tx_fechas_seleccionadas);
+    // Fecha operativa semanal puede cruzar meses. Para las tendencias se usa
+    // el mes del último evento del corte, no se fuerza una fecha del mes anterior.
+    $mes_actual = (int)date('n',strtotime($fecha_fin_dashboard));
+    $anio_query = (int)date('Y',strtotime($fecha_fin_dashboard));
 } else {
-    if ($rango_mode !== 'custom') {
-        $_GET['dia_inicio'] = 1;
-        $_GET['dia_fin'] = $dia_max_corte;
+    if ($rango_mode === 'completo') {
+        $fecha_inicio_dashboard = sprintf('%04d-%02d-01',$anio_query,$mes_actual);
+        $fecha_fin_dashboard = sprintf('%04d-%02d-%02d',$anio_query,$mes_actual,$dia_max_corte);
+    } elseif ($rango_mode === 'custom' && !empty($_GET['fecha_inicio']) && !empty($_GET['fecha_fin'])) {
+        $tx_inicio_elegido = DateTimeImmutable::createFromFormat('!Y-m-d',(string)$_GET['fecha_inicio']);
+        $tx_fin_elegido = DateTimeImmutable::createFromFormat('!Y-m-d',(string)$_GET['fecha_fin']);
+        if ($tx_inicio_elegido && $tx_fin_elegido && $tx_inicio_elegido->format('Y-m-d') === $_GET['fecha_inicio']
+            && $tx_fin_elegido->format('Y-m-d') === $_GET['fecha_fin']) {
+            if ($tx_inicio_elegido > $tx_fin_elegido) [$tx_inicio_elegido,$tx_fin_elegido] = [$tx_fin_elegido,$tx_inicio_elegido];
+            if ($tx_fin_elegido > $tx_fecha_limite) $tx_fin_elegido = $tx_fecha_limite;
+            if ($tx_inicio_elegido > $tx_fin_elegido) $tx_inicio_elegido = $tx_fin_elegido;
+            $fecha_inicio_dashboard = $tx_inicio_elegido->format('Y-m-d');
+            $fecha_fin_dashboard = $tx_fin_elegido->format('Y-m-d');
+        } else $rango_mode = 'mtd';
     }
-
-    $dia_inicio_dashboard = isset($_GET['dia_inicio']) ? (int)$_GET['dia_inicio'] : 1;
-    $dia_fin_dashboard = isset($_GET['dia_fin']) ? (int)$_GET['dia_fin'] : $dia_max_corte;
-
-    $dia_inicio_dashboard = max(1, min($dia_max_corte, $dia_inicio_dashboard));
-    $dia_fin_dashboard = max(1, min($dia_max_corte, $dia_fin_dashboard));
-
-    if ($dia_inicio_dashboard > $dia_fin_dashboard) {
-        $tmp_dia = $dia_inicio_dashboard;
-        $dia_inicio_dashboard = $dia_fin_dashboard;
-        $dia_fin_dashboard = $tmp_dia;
+    if (!isset($fecha_inicio_dashboard)) {
+        $dia_inicio_dashboard = ($rango_mode === 'custom') ? max(1,min($dia_max_corte,(int)($_GET['dia_inicio']??1))) : 1;
+        $dia_fin_dashboard = ($rango_mode === 'custom') ? max(1,min($dia_max_corte,(int)($_GET['dia_fin']??$dia_max_corte))) : $tx_dia_default_mtd;
+        if ($dia_inicio_dashboard > $dia_fin_dashboard) [$dia_inicio_dashboard,$dia_fin_dashboard]=[$dia_fin_dashboard,$dia_inicio_dashboard];
+        $fecha_inicio_dashboard = sprintf('%04d-%02d-%02d',$anio_query,$mes_actual,$dia_inicio_dashboard);
+        $fecha_fin_dashboard = sprintf('%04d-%02d-%02d',$anio_query,$mes_actual,$dia_fin_dashboard);
     }
+    $dias_rango_dashboard = (int)(new DateTimeImmutable($fecha_inicio_dashboard))->diff(new DateTimeImmutable($fecha_fin_dashboard))->days + 1;
 }
-
-$dias_rango_dashboard = max(1, $dia_fin_dashboard - $dia_inicio_dashboard + 1);
-
-// Fechas absolutas del rango seleccionado.
-// Se usan para prorratear metas semanales de Ejecución Operativa
-// cuando el dashboard analiza periodos que cruzan más de una semana.
-$fecha_inicio_dashboard = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_inicio_dashboard);
-$fecha_fin_dashboard    = sprintf('%04d-%02d-%02d', $anio_query, $mes_actual, $dia_fin_dashboard);
-
-// Para consultas históricas, el corte operativo del dashboard debe ser el fin
-// del rango seleccionado, no necesariamente el día vencido actual.
+$tx_dashboard_cruza_mes = substr($fecha_inicio_dashboard,0,7) !== substr($fecha_fin_dashboard,0,7);
+$dia_inicio_dashboard = (int)date('j',strtotime($fecha_inicio_dashboard));
+$dia_fin_dashboard = (int)date('j',strtotime($fecha_fin_dashboard));
 $fecha_corte_timestamp = strtotime($fecha_fin_dashboard);
-$semana_operativa_dashboard = (int)date('W', $fecha_corte_timestamp);
-$anio_operativo_dashboard   = (int)date('Y', $fecha_corte_timestamp);
-
-// Navegación de mes/año dentro del selector de rango.
-$mes_prev_ts = strtotime('-1 month', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-$mes_next_ts = strtotime('+1 month', strtotime(sprintf('%04d-%02d-01', $anio_query, $mes_actual)));
-$mes_prev = (int)date('n', $mes_prev_ts);
-$anio_prev = (int)date('Y', $mes_prev_ts);
-$mes_next = (int)date('n', $mes_next_ts);
-$anio_next = (int)date('Y', $mes_next_ts);
-$puede_mes_next = (($anio_next * 100) + $mes_next) <= $yyyymm_now;
-
-$dashboard_fecha_label = ($rango_mode === 'completo')
-    ? 'Mes completo · ' . ($meses_es[$mes_actual] ?? '') . ' ' . $anio_query
-    : (
-        $dia_inicio_dashboard === $dia_fin_dashboard
-            ? sprintf('%02d de %s %04d', $dia_fin_dashboard, strtolower($meses_es[$mes_actual] ?? ''), $anio_query)
-            : sprintf('%02d-%02d de %s %04d', $dia_inicio_dashboard, $dia_fin_dashboard, strtolower($meses_es[$mes_actual] ?? ''), $anio_query)
-    );
-
-$cond_dia_fecha = " AND DAY(fecha) BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard";
-$cond_dia_fecha_cierre = " AND DAY(fecha_cierre) BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard";
-$cond_dia_evolucion_fecha = ($rango_mode === 'completo') ? '' : $cond_dia_fecha;
-$cond_dia_evolucion_fecha_cierre = ($rango_mode === 'completo') ? '' : $cond_dia_fecha_cierre;
-
+$semana_operativa_dashboard = (int)date('W',$fecha_corte_timestamp);
+$anio_operativo_dashboard = (int)date('o',$fecha_corte_timestamp);
+$ayer_timestamp = $fecha_corte_timestamp;
+$dia_ayer = $dia_fin_dashboard;
+$dias_transcurridos = $dias_rango_dashboard;
+$tx_esc_ini = mysqli_real_escape_string($conexion,$fecha_inicio_dashboard);
+$tx_esc_fin = mysqli_real_escape_string($conexion,$fecha_fin_dashboard);
+$tx_dashboard_dow_sql = $periodo === 'semanal'
+    ? ' AND DAYOFWEEK(%s) IN ('.implode(',',array_map(static fn($d) => $d === 7 ? 1 : $d+1,$tx_dashboard_dias_iso)).')' : '';
+function tx_dashboard_where_fecha(string $campo): string {
+    global $tx_esc_ini,$tx_esc_fin,$tx_dashboard_dow_sql;
+    if (!in_array($campo,['fecha','fecha_cierre','i.fecha','v.fecha_cierre'],true)) throw new InvalidArgumentException('Columna de fecha no autorizada');
+    $f = str_replace('%s',$campo,$tx_dashboard_dow_sql);
+    return "$campo >= '$tx_esc_ini' AND $campo <= '$tx_esc_fin'".$f;
+}
+$tx_dashboard_where_inst = tx_dashboard_where_fecha('fecha');
+$tx_dashboard_where_ventas = tx_dashboard_where_fecha('fecha_cierre');
+$tx_dashboard_filtro_inst = ' AND '.$tx_dashboard_where_inst;
+$tx_dashboard_filtro_ventas = ' AND '.$tx_dashboard_where_ventas;
+// Adaptación de funciones históricas que reciben mes/año a períodos cruzados.
+$cond_dia_fecha = $periodo === 'mensual' && substr($fecha_inicio_dashboard,0,7) === substr($fecha_fin_dashboard,0,7)
+    ? ' AND DAY(fecha) BETWEEN '.$dia_inicio_dashboard.' AND '.$dia_fin_dashboard : $tx_dashboard_filtro_inst;
+$cond_dia_fecha_cierre = $periodo === 'mensual' && substr($fecha_inicio_dashboard,0,7) === substr($fecha_fin_dashboard,0,7)
+    ? ' AND DAY(fecha_cierre) BETWEEN '.$dia_inicio_dashboard.' AND '.$dia_fin_dashboard : $tx_dashboard_filtro_ventas;
+// Evolución siempre representa series MENSUALES; en modo semanal son referencia
+// completa hasta el corte, no se confunden con los KPI de la semana elegida.
+$cond_dia_evolucion_fecha = ($periodo === 'semanal' || $rango_mode === 'completo' || $tx_dashboard_cruza_mes) ? '' : $cond_dia_fecha;
+$cond_dia_evolucion_fecha_cierre = ($periodo === 'semanal' || $rango_mode === 'completo' || $tx_dashboard_cruza_mes) ? '' : $cond_dia_fecha_cierre;
+$tx_month_init = new DateTimeImmutable(sprintf('%04d-%02d-01',$anio_query,$mes_actual));
+$mes_prev_ts = $tx_month_init->modify('-1 month')->getTimestamp();
+$mes_next_ts = $tx_month_init->modify('+1 month')->getTimestamp();
+$mes_prev = (int)date('n',$mes_prev_ts);$anio_prev=(int)date('Y',$mes_prev_ts);
+$mes_next = (int)date('n',$mes_next_ts);$anio_next=(int)date('Y',$mes_next_ts);
+$puede_mes_next = sprintf('%04d-%02d',$anio_next,$mes_next) <= $tx_fin_datos_mes;
+$tx_calendar_month_first = new DateTimeImmutable(sprintf('%04d-%02d-01',$anio_query,$mes_actual));
+$tx_calendar_grid_start = $tx_calendar_month_first->modify('-'.((int)$tx_calendar_month_first->format('N')-1).' days');
+$tx_calendar_max_date = $tx_ultima_fecha_operativa;
+if ($periodo === 'semanal') {
+    $dashboard_fecha_label = 'Semana '.$tx_nav_semana.' · '.$tx_nav_anio_semana.' · '.date('d/m',strtotime($fecha_inicio_dashboard)).'–'.date('d/m/Y',strtotime($fecha_fin_dashboard));
+} elseif (substr($fecha_inicio_dashboard,0,7) !== substr($fecha_fin_dashboard,0,7)) {
+    $dashboard_fecha_label = date('d/m/Y',strtotime($fecha_inicio_dashboard)).' – '.date('d/m/Y',strtotime($fecha_fin_dashboard));
+} else {
+    $dashboard_fecha_label = sprintf('%02d',$dia_inicio_dashboard).'-'.sprintf('%02d',$dia_fin_dashboard).' de '.strtolower($meses_es[$mes_actual]).' '.$anio_query;
+}
+function tx_dashboard_link(array $changes): string {
+    $p = array_merge($_GET,$changes);
+    foreach ($p as $key=>$value) if ($value === null || is_array($value)) unset($p[$key]);
+    return '?'.htmlspecialchars(http_build_query($p),ENT_QUOTES,'UTF-8');
+}
+function tx_dashboard_meta_fecha_where(string $alias = ''): string {
+    global $periodo,$fecha_inicio_dashboard,$fecha_fin_dashboard,$tx_dashboard_dias_iso;
+    $prefix = $alias !== '' ? $alias.'.' : '';
+    $d = new DateTimeImmutable($fecha_inicio_dashboard);$end=new DateTimeImmutable($fecha_fin_dashboard);
+    $chunks=[];
+    while ($d <= $end) {
+        $iso=(int)$d->format('N');
+        if ($periodo !== 'semanal' || in_array($iso,$tx_dashboard_dias_iso,true)) {
+            $chunks[]='('.$prefix.'anio='.(int)$d->format('Y').' AND '.$prefix.'mes_num='.(int)$d->format('n').' AND '.$prefix.'dia='.(int)$d->format('j').')';
+        }
+        $d=$d->modify('+1 day');
+    }
+    return $chunks ? '('.implode(' OR ',$chunks).')' : '1=0';
+}
+// La foto HC del HEADCOUNT es la última semana publicada no posterior al corte.
+$tx_iso_hc_year = (int)date('o', $fecha_corte_timestamp);
+$tx_iso_hc_week = (int)date('W', $fecha_corte_timestamp);
+$tx_hc_res_corte = mysqli_query($conexion, "SELECT anio,semana FROM hc
+    WHERE anio < $tx_iso_hc_year OR (anio = $tx_iso_hc_year AND semana <= $tx_iso_hc_week)
+    ORDER BY anio DESC,semana DESC LIMIT 1");
+if ($tx_hc_res_corte && ($tx_hc_fila_corte = mysqli_fetch_assoc($tx_hc_res_corte))) {
+    $anio_actual = (int)$tx_hc_fila_corte['anio'];
+    $semana_actual = $semana_base = (int)$tx_hc_fila_corte['semana'];
+}
 $distrito_esc = mysqli_real_escape_string($conexion, $distrito_usuario);
 
 // Equivalencias de distrito
@@ -544,19 +622,19 @@ $mostrar_meta = $por_distrito || $scope_filtrar_por_distrito || (($meta_propia_o
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-'");
 } elseif ($scope_filtrar_por_distrito) {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_inst = mysqli_query($conexion, "SELECT 0 as total");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
-        $tipos = 'ii' . str_repeat('s', count($folio_ids));
-        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        $stmt_inst = mysqli_prepare($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $tipos = str_repeat('s', count($folio_ids));
+        $bind  = array_values($folio_ids);
         mysqli_stmt_bind_param($stmt_inst, $tipos, ...$bind);
         mysqli_stmt_execute($stmt_inst);
         $r_inst = mysqli_stmt_get_result($stmt_inst);
@@ -566,19 +644,19 @@ $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 
 // ── VENTAS ───────────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE $tx_dashboard_where_ventas");
 } elseif ($scope_filtrar_por_distrito) {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($scope_distritos_sql)");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE $tx_dashboard_where_ventas AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
+    $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE $tx_dashboard_where_ventas AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_vent = mysqli_query($conexion, "SELECT 0 as total");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? $cond_dia_fecha_cierre AND folio_empleado IN ($ph)");
-        $tipos = 'ii' . str_repeat('s', count($folio_ids));
-        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        $stmt_vent = mysqli_prepare($conexion, "SELECT COUNT(*) as total FROM ventas WHERE $tx_dashboard_where_ventas AND folio_empleado IN ($ph)");
+        $tipos = str_repeat('s', count($folio_ids));
+        $bind  = array_values($folio_ids);
         mysqli_stmt_bind_param($stmt_vent, $tipos, ...$bind);
         mysqli_stmt_execute($stmt_vent);
         $r_vent = mysqli_stmt_get_result($stmt_vent);
@@ -634,11 +712,11 @@ if ($mostrar_meta) {
         $kpi_meta_pct  = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     } else {
         if ($rol_consulta === 'admin') {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE " . tx_dashboard_meta_fecha_where() . "");
         } elseif ($scope_filtrar_por_distrito) {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard AND distrito IN ($scope_distritos_sql)");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE " . tx_dashboard_meta_fecha_where() . " AND distrito IN ($scope_distritos_sql)");
         } else {
-            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE mes_num=$mes_actual AND anio=$anio_query AND dia BETWEEN $dia_inicio_dashboard AND $dia_fin_dashboard AND distrito IN ($distritos_sql)");
+            $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE " . tx_dashboard_meta_fecha_where() . " AND distrito IN ($distritos_sql)");
         }
 
         if ($r_meta && $row_meta = mysqli_fetch_assoc($r_meta)) {
@@ -730,6 +808,22 @@ function tx_dias_habiles_rango_fechas($conexion, $fecha_inicio, $fecha_fin) {
     */
     $fecha_inicio = date('Y-m-d', strtotime($fecha_inicio));
     $fecha_fin    = date('Y-m-d', strtotime($fecha_fin));
+    if (($GLOBALS['periodo'] ?? '') === 'semanal'
+        && $fecha_inicio === ($GLOBALS['fecha_inicio_dashboard'] ?? '')
+        && $fecha_fin === ($GLOBALS['fecha_fin_dashboard'] ?? '')) {
+        $dias=[];
+        foreach (($GLOBALS['tx_fechas_seleccionadas'] ?? []) as $f) {
+            if ((int)date('N',strtotime($f))!==7) $dias[$f]=true;
+        }
+        if ($dias) {
+            $fechaIniSql=mysqli_real_escape_string($conexion,min(array_keys($dias)));
+            $fechaFinSql=mysqli_real_escape_string($conexion,max(array_keys($dias)));
+            $festivos=mysqli_query($conexion,"SELECT fecha FROM dias_inhabiles WHERE activo=1 AND fecha BETWEEN '$fechaIniSql' AND '$fechaFinSql'");
+            while($festivos && $fila=mysqli_fetch_assoc($festivos)) unset($dias[$fila['fecha']]);
+        }
+        return count($dias);
+    }
+
 
     if ($fecha_inicio > $fecha_fin) {
         $tmp = $fecha_inicio;
@@ -934,9 +1028,7 @@ function tx_meta_canal_dashboard($conexion, $canal, $mes, $anio, $rango_mode, $d
     $r = mysqli_query($conexion, "
         SELECT COALESCE(SUM(meta_diaria),0) AS meta_rango
         FROM metas_instalacion
-        WHERE mes_num = ".(int)$mes."
-          AND anio = ".(int)$anio."
-          AND dia BETWEEN ".(int)$dia_inicio." AND ".(int)$dia_fin."
+        WHERE " . tx_dashboard_meta_fecha_where() . "
           AND UPPER(TRIM(canal)) IN ($canales_sql)
           $where_scope
     ");
@@ -964,9 +1056,7 @@ function tx_real_inst_canal_dashboard($conexion, $canal, $mes, $anio, $cond_dia_
     $r = mysqli_query($conexion, "
         SELECT COUNT(cuenta) AS total
         FROM instalaciones
-        WHERE MONTH(fecha)=".(int)$mes."
-          AND YEAR(fecha)=".(int)$anio."
-          $cond_dia_fecha
+        WHERE " . tx_dashboard_where_fecha('fecha') . "
           AND origen_prospecto IS NOT NULL
           AND origen_prospecto <> '-'
           AND UPPER(TRIM(origen_prospecto)) IN ($canales_sql)
@@ -1035,14 +1125,15 @@ function tx_arpu_instalaciones_dashboard($conexion, $mes, $anio, $cond_dia_fecha
 
 function tx_meta_acum_distrito($conexion, $distrito, $mes, $anio, $dias) {
     $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
-    $r = mysqli_query($conexion, "SELECT SUM(meta_diaria) AS meta FROM metas_instalacion WHERE mes_num=".(int)$mes." AND anio=".(int)$anio." AND dia=1 AND distrito IN ($dsql)");
+    $r = mysqli_query($conexion, "SELECT SUM(meta_diaria) AS meta FROM metas_instalacion WHERE " . tx_dashboard_meta_fecha_where() . " AND distrito IN ($dsql)");
     $row = $r ? mysqli_fetch_assoc($r) : null;
-    return round(((float)($row['meta'] ?? 0)) * (int)$dias);
+    // Meta ya es SUM(meta_diaria) del rango exacto; no multiplicar otra vez por días.
+    return (int)round((float)($row['meta'] ?? 0));
 }
 
 function tx_real_inst_distrito($conexion, $distrito, $mes, $anio, $cond_dia_fecha) {
     $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
-    $r = mysqli_query($conexion, "SELECT COUNT(cuenta) AS total FROM instalaciones WHERE MONTH(fecha)=".(int)$mes." AND YEAR(fecha)=".(int)$anio." $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($dsql)");
+    $r = mysqli_query($conexion, "SELECT COUNT(cuenta) AS total FROM instalaciones WHERE " . tx_dashboard_where_fecha('fecha') . " AND origen_prospecto <> '-' AND distrito IN ($dsql)");
     $row = $r ? mysqli_fetch_assoc($r) : null;
     return (int)($row['total'] ?? 0);
 }
@@ -1081,7 +1172,7 @@ function tx_hc_activo_posiciones($conexion, $ids, $semana, $anio, $puestos_comer
 function tx_real_inst_folios($conexion, $folios, $mes, $anio, $cond_dia_fecha) {
     if (empty($folios)) return 0;
     $folios_sql = tx_sql_in_escaped($conexion, $folios);
-    $r = mysqli_query($conexion, "SELECT COUNT(cuenta) AS total FROM instalaciones WHERE MONTH(fecha)=".(int)$mes." AND YEAR(fecha)=".(int)$anio." $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($folios_sql)");
+    $r = mysqli_query($conexion, "SELECT COUNT(cuenta) AS total FROM instalaciones WHERE " . tx_dashboard_where_fecha('fecha') . " AND origen_prospecto <> '-' AND folio_empleado IN ($folios_sql)");
     $row = $r ? mysqli_fetch_assoc($r) : null;
     return (int)($row['total'] ?? 0);
 }
@@ -1251,9 +1342,7 @@ function tx_mix_res_neg_distrito_dashboard($conexion, $distrito, $mes, $anio, $c
     $dsql = tx_sql_in_escaped($conexion, tx_distrito_equivalentes_array($distrito));
     return tx_mix_res_neg_where_dashboard(
         $conexion,
-        "MONTH(fecha)=".(int)$mes."
-         AND YEAR(fecha)=".(int)$anio."
-         $cond_dia_fecha
+        tx_dashboard_where_fecha('fecha') . "
          AND origen_prospecto <> '-'
          AND distrito IN ($dsql)"
     );
@@ -1265,9 +1354,7 @@ function tx_mix_res_neg_folios_dashboard($conexion, $folios, $mes, $anio, $cond_
     $folios_sql = tx_sql_in_escaped($conexion, $folios);
     return tx_mix_res_neg_where_dashboard(
         $conexion,
-        "MONTH(fecha)=".(int)$mes."
-         AND YEAR(fecha)=".(int)$anio."
-         $cond_dia_fecha
+        tx_dashboard_where_fecha('fecha') . "
          AND origen_prospecto <> '-'
          AND folio_empleado IN ($folios_sql)"
     );
@@ -1290,9 +1377,7 @@ function tx_mix_res_neg_canal_dashboard($conexion, $canal, $mes, $anio, $cond_di
 
     return tx_mix_res_neg_where_dashboard(
         $conexion,
-        "MONTH(fecha)=".(int)$mes."
-         AND YEAR(fecha)=".(int)$anio."
-         $cond_dia_fecha
+        tx_dashboard_where_fecha('fecha') . "
          AND origen_prospecto IS NOT NULL
          AND origen_prospecto <> '-'
          AND UPPER(TRIM(origen_prospecto)) IN ($canales_sql)
@@ -1567,10 +1652,10 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
     $distritos_raw = [];
     $res_dist = mysqli_query($conexion, "
         SELECT DISTINCT distrito FROM metas_instalacion
-        WHERE mes_num=".(int)$mes_actual." AND anio=".(int)$anio_query."
+        WHERE " . tx_dashboard_meta_fecha_where() . "
         UNION
         SELECT DISTINCT distrito FROM instalaciones
-        WHERE MONTH(fecha)=".(int)$mes_actual." AND YEAR(fecha)=".(int)$anio_query." $cond_dia_fecha AND origen_prospecto <> '-'
+        WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-'
     ");
     while ($res_dist && $drow = mysqli_fetch_assoc($res_dist)) {
         $d = trim((string)($drow['distrito'] ?? ''));
@@ -1769,7 +1854,7 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
 
         // UNA sola certificacion HC para toda la tendencia Ene-2026..periodo elegido.
         // Cada mes se recorta al rango seleccionado (MTD, custom o completo).
-        $tx_stg_inicio_tendencia = '2026-01-01';
+        $tx_stg_inicio_tendencia = min('2026-01-01', $fecha_inicio_dashboard);
         $tx_stg_hasta_tendencia = $fecha_fin_dashboard;
         if ($tx_stg_hasta_tendencia < $tx_stg_inicio_tendencia) {
             throw new RuntimeException('Periodo anterior a enero de 2026');
@@ -1817,7 +1902,7 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
         for ($tx_stg_mes_obj = $tx_stg_inicio_mes; $tx_stg_mes_obj <= $tx_stg_fin_mes; $tx_stg_mes_obj = $tx_stg_mes_obj->modify('first day of next month')) {
             $tx_stg_ym = $tx_stg_mes_obj->format('Y-m');
             $tx_stg_ultimo_dia = (int)$tx_stg_mes_obj->format('t');
-            if ($rango_mode === 'completo') {
+            if ($rango_mode === 'completo' || $periodo === 'semanal' || $tx_dashboard_cruza_mes) {
                 $tx_stg_dia_ini = 1;
                 $tx_stg_dia_fin = $tx_stg_ultimo_dia;
             } else {
@@ -1859,6 +1944,35 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
                 $tx_stg_eventos_mes = $tx_stg_eventos;
             }
         }
+        if (($periodo === 'semanal' || $tx_dashboard_cruza_mes) && !$tx_stg_gerencial) {
+            // Resumen operativo por fechas REALES, incluso si cruza dos meses.
+            // Evita mostrar Mix o cumplimiento de la foto mensual cuando se eligió una semana.
+            $eventosSeleccionados=[];
+            foreach ($tx_stg_por_mes as $listaMensual) foreach ($listaMensual as $e) {
+                $f=substr((string)($e['fecha']??''),0,10);
+                if ($f < $fecha_inicio_dashboard || $f > $fecha_fin_dashboard) continue;
+                if ($tx_dashboard_dias_iso && !in_array((int)date('N',strtotime($f)),$tx_dashboard_dias_iso,true)) continue;
+                $eventosSeleccionados[]=$e;
+            }
+            $detallesSeleccionados = $tx_stg_motor_com->resumirVendedores(
+                $eventosSeleccionados,$fecha_inicio_dashboard,$fecha_fin_dashboard);
+            $sum2=$sum3=$sumIndef=$sumTotal=0;
+            foreach($detallesSeleccionados as $r) {
+                $sum2+=(int)($r['doble_play']??0);
+                $sum3+=(int)($r['triple_play']??0);
+                $sumIndef+=(int)($r['play_sin_clasificar']??0);
+                $sumTotal+=(int)($r['total']??0);
+            }
+            if ($sumTotal !== count($eventosSeleccionados) || $sumTotal !== $sum2+$sum3+$sumIndef) {
+                throw new LogicException('Motor Comercial HC: rango semanal no concilia');
+            }
+            $tx_stg_eventos_mes=$eventosSeleccionados;
+            $tx_stg_resumen_mes=$detallesSeleccionados;
+            $tx_stg_universo_mes=$sumTotal;
+            $tx_stg_mix_2p=$sum2;
+            $tx_stg_mix_3p=$sum3;
+            $tx_stg_mix_sin_clasificar=$sumIndef;
+        }
         $tx_stg_ok = true;
 
         // Solo para la tarjeta de nivel inferior, usa el catalogo/foto del MOTOR HC.
@@ -1891,7 +2005,7 @@ if ($tx_stg_aplicable && $tx_stg_gerencial) {
         $tx_stg_motor_gerencial = (isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial)
             ? $tx_stg_motor_com : new MotorComercial($conexion);
         $tx_stg_res_gerencial = $tx_stg_motor_gerencial->indicadoresInstalacionesPorCatalogo(
-            '2026-01-01', $fecha_fin_dashboard, $rango_mode,
+            '2026-01-01', $fecha_fin_dashboard, (($periodo === 'semanal' || $tx_dashboard_cruza_mes) ? 'completo' : $rango_mode),
             (int)$dia_inicio_dashboard, (int)$dia_fin_dashboard, $tx_stg_scope_gerencial
         );
         $tx_stg_arpu_labels = [];
@@ -1915,6 +2029,36 @@ if ($tx_stg_aplicable && $tx_stg_gerencial) {
         }
         if ($tx_stg_universo_mes !== ($tx_stg_mix_2p + $tx_stg_mix_3p + $tx_stg_mix_sin_clasificar)) {
             throw new LogicException('STAGING: Mix gerencial no concilia con total instalaciones');
+        }
+        if ($periodo === 'semanal' || $tx_dashboard_cruza_mes) {
+            // El Mix es del rango exacto. El gráfico de tendencia de ARPU es mensual.
+            $gruposFechas = [];
+            if ($periodo === 'semanal') {
+                $fechas = $tx_fechas_seleccionadas;
+                $iniBloque = $finBloque = null;
+                foreach ($fechas as $f) {
+                    if ($iniBloque === null) { $iniBloque=$finBloque=$f; continue; }
+                    $diaSiguiente = (new DateTimeImmutable($finBloque))->modify('+1 day')->format('Y-m-d');
+                    if ($f === $diaSiguiente) { $finBloque=$f; continue; }
+                    $gruposFechas[]=[$iniBloque,$finBloque];$iniBloque=$finBloque=$f;
+                }
+                if ($iniBloque !== null) $gruposFechas[]=[$iniBloque,$finBloque];
+            } else $gruposFechas=[[$fecha_inicio_dashboard,$fecha_fin_dashboard]];
+            $suma=['total'=>0,'doble_play'=>0,'triple_play'=>0,'play_sin_clasificar'=>0];
+            foreach ($gruposFechas as [$inicioGrupo,$finGrupo]) {
+                $rangoRes=$tx_stg_motor_gerencial->indicadoresInstalacionesPorCatalogo(
+                    $inicioGrupo,$finGrupo,'completo',1,31,$tx_stg_scope_gerencial);
+                foreach ($rangoRes['datos'] as $resMes) {
+                    foreach (array_keys($suma) as $k) $suma[$k]+=(int)($resMes[$k]??0);
+                }
+            }
+            $tx_stg_universo_mes=$suma['total'];
+            $tx_stg_mix_2p=$suma['doble_play'];
+            $tx_stg_mix_3p=$suma['triple_play'];
+            $tx_stg_mix_sin_clasificar=$suma['play_sin_clasificar'];
+            if ($tx_stg_universo_mes !== ($tx_stg_mix_2p+$tx_stg_mix_3p+$tx_stg_mix_sin_clasificar)) {
+                throw new LogicException('Mix seleccionado Motor Comercial no concilia');
+            }
         }
         $tx_stg_ok = true;
         $tx_stg_error = null;
@@ -2115,19 +2259,19 @@ if ($tx_stg_aplicable) {
     $inst_3p = $tx_stg_ok ? $tx_stg_mix_3p : 0;
 } else {
 if ($rol_consulta === 'admin') {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-'");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-'");
 } elseif ($scope_filtrar_por_distrito) {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=$mes_actual AND YEAR(fecha)=$anio_query $cond_dia_fecha AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
+    $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_mix_inst = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE MONTH(fecha)=? AND YEAR(fecha)=? $cond_dia_fecha AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
-        $tipos = 'ii' . str_repeat('s', count($folio_ids));
-        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        $stmt_mix = mysqli_prepare($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND folio_empleado IN ($ph)");
+        $tipos = str_repeat('s', count($folio_ids));
+        $bind  = array_values($folio_ids);
         mysqli_stmt_bind_param($stmt_mix, $tipos, ...$bind);
         mysqli_stmt_execute($stmt_mix);
         $r_mix_inst = mysqli_stmt_get_result($stmt_mix);
@@ -2144,19 +2288,19 @@ $inst_2p = (int)($mix_inst['p2'] ?? 0);
 
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
 if ($rol_consulta === 'admin') {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE $tx_dashboard_where_ventas");
 } elseif ($scope_filtrar_por_distrito) {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($scope_distritos_sql)");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE $tx_dashboard_where_ventas AND distrito IN ($scope_distritos_sql)");
 } elseif ($por_distrito) {
-    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=$mes_actual AND YEAR(fecha_cierre)=$anio_query $cond_dia_fecha_cierre AND distrito IN ($distritos_sql)");
+    $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE $tx_dashboard_where_ventas AND distrito IN ($distritos_sql)");
 } else {
     if (empty($folio_ids)) {
         $r_mix_vent = mysqli_query($conexion, "SELECT 0 as p3, 0 as p2");
     } else {
         $ph = implode(',', array_fill(0, count($folio_ids), '?'));
-        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE MONTH(fecha_cierre)=? AND YEAR(fecha_cierre)=? $cond_dia_fecha_cierre AND folio_empleado IN ($ph)");
-        $tipos = 'ii' . str_repeat('s', count($folio_ids));
-        $bind  = array_merge([$mes_actual, $anio_query], array_values($folio_ids));
+        $stmt_mix_v = mysqli_prepare($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE $tx_dashboard_where_ventas AND folio_empleado IN ($ph)");
+        $tipos = str_repeat('s', count($folio_ids));
+        $bind  = array_values($folio_ids);
         mysqli_stmt_bind_param($stmt_mix_v, $tipos, ...$bind);
         mysqli_stmt_execute($stmt_mix_v);
         $r_mix_vent = mysqli_stmt_get_result($stmt_mix_v);
@@ -2221,7 +2365,7 @@ if ($tx_stg_aplicable && $tx_stg_ok) {
         if (!$fecha_mes) continue;
         $mes_arpu=(int)$fecha_mes->format('n');$anio_arpu=(int)$fecha_mes->format('Y');
         $ultimo_dia_mes_arpu=(int)$fecha_mes->format('t');
-        $cond_arpu_dia=($rango_mode==='completo')?'':(' AND DAY(fecha) BETWEEN '.min($dia_inicio_dashboard,$ultimo_dia_mes_arpu).' AND '.min($dia_fin_dashboard,$ultimo_dia_mes_arpu));
+        $cond_arpu_dia=($rango_mode==='completo' || $periodo==='semanal' || $tx_dashboard_cruza_mes)?'':(' AND DAY(fecha) BETWEEN '.min($dia_inicio_dashboard,$ultimo_dia_mes_arpu).' AND '.min($dia_fin_dashboard,$ultimo_dia_mes_arpu));
         if ($rol_consulta==='admin') $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia);
         elseif ($scope_filtrar_por_distrito) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,$scope_distritos_sql);
         elseif ($por_distrito) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,$distritos_sql);
@@ -2290,7 +2434,7 @@ if ($tx_evo_desde_enero) {
         } else {
             $tx_evo_scope=['tipo'=>'FOLIOS','folios'=>$folio_ids];
         }
-        $tx_evo_res=$tx_evo_motor->evolucionPorCatalogo($fecha_inicio_evolucion,$fecha_fin_dashboard,$rango_mode,(int)$dia_inicio_dashboard,(int)$dia_fin_dashboard,$tx_evo_scope);
+        $tx_evo_res=$tx_evo_motor->evolucionPorCatalogo($fecha_inicio_evolucion,$fecha_fin_dashboard,(($periodo === 'semanal' || $tx_dashboard_cruza_mes) ? 'completo' : $rango_mode),(int)$dia_inicio_dashboard,(int)$dia_fin_dashboard,$tx_evo_scope);
         $tx_evo_total_inst=$tx_evo_res['totales']['instalaciones'];
         $tx_evo_total_vent=$tx_evo_res['totales']['ventas'];
         // Conciliación cruzada contra el Canal de Venta que el ADMIN ya validó.
@@ -2319,7 +2463,7 @@ if ($tx_evo_desde_enero) {
         }
         // Validación ARPU/MIX vs evolución comercial: MISMO universo de instalaciones
         // por mes (incluyendo «Sin clasificar»). Si no concilia, no mostrar cifras.
-        if ($tx_stg_gerencial && $tx_stg_ok) {
+        if ($tx_stg_gerencial && $tx_stg_ok && $periodo !== 'semanal' && !$tx_dashboard_cruza_mes) {
             foreach (($tx_stg_res_gerencial['meses'] ?? []) as $ym_auditoria) {
                 $total_indicadores = (int)($tx_stg_res_gerencial['datos'][$ym_auditoria]['total'] ?? -1);
                 $total_evolucion = (int)($tx_evo_total_inst[$ym_auditoria] ?? -2);
@@ -2941,9 +3085,7 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
             COALESCE(SUM(precio_pronto_pago),0) AS ingreso,
             SUM(CASE WHEN precio_pronto_pago > 0 THEN 1 ELSE 0 END) AS inst_arpu
         FROM instalaciones
-        WHERE MONTH(fecha)=".(int)$mes."
-          AND YEAR(fecha)=".(int)$anio."
-          $cond_dia_fecha
+        WHERE " . tx_dashboard_where_fecha('fecha') . "
           AND origen_prospecto <> '-'
           AND folio_empleado IN ($folios_sql)
         GROUP BY folio_empleado
@@ -3186,6 +3328,16 @@ function tx_piso_volumen_top_coaches_dashboard(string $fecha_inicio, string $fec
     return (int)ceil($piso_prorrateado - 1e-9);
 }
 
+/** Piso de 150/mes con selección discontinua semanal (un único redondeo). */
+function tx_piso_volumen_top_coaches_fechas_dashboard(string $desde,string $hasta,array $diasISO): int {
+    $d=new DateTimeImmutable($desde);$end=new DateTimeImmutable($hasta);$total=0.0;
+    while($d<=$end){
+        if(in_array((int)$d->format('N'),$diasISO,true)) $total+=150.0/(int)$d->format('t');
+        $d=$d->modify('+1 day');
+    }
+    return (int)ceil($total-1e-9);
+}
+
 /**
  * Calcula ambos cuadros sobre EXACTAMENTE las cuentas certificadas de Motor HC.
  * TOP mantiene el piso prorrateado (150/mes); BOTTOM no aplica filtro de piso.
@@ -3194,7 +3346,7 @@ function tx_piso_volumen_top_coaches_dashboard(string $fecha_inicio, string $fec
 function tx_build_coaches_motor_hc_staging(
     mysqli $conexion, RankingAtribucionServiceV06 $motor,
     string $desde, string $hasta, int $diasHabiles,
-    ?array $respuestaAnterior = null, ?string $respuestaDesde = null
+    ?array $respuestaAnterior = null, ?string $respuestaDesde = null, array $diasIso = []
 ): array {
     $coaches = tx_coaches_foto_motor_hc_staging($motor, $desde, $hasta);
     $fechaCorte = new DateTimeImmutable($hasta);
@@ -3236,7 +3388,7 @@ function tx_build_coaches_motor_hc_staging(
         if (isset($clavesSemana[$semana])) {
             $coaches[$clave]['spark'][$clavesSemana[$semana]]++;
         }
-        if ($fecha >= $desde && $fecha <= $hasta) {
+        if ($fecha >= $desde && $fecha <= $hasta && (!$diasIso || in_array((int)$fechaISO->format('N'), $diasIso, true))) {
             $coaches[$clave]['instalaciones']++;
             $eventosPeriodo[] = $evento;
             $grupo = $lider.'|'.$idCoach.'|'.(string)($evento['vendedor_id'] ?? '');
@@ -3275,7 +3427,7 @@ function tx_build_coaches_motor_hc_staging(
     unset($coach);
 
     $lista = array_values($coaches);
-    $piso = tx_piso_volumen_top_coaches_dashboard($desde, $hasta);
+    $piso = $diasIso ? tx_piso_volumen_top_coaches_fechas_dashboard($desde, $hasta, $diasIso) : tx_piso_volumen_top_coaches_dashboard($desde, $hasta);
     $top = array_values(array_filter($lista, static fn($c)=>(int)$c['instalaciones'] >= $piso));
     usort($top, static function($a,$b) {
         $r = $b['productividad'] <=> $a['productividad'];
@@ -3296,20 +3448,33 @@ function tx_build_coaches_motor_hc_staging(
 }
 
 // Productividad vendedor = instalaciones / días hábiles del rango seleccionado.
-$dias_productividad_vendedor = tx_dias_habiles_rango_mes(
-    $conexion,
-    $anio_query,
-    $mes_actual,
-    $dia_inicio_dashboard,
-    $dia_fin_dashboard
+$dias_productividad_vendedor = tx_dias_habiles_rango_fechas(
+    $conexion, $fecha_inicio_dashboard, $fecha_fin_dashboard
 );
 if ($dias_productividad_vendedor <= 0) $dias_productividad_vendedor = $dias_rango_dashboard;
 
+// Productividad para días exactos elegidos: mismo criterio que Ranking Productividad.
+if ($periodo === 'semanal') {
+    $tx_habiles = [];
+    foreach ($tx_fechas_seleccionadas as $f) {
+        if ((int)date('N',strtotime($f)) !== 7) $tx_habiles[$f] = true;
+    }
+    if ($tx_habiles) {
+        $fiSql=mysqli_real_escape_string($conexion,min(array_keys($tx_habiles)));
+        $ffSql=mysqli_real_escape_string($conexion,max(array_keys($tx_habiles)));
+        $festSql="SELECT fecha FROM dias_inhabiles WHERE activo=1 AND fecha BETWEEN '$fiSql' AND '$ffSql'";
+        $festRes=mysqli_query($conexion,$festSql);
+        while ($festRes && $feriado=mysqli_fetch_assoc($festRes)) unset($tx_habiles[$feriado['fecha']]);
+    }
+    $dias_productividad_vendedor=max(1,count($tx_habiles));
+}
+
 // TOP/BOTTOM COACHES: cuenta certificada con jerarquía por semana del evento.
 // Se calcula REGIONAL para todos los perfiles, independiente del drill-down.
-$tx_piso_min_top_coaches = tx_piso_volumen_top_coaches_dashboard($fecha_inicio_dashboard, $fecha_fin_dashboard);
-$tx_dias_cal_top_coaches = (int)((new DateTimeImmutable($fecha_inicio_dashboard))
-    ->diff(new DateTimeImmutable($fecha_fin_dashboard))->days) + 1;
+$tx_piso_min_top_coaches = $periodo === 'semanal'
+    ? tx_piso_volumen_top_coaches_fechas_dashboard($fecha_inicio_dashboard,$fecha_fin_dashboard,$tx_dashboard_dias_iso)
+    : tx_piso_volumen_top_coaches_dashboard($fecha_inicio_dashboard, $fecha_fin_dashboard);
+$tx_dias_cal_top_coaches = $dias_rango_dashboard;
 $top_productividad_coaches = [];
 $top_offender_coaches = [];
 $tx_coaches_motor_auditoria = [];
@@ -3329,7 +3494,8 @@ try {
             $fecha_inicio_dashboard, $fecha_fin_dashboard,
             $dias_productividad_vendedor,
             $tx_respuesta_previa_coaches,
-            $tx_respuesta_previa_coaches !== null ? ($tx_stg_inicio_tendencia ?? null) : null
+            $tx_respuesta_previa_coaches !== null ? ($tx_stg_inicio_tendencia ?? null) : null,
+            $tx_dashboard_dias_iso
         );
 } catch (Throwable $e) {
     // Fallo explícito: NO exhibir números reconstruidos por texto/folios.
@@ -3505,9 +3671,7 @@ if ($rol_consulta === 'admin') {
 
 $tx_geo_where_base = "
     FROM instalaciones
-    WHERE MONTH(fecha) = " . (int)$mes_actual . "
-      AND YEAR(fecha) = " . (int)$anio_query . "
-      $cond_dia_fecha
+    WHERE $tx_dashboard_where_inst
       AND origen_prospecto IS NOT NULL
       AND origen_prospecto <> '-'
       $tx_geo_where_scope
@@ -3591,9 +3755,7 @@ if ($tx_geo_mostrar_filtro_canales && !empty($tx_geo_canales_sel)) {
         $r_tx_geo_ventas_periodo = mysqli_query($conexion, "
             SELECT COUNT(*) AS total
             FROM ventas
-            WHERE MONTH(fecha_cierre) = " . (int)$mes_actual . "
-              AND YEAR(fecha_cierre) = " . (int)$anio_query . "
-              $cond_dia_fecha_cierre
+            WHERE $tx_dashboard_where_ventas
               AND $tx_geo_col_venta_canal_sql IN (" . tx_sql_in_escaped($conexion, $tx_geo_canales_sel) . ")
               $tx_geo_where_scope_ventas
         ");
@@ -4691,6 +4853,35 @@ if ($tx_geo_sum_count > 0) {
             #txEvoParticipationCard .tx-participacion-grid{grid-template-columns:minmax(0,1fr);}
         }
 
+        /* Navegación homologada a Ranking Productividad — sin tocar sidebar */
+        .tx-nav-card{position:relative;overflow:visible;flex-wrap:wrap;z-index:80;}
+        .tx-nav-actions{gap:7px;justify-content:flex-end;}
+        .tx-nav-modes{display:inline-flex;gap:5px;margin-right:6px;}
+        .tx-nav-button{
+            background:#fff; border:1px solid #e4e9f4; border-radius:14px; padding:10px 13px;
+            color:#25344f; text-decoration:none; font-size:.78rem;font-weight:900;
+            cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+            font-family:inherit;white-space:nowrap;min-height:40px;
+        }
+        .tx-nav-button:hover:not(.is-disabled){background:#f4eaff;border-color:#cbb7ff;}
+        .tx-nav-button.is-active{background:linear-gradient(135deg,#7A2BFF,#FF006C);color:white;border-color:transparent;box-shadow:0 7px 18px rgba(122,43,255,.15);}
+        .tx-nav-button.is-disabled,.tx-nav-month-arrow.is-disabled{opacity:.35;pointer-events:none;cursor:default;}
+        .tx-nav-dropdown{z-index:75;}
+        .tx-nav-panel{z-index:100;left:50%;right:auto;transform:translateX(-50%);top:49px;width:348px;max-width:calc(100vw - 32px);}
+        .tx-nav-panel .range-actions{justify-content:space-between;margin-top:12px;}
+        .tx-nav-month-title{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:center;}
+        .tx-nav-month-arrow{text-decoration:none;font-size:24px;line-height:1;color:#7629c9;}
+        .tx-nav-panel .calendar-day.adjacent-month{opacity:.48;}
+        .tx-nav-panel .calendar-day.adjacent-month.in-range,
+        .tx-nav-panel .calendar-day.adjacent-month.selected-start,
+        .tx-nav-panel .calendar-day.adjacent-month.selected-end{opacity:1;}
+        .tx-nav-panel .calendar-day.disabled-date{opacity:.2;cursor:not-allowed;}
+        .tx-nav-weekday-grid{margin:13px 0 18px;}
+        .tx-nav-weekday{min-height:46px;font-size:.68rem;padding:0 2px;}
+        .tx-nav-panel .tx-nav-full-btn{display:inline-flex;align-items:center;border:0;border-radius:999px;padding:10px 12px;background:#f1eaff;color:#6d28d9;font-size:.74rem;font-weight:850;text-decoration:none;cursor:pointer;}
+        .tx-nav-info{margin:-10px 0 18px;padding:0 4px;color:#71809d;font-size:.74rem;}
+        @media(max-width:900px){.tx-nav-panel{left:auto;right:0;transform:none;}.tx-nav-actions{justify-content:flex-start;}}
+
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -4732,111 +4923,104 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
     </div>
 
-    <section class="dashboard-range-card">
+    <!-- Selector temporal homologado a Ranking Productividad (STAGING) -->
+    <section class="dashboard-range-card tx-nav-card">
         <div class="dashboard-range-info">
-            <div>
-                <div class="dashboard-range-label">Corte operativo</div>
-                <div class="dashboard-range-value"><?= htmlspecialchars($dashboard_fecha_label) ?></div>
+            <div><div class="dashboard-range-label">Corte operativo</div>
+                <div class="dashboard-range-value"><?= htmlspecialchars($dashboard_fecha_label, ENT_QUOTES, 'UTF-8') ?></div></div>
+            <div class="dashboard-range-label" style="max-width:300px">
+                <?= $periodo === 'semanal' ? 'Semana ISO · Selección de días comparables (LUN–DOM)' : 'Rango mensual continuo · Fechas reales, incluso entre meses' ?>
             </div>
-            <div class="dashboard-range-label">Evolución compara el mismo rango de días en cada mes</div>
         </div>
-
-        <div class="dashboard-range-actions">
-            <div class="range-dropdown" id="dashboardRangeDropdown">
-                <button type="button" class="range-trigger" id="dashboardRangeTrigger">📅 Seleccionar rango</button>
-                <div class="range-panel" id="dashboardRangePanel">
-                    <form method="get" id="dashboardRangeForm">
-                        <?php foreach ($_GET as $k => $v): ?>
-                            <?php if (!in_array($k, ['dia_inicio','dia_fin','rango_mode','mes','anio'], true)): ?>
-                                <?php if (is_array($v)): ?>
-                                    <?php foreach ($v as $v_item): ?>
-                                        <input type="hidden" name="<?= htmlspecialchars($k) ?>[]" value="<?= htmlspecialchars((string)$v_item) ?>">
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
-                                <?php endif; ?>
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                        <input type="hidden" name="rango_mode" value="custom">
-                        <input type="hidden" name="mes" value="<?= htmlspecialchars($mes_actual) ?>">
-                        <input type="hidden" name="anio" value="<?= htmlspecialchars($anio_query) ?>">
-                        <input type="hidden" name="dia_inicio" id="dashDiaInicioInput" value="<?= htmlspecialchars($dia_inicio_dashboard) ?>">
-                        <input type="hidden" name="dia_fin" id="dashDiaFinInput" value="<?= htmlspecialchars($dia_fin_dashboard) ?>">
-
-                        <?php
-                            $qs_prev_mes = $_GET;
-                            $qs_prev_mes['mes'] = $mes_prev;
-                            $qs_prev_mes['anio'] = $anio_prev;
-                            $qs_prev_mes['rango_mode'] = 'mtd';
-                            $qs_prev_mes['dia_inicio'] = 1;
-                            unset($qs_prev_mes['dia_fin']);
-
-                            $qs_next_mes = $_GET;
-                            $qs_next_mes['mes'] = $mes_next;
-                            $qs_next_mes['anio'] = $anio_next;
-                            $qs_next_mes['rango_mode'] = 'mtd';
-                            $qs_next_mes['dia_inicio'] = 1;
-                            unset($qs_next_mes['dia_fin']);
-                        ?>
-                        <div class="range-month-nav">
-                            <a class="range-month-btn" href="?<?= htmlspecialchars(http_build_query($qs_prev_mes)) ?>">← Mes anterior</a>
-                            <div class="range-panel-title">Selecciona rango de <?= htmlspecialchars($meses_es[$mes_actual]) ?> <?= htmlspecialchars($anio_query) ?></div>
-                            <?php if ($puede_mes_next): ?>
-                                <a class="range-month-btn" href="?<?= htmlspecialchars(http_build_query($qs_next_mes)) ?>">Mes siguiente →</a>
-                            <?php else: ?>
-                                <span class="range-month-btn disabled">Mes siguiente →</span>
-                            <?php endif; ?>
-                        </div>
-                        <div class="calendar-grid-real" id="dashCalendarGrid"
-                             data-days="<?= htmlspecialchars($dia_max_corte) ?>"
-                             data-start="<?= htmlspecialchars($dia_inicio_dashboard) ?>"
-                             data-end="<?= htmlspecialchars($dia_fin_dashboard) ?>">
-                            <div class="calendar-weekday">Lun</div>
-                            <div class="calendar-weekday">Mar</div>
-                            <div class="calendar-weekday">Mié</div>
-                            <div class="calendar-weekday">Jue</div>
-                            <div class="calendar-weekday">Vie</div>
-                            <div class="calendar-weekday">Sáb</div>
-                            <div class="calendar-weekday">Dom</div>
-
-                            <?php for ($i = 1; $i < $primer_dia_semana_mes; $i++): ?>
-                                <div class="calendar-empty"></div>
-                            <?php endfor; ?>
-
-                            <?php for ($d = 1; $d <= $dia_max_corte; $d++): ?>
-                                <?php
-                                    $classes = [];
-                                    if ($d == $dia_inicio_dashboard) $classes[] = 'selected-start';
-                                    if ($d == $dia_fin_dashboard) $classes[] = 'selected-end';
-                                    if ($d > $dia_inicio_dashboard && $d < $dia_fin_dashboard) $classes[] = 'in-range';
-                                ?>
-                                <button type="button" class="calendar-day <?= htmlspecialchars(implode(' ', $classes)) ?>" data-day="<?= htmlspecialchars($d) ?>">
-                                    <?= htmlspecialchars($d) ?>
-                                </button>
-                            <?php endfor; ?>
-                        </div>
-
-                        <div class="range-summary" id="dashRangeSummary">
-                            Rango seleccionado: día <?= htmlspecialchars($dia_inicio_dashboard) ?> al <?= htmlspecialchars($dia_fin_dashboard) ?>
-                        </div>
-
-                        <div class="range-actions">
-                            <button type="submit">Aplicar</button>
-                        </div>
-                    </form>
-                </div>
+        <div class="dashboard-range-actions tx-nav-actions">
+            <div class="tx-nav-modes" aria-label="Modo de navegación temporal">
+                <a class="tx-nav-button <?= $periodo === 'semanal' ? 'is-active' : '' ?>"
+                   href="<?= tx_dashboard_link(['periodo'=>'semanal','anio_semana'=>$tx_nav_anio_semana_max,'semana'=>$tx_nav_semana_max,'dias_semana'=>null,'rango_mode'=>null,'fecha_inicio'=>null,'fecha_fin'=>null]) ?>">Semanal</a>
+                <a class="tx-nav-button <?= $periodo === 'mensual' ? 'is-active' : '' ?>"
+                   href="<?= tx_dashboard_link(['periodo'=>'mensual','mes'=>(int)$tx_fecha_limite->format('n'),'anio'=>(int)$tx_fecha_limite->format('Y'),'anio_mes'=>null,'rango_mode'=>'mtd','dias_semana'=>null,'fecha_inicio'=>null,'fecha_fin'=>null]) ?>">Mensual</a>
             </div>
-
-            <a class="range-action-btn <?= ($rango_mode === 'mtd') ? 'active' : '' ?>"
-               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'mtd','mes'=>$mes_actual,'anio'=>$anio_query,'dia_inicio'=>1,'dia_fin'=>$dia_max_corte])) ?>">
-                MTD vencido
-            </a>
-            <a class="range-action-btn <?= ($rango_mode === 'completo') ? 'active' : '' ?>"
-               href="?<?= http_build_query(array_merge($_GET, ['rango_mode'=>'completo','mes'=>$mes_actual,'anio'=>$anio_query,'dia_inicio'=>null,'dia_fin'=>null])) ?>">
-                Mes completo
-            </a>
+            <?php if ($periodo === 'semanal'): ?>
+                <a class="tx-nav-button" href="<?= tx_dashboard_link(['periodo'=>'semanal','anio_semana'=>(int)$tx_prev_lunes->format('o'),'semana'=>(int)$tx_prev_lunes->format('W'),'dias_semana'=>null]) ?>">← Semana <?= (int)$tx_prev_lunes->format('W') ?></a>
+                <div class="range-dropdown tx-nav-dropdown" id="dashboardRangeDropdown">
+                    <button class="tx-nav-button is-active tx-nav-picker" id="dashboardRangeTrigger" type="button">Semana <?= (int)$tx_nav_semana ?> · <?= (int)$tx_nav_anio_semana ?> ▾</button>
+                    <div class="range-panel tx-nav-panel" id="dashboardRangePanel">
+                        <form method="get" id="dashboardRangeForm">
+                            <?php foreach ($_GET as $k=>$v): if (in_array($k,['periodo','anio_semana','semana','dias_semana','rango_mode','fecha_inicio','fecha_fin','dia_inicio','dia_fin','mes','anio','anio_mes'],true) || is_array($v)) continue; ?>
+                                <input type="hidden" name="<?= htmlspecialchars((string)$k,ENT_QUOTES,'UTF-8') ?>" value="<?= htmlspecialchars((string)$v,ENT_QUOTES,'UTF-8') ?>">
+                            <?php endforeach; ?>
+                            <input type="hidden" name="periodo" value="semanal">
+                            <input type="hidden" name="anio_semana" value="<?= (int)$tx_nav_anio_semana ?>">
+                            <input type="hidden" name="semana" value="<?= (int)$tx_nav_semana ?>">
+                            <input type="hidden" name="dias_semana" id="dashDiasSemanaInput" value="<?= htmlspecialchars(implode(',',$tx_dias_semana_seleccionados)) ?>">
+                            <div class="range-panel-title">Selecciona días comparables de Semana <?= (int)$tx_nav_semana ?> · <?= (int)$tx_nav_anio_semana ?></div>
+                            <div class="calendar-grid-real tx-nav-weekday-grid" id="dashWeekdayGrid">
+                                <?php foreach ($tx_dias_semana_labels as $numero=>$nombre): $dis = !in_array($numero,$tx_dias_semana_disponibles,true); ?>
+                                    <button type="button" class="calendar-day tx-nav-weekday <?= in_array($numero,$tx_dias_semana_seleccionados,true)?'selected-start selected-end':'' ?>"
+                                       data-weekday="<?= $numero ?>" <?= $dis?'disabled':'' ?>><?= htmlspecialchars($nombre) ?></button>
+                                <?php endforeach; ?>
+                            </div>
+                            <div class="range-actions">
+                                <button type="button" class="tx-nav-full-btn" id="dashWeekFullBtn">Semana completa disponible</button>
+                                <button type="submit">Aplicar</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                <?php if ($tx_semana_has_next): ?>
+                    <a class="tx-nav-button" href="<?= tx_dashboard_link(['periodo'=>'semanal','anio_semana'=>(int)$tx_next_lunes->format('o'),'semana'=>(int)$tx_next_lunes->format('W'),'dias_semana'=>null]) ?>">Semana <?= (int)$tx_next_lunes->format('W') ?> →</a>
+                <?php else: ?><span class="tx-nav-button is-disabled">Semana <?= (int)$tx_next_lunes->format('W') ?> →</span><?php endif; ?>
+            <?php else: ?>
+                <a class="tx-nav-button" href="<?= tx_dashboard_link(['periodo'=>'mensual','anio'=>$anio_prev,'mes'=>$mes_prev,'rango_mode'=>'mtd','fecha_inicio'=>null,'fecha_fin'=>null,'dia_inicio'=>null,'dia_fin'=>null]) ?>">← <?= htmlspecialchars($meses_es[$mes_prev]) ?></a>
+                <div class="range-dropdown tx-nav-dropdown" id="dashboardRangeDropdown">
+                    <button class="tx-nav-button is-active tx-nav-picker" id="dashboardRangeTrigger" type="button"><?= htmlspecialchars($dashboard_fecha_label) ?> ▾</button>
+                    <div class="range-panel tx-nav-panel" id="dashboardRangePanel">
+                        <form method="get" id="dashboardRangeForm">
+                            <?php foreach ($_GET as $k=>$v): if (in_array($k,['periodo','anio_semana','semana','dias_semana','rango_mode','fecha_inicio','fecha_fin','dia_inicio','dia_fin','mes','anio','anio_mes'],true) || is_array($v)) continue; ?>
+                                <input type="hidden" name="<?= htmlspecialchars((string)$k,ENT_QUOTES,'UTF-8') ?>" value="<?= htmlspecialchars((string)$v,ENT_QUOTES,'UTF-8') ?>">
+                            <?php endforeach; ?>
+                            <input type="hidden" name="periodo" value="mensual"><input type="hidden" name="rango_mode" value="custom">
+                            <input type="hidden" name="mes" value="<?= (int)$mes_actual ?>"><input type="hidden" name="anio" value="<?= (int)$anio_query ?>">
+                            <input type="hidden" name="fecha_inicio" id="dashFechaInicio" value="<?= htmlspecialchars($fecha_inicio_dashboard) ?>">
+                            <input type="hidden" name="fecha_fin" id="dashFechaFin" value="<?= htmlspecialchars($fecha_fin_dashboard) ?>">
+                            <div class="range-panel-title tx-nav-month-title">
+                                <a class="tx-nav-month-arrow" href="<?= tx_dashboard_link(['periodo'=>'mensual','anio'=>$anio_prev,'mes'=>$mes_prev,'rango_mode'=>'mtd','fecha_inicio'=>null,'fecha_fin'=>null]) ?>">‹</a>
+                                <span>Selecciona rango de <?= htmlspecialchars($meses_es[$mes_actual]) ?> <?= (int)$anio_query ?></span>
+                                <?php if ($puede_mes_next): ?><a class="tx-nav-month-arrow" href="<?= tx_dashboard_link(['periodo'=>'mensual','anio'=>$anio_next,'mes'=>$mes_next,'rango_mode'=>'mtd','fecha_inicio'=>null,'fecha_fin'=>null]) ?>">›</a>
+                                <?php else: ?><span class="tx-nav-month-arrow is-disabled">›</span><?php endif; ?>
+                            </div>
+                            <div class="calendar-grid-real" id="dashCalendarGrid"
+                                 data-start-date="<?= htmlspecialchars($fecha_inicio_dashboard) ?>" data-end-date="<?= htmlspecialchars($fecha_fin_dashboard) ?>">
+                                <?php foreach (['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'] as $dayname): ?><div class="calendar-weekday"><?= htmlspecialchars($dayname) ?></div><?php endforeach; ?>
+                                <?php for ($idx=0;$idx<42;$idx++):
+                                    $fechaCelda=$tx_calendar_grid_start->modify('+'.$idx.' days');
+                                    $fechaISO=$fechaCelda->format('Y-m-d');
+                                    $celdaClasses=[];
+                                    if ((int)$fechaCelda->format('n') !== $mes_actual) $celdaClasses[]='adjacent-month';
+                                    if ($fechaISO === $fecha_inicio_dashboard) $celdaClasses[]='selected-start';
+                                    if ($fechaISO === $fecha_fin_dashboard) $celdaClasses[]='selected-end';
+                                    if ($fechaISO > $fecha_inicio_dashboard && $fechaISO < $fecha_fin_dashboard) $celdaClasses[]='in-range';
+                                    if ($fechaISO > $tx_calendar_max_date) $celdaClasses[]='disabled-date';
+                                ?>
+                                    <button class="calendar-day <?= htmlspecialchars(implode(' ',$celdaClasses)) ?>" type="button"
+                                        data-date="<?= $fechaISO ?>" <?= $fechaISO > $tx_calendar_max_date ? 'disabled' : '' ?>><?= (int)$fechaCelda->format('j') ?></button>
+                                <?php endfor; ?>
+                            </div>
+                            <div class="range-summary" id="dashRangeSummary">Rango seleccionado: <?= htmlspecialchars($fecha_inicio_dashboard.' – '.$fecha_fin_dashboard) ?></div>
+                            <div class="range-actions">
+                                <a class="tx-nav-full-btn" href="<?= tx_dashboard_link(['periodo'=>'mensual','rango_mode'=>'completo','fecha_inicio'=>null,'fecha_fin'=>null,'dia_inicio'=>null,'dia_fin'=>null]) ?>">Mes completo</a>
+                                <button type="submit">Aplicar</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                <?php if ($puede_mes_next): ?><a class="tx-nav-button" href="<?= tx_dashboard_link(['periodo'=>'mensual','anio'=>$anio_next,'mes'=>$mes_next,'rango_mode'=>'mtd','fecha_inicio'=>null,'fecha_fin'=>null,'dia_inicio'=>null,'dia_fin'=>null]) ?>"><?= htmlspecialchars($meses_es[$mes_next]) ?> →</a>
+                <?php else: ?><span class="tx-nav-button is-disabled"><?= htmlspecialchars($meses_es[$mes_next]) ?> →</span><?php endif; ?>
+            <?php endif; ?>
         </div>
     </section>
+    <?php if ($periodo === 'semanal' || $tx_dashboard_cruza_mes): ?>
+        <div class="tx-nav-info">Los indicadores operativos consultan las fechas seleccionadas. Las tendencias desde enero se mantienen como referencia mensual histórica.</div>
+    <?php endif; ?>
 
     <section class="hierarchy-card">
         <div class="hierarchy-head">
@@ -5190,7 +5374,7 @@ include __DIR__ . '/includes/sidebar.php';
                     <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin precio válido' ?></strong>
                 </div>
             <?php endif; ?>
-            <?php if ($tx_stg_gerencial && $tx_stg_ok && ($tx_stg_auditoria_arpu['validos'] ?? 0) < $tx_stg_universo_mes): ?>
+            <?php if ($tx_stg_gerencial && $tx_stg_ok && $periodo !== 'semanal' && !$tx_dashboard_cruza_mes && ($tx_stg_auditoria_arpu['validos'] ?? 0) < $tx_stg_universo_mes): ?>
                 <div style="font-size:10px;color:#64748b;padding:3px 0;">ARPU: <?= number_format((int)($tx_stg_auditoria_arpu['validos'] ?? 0)) ?> instalaciones con precio válido de <?= number_format((int)$tx_stg_universo_mes) ?>.</div>
             <?php endif; ?>
             <?php if ($tx_stg_aplicable && $tx_stg_error !== null): ?>
@@ -5200,7 +5384,7 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
 
         <div class="chart-card">
-            <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
+            <div class="chart-title">Mix 2P y 3P — Instalaciones<?= ($periodo === 'semanal' ? ' · Semana seleccionada' : ($tx_dashboard_cruza_mes ? ' · Rango seleccionado' : '')) ?></div>
             <?php if ($tx_stg_aplicable): ?>
                 <div class="hierarchy-performance-sub" style="margin-top:2px;">Motor Comercial · <?= htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') ?> · <?= number_format((int)$tx_stg_universo_mes) ?> instalaciones</div>
                 <?php if ($tx_stg_error !== null): ?>
@@ -5870,7 +6054,7 @@ const txEvoInitialView = <?= json_encode($evo_view) ?>;
 const txEvoCatalogOk = <?= $tx_evo_fuente_catalogo_ok ? 'true' : 'false' ?>;
 window.txEvoViewCache = txEvoViewCache;
 try {
-    const txEvoStorageKey = 'talia:evo:' + <?= json_encode(hash('sha256', ($rol ?? '').'|'.($scope_pos ?? '').'|'.$anio_query.'|'.$mes_actual.'|'.$rango_mode.'|'.$dia_inicio_dashboard.'|'.$dia_fin_dashboard)) ?>;
+    const txEvoStorageKey = 'talia:evo:' + <?= json_encode(hash('sha256', ($rol ?? '').'|'.($scope_pos ?? '').'|'.$periodo.'|'.$fecha_inicio_dashboard.'|'.$fecha_fin_dashboard.'|'.implode(',',$tx_dashboard_dias_iso))) ?>;
     sessionStorage.setItem(txEvoStorageKey, JSON.stringify(txEvoViewCache));
 } catch (e) { /* cache persistente opcional */ }
 
@@ -6188,68 +6372,70 @@ window.addEventListener('resize', () => {
 
 <script>
 (function(){
-    const dropdown = document.getElementById('dashboardRangeDropdown');
-    const trigger = document.getElementById('dashboardRangeTrigger');
-    const panel = document.getElementById('dashboardRangePanel');
-    const grid = document.getElementById('dashCalendarGrid');
-    const startInput = document.getElementById('dashDiaInicioInput');
-    const endInput = document.getElementById('dashDiaFinInput');
-    const summary = document.getElementById('dashRangeSummary');
+    const dropdown=document.getElementById('dashboardRangeDropdown');
+    const trigger=document.getElementById('dashboardRangeTrigger');
+    const panel=document.getElementById('dashboardRangePanel');
+    if(!dropdown || !trigger || !panel)return;
+    trigger.addEventListener('click',e=>{e.stopPropagation();dropdown.classList.toggle('open');});
+    panel.addEventListener('click',e=>e.stopPropagation());
+    document.addEventListener('click',()=>dropdown.classList.remove('open'));
 
-    if(!dropdown || !trigger || !panel || !grid || !startInput || !endInput) return;
-
-    let start = parseInt(grid.dataset.start || startInput.value || '1', 10);
-    let end = parseInt(grid.dataset.end || endInput.value || start, 10);
-    let clickMode = 'start';
-
-    function paint(){
-        if(start > end){ const t = start; start = end; end = t; }
-
-        startInput.value = start;
-        endInput.value = end;
-
-        grid.querySelectorAll('.calendar-day').forEach(btn=>{
-            const d = parseInt(btn.dataset.day, 10);
-            btn.classList.toggle('selected-start', d === start);
-            btn.classList.toggle('selected-end', d === end);
-            btn.classList.toggle('in-range', d > start && d < end);
+    const weekGrid=document.getElementById('dashWeekdayGrid');
+    if(weekGrid){
+        const input=document.getElementById('dashDiasSemanaInput');
+        const weekButtons=[...weekGrid.querySelectorAll('.tx-nav-weekday:not(:disabled)')];
+        function sync(){
+            let selected=weekButtons.filter(x=>x.classList.contains('selected-start'));
+            if(!selected.length && weekButtons[0]) {weekButtons[0].classList.add('selected-start','selected-end');selected=[weekButtons[0]];}
+            input.value=selected.map(x=>Number(x.dataset.weekday)).sort((a,b)=>a-b).join(',');
+        }
+        weekButtons.forEach(b=>b.addEventListener('click',()=>{
+            const chosen=!b.classList.contains('selected-start');
+            b.classList.toggle('selected-start',chosen);b.classList.toggle('selected-end',chosen);sync();
+        }));
+        document.getElementById('dashWeekFullBtn')?.addEventListener('click',()=>{
+            weekButtons.forEach(b=>b.classList.add('selected-start','selected-end'));sync();
         });
-
+        sync();
+        return;
+    }
+    const grid=document.getElementById('dashCalendarGrid');
+    const inputFrom=document.getElementById('dashFechaInicio');
+    const inputTo=document.getElementById('dashFechaFin');
+    const summary=document.getElementById('dashRangeSummary');
+    if(!grid || !inputFrom || !inputTo)return;
+    let start=grid.dataset.startDate, end=grid.dataset.endDate;
+    let clickMode='start';
+    const months=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    function parseLocal(iso){let p=iso.split('-').map(Number);return new Date(p[0],p[1]-1,p[2],12);}
+    function toISO(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+    function human(a,b){let x=parseLocal(a),y=parseLocal(b);return x.getFullYear()===y.getFullYear()&&x.getMonth()===y.getMonth()
+      ? `${months[x.getMonth()]} ${x.getDate()}–${y.getDate()} ${x.getFullYear()}`
+      : `${months[x.getMonth()]} ${x.getDate()} - ${months[y.getMonth()]} ${y.getDate()} ${y.getFullYear()}`;}
+    function paint(){
+        if(start>end)[start,end]=[end,start];
+        inputFrom.value=start;inputTo.value=end;
+        grid.querySelectorAll('.calendar-day[data-date]').forEach(btn=>{
+            let d=btn.dataset.date;
+            btn.classList.toggle('selected-start',d===start);
+            btn.classList.toggle('selected-end',d===end);
+            btn.classList.toggle('in-range',d>start&&d<end);
+        });
         if(summary){
-            summary.textContent = start === end
-                ? 'Rango seleccionado: día ' + end
-                : 'Rango seleccionado: día ' + start + ' al ' + end;
+            let d=parseLocal(start),y=d.getFullYear(),m=d.getMonth()-1;
+            if(m<0){m=11;y--;}
+            let back=new Date(y,m,Math.min(d.getDate(),new Date(y,m+1,0).getDate()),12);
+            let n=Math.round((parseLocal(end)-parseLocal(start))/86400000);
+            let backEnd=new Date(back);backEnd.setDate(backEnd.getDate()+n);
+            summary.textContent=human(toISO(back),toISO(backEnd))+' vs '+human(start,end);
         }
     }
-
-    trigger.addEventListener('click', (e)=>{
-        e.stopPropagation();
-        dropdown.classList.toggle('open');
-    });
-
-    panel.addEventListener('click', (e)=>e.stopPropagation());
-
-    document.addEventListener('click', ()=>{
-        dropdown.classList.remove('open');
-    });
-
-    grid.querySelectorAll('.calendar-day').forEach(btn=>{
-        btn.addEventListener('click', ()=>{
-            const d = parseInt(btn.dataset.day, 10);
-
-            if(clickMode === 'start'){
-                start = d;
-                end = d;
-                clickMode = 'end';
-            } else {
-                end = d;
-                clickMode = 'start';
-            }
-
-            paint();
-        });
-    });
-
+    grid.querySelectorAll('.calendar-day[data-date]:not(:disabled)').forEach(btn=>btn.addEventListener('click',()=>{
+        let d=btn.dataset.date;
+        if(clickMode==='start'){start=d;end=d;clickMode='end';}
+        else {end=d;clickMode='start';}
+        paint();
+    }));
     paint();
 })();
 </script>
