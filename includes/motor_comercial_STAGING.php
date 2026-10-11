@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / MOTOR COMERCIAL v0.2.0+EVO-STAGING — complemento del MOTOR HC v0.6.2
+ * TalIA / MOTOR COMERCIAL v0.2.0+GERENCIAL-STAGING — complemento del MOTOR HC v0.6.2
  * ==================================================================
  * UBICACIÓN: /public_html/plataforma/includes/motor_comercial_STAGING.php
  * CONSUMIDOR: /plataforma/index_STAGING.php (SOLO PRUEBAS). NO REEMPLAZAR PRODUCTIVO.
@@ -10,9 +10,11 @@ declare(strict_types=1);
  * AUTORIDAD:
  * - Motor HC establece el universo certificado, una cuenta por período, el
  *   vendedor, el coach y el líder. Este motor NO resuelve identidades ni HC.
- * - Este módulo añade características comerciales de esas MISMAS cuentas.
- * - La tabla instalaciones se consulta solo por cuenta + fechas + canales del
- *   universo HC. Nunca se suman instalaciones adicionales a las recibidas.
+ * - resumirVendedores() añade características comerciales a esas MISMAS cuentas
+ *   certificadas por HC (solo Cambaceo/PDV), sin ampliar el universo.
+ * - indicadoresInstalacionesPorCatalogo() y evolucionPorCatalogo() son consultas
+ *   gerenciales por REGISTRO: abarcan todos los canales del alcance autorizado
+ *   y pueden filtrar distritos, folios de colaboradores y canales seleccionados.
  *
  * FUENTES:
  * - instalaciones(cuenta,fecha,plan,precio_lista,origen_prospecto)
@@ -25,9 +27,9 @@ declare(strict_types=1);
  * - tipo: RESIDENCIAL o NEGOCIOS (PYME se conserva).
  * - bundle_app: NO -> NO BUNDLE; SI -> BUNDLE.
  * - Indefinido o ambiguo -> SIN CLASIFICAR. No usar heurísticas por texto.
- * - % de cada categoría = cuentas de categoría / TODAS las INS certificadas
- *   del vendedor en el período actual. Por ello pueden no sumar 100% si
- *   existen cuentas sin clasificar. El faltante se audita.
+ * - En resumirVendedores() los porcentajes son de cuentas HC certificadas.
+ *   En los métodos gerenciales, cada registro se clasifica sin inventar valores
+ *   cuando no existe catálogo: "Sin clasificar" se conserva por separado.
  * - ARPU = SUM(precio_lista / 1.16) / N cuentas con precio válido > 0.
  *   Prioridad de precio: instalaciones; respaldo: catálogo ACTUAL, auditado.
  *   No representa un precio histórico si solo existe respaldo de catálogo.
@@ -39,6 +41,8 @@ declare(strict_types=1);
  * CONTRATO PÚBLICO:
  *   $m = new MotorComercial($conexion); // mysqli
  *   $resumen = $m->resumirVendedores($cuentasCertificadas,$desde,$hasta,$diasIso);
+ *   $gerencial = $m->indicadoresInstalacionesPorCatalogo($desde,$hasta,$modo,$diaIni,$diaFin,$scope);
+ *   $evolucion = $m->evolucionPorCatalogo($desde,$hasta,$modo,$diaIni,$diaFin,$scope);
  *   // Clave: lider_id|coach_id|vendedor_id, idéntica al Ranking HC.
  *   // Resumen: total,doble_play,triple_play,residencial,negocios,
  *   //          no_bundle,bundle,arpu,arpu_ingreso_neto,arpu_cuentas,
@@ -315,6 +319,138 @@ final class MotorComercial
 
 
     /**
+     * Alcance reutilizable para analítica comercial. La autorización del usuario
+     * se resuelve en el controlador; este método solo aplica filtros recibidos.
+     * REGION, DISTRITO, DISTRITOS, FOLIOS y VENDEDOR. Un grupo puede refinarse
+     * adicionalmente por canales concretos (intersección, nunca unión).
+     */
+    private function filtrosGerenciales(string $origen, array $scope, array &$args): string
+    {
+        if (!in_array($origen, ['ventas','instalaciones'], true)) {
+            throw new InvalidArgumentException('Motor Comercial: origen desconocido');
+        }
+        $tipo = strtoupper(trim((string)($scope['tipo'] ?? '')));
+        if (!in_array($tipo, ['REGION','DISTRITO','DISTRITOS','FOLIOS','VENDEDOR'], true)) {
+            throw new InvalidArgumentException('Motor Comercial: alcance no autorizado');
+        }
+        $sql = '';
+        $map = [
+            'CANCUN'=>['CANCUN'], 'MERIDA'=>['MERIDA'],
+            'TUXTLA'=>['TUXTLA','TUXTLA GUTIERREZ','TUXTLA GUTIÉRREZ'],
+            'VILLAHERMOSA'=>['VILLAHERMOSA'],
+            'COATZAMINA'=>['COATZA MINA','COATZA/MINA','COATZA / MINA','COATZA-MINA','COATZACOALCOS MINATITLAN','COATZACOALCOS - MINATITLAN','COATZACOALCOS - MINATITLÁN'],
+            'COATZACOALCOSMINATITLAN'=>['COATZA MINA','COATZA/MINA','COATZA / MINA','COATZA-MINA','COATZACOALCOS MINATITLAN','COATZACOALCOS - MINATITLAN','COATZACOALCOS - MINATITLÁN'],
+        ];
+        if ($tipo === 'DISTRITO' || $tipo === 'DISTRITOS') {
+            $solicitados = $tipo === 'DISTRITO' ? [(string)($scope['distrito'] ?? '')] : (array)($scope['distritos'] ?? []);
+            if (!$solicitados) throw new InvalidArgumentException('Motor Comercial: no se indicaron distritos');
+            $opciones = [];
+            foreach ($solicitados as $d) {
+                $normal = self::normalizar((string)$d);
+                $compacto = preg_replace('/[^A-Z0-9]/', '', strtr($normal, ['Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ü'=>'U']));
+                if (!isset($map[$compacto])) throw new InvalidArgumentException('Motor Comercial: distrito desconocido');
+                foreach ($map[$compacto] as $alias) $opciones[self::normalizar($alias)] = true;
+            }
+            $valores = array_keys($opciones);
+            $sql .= ' AND UPPER(TRIM(distrito)) IN ('.implode(',',array_fill(0,count($valores),'?')).')';
+            array_push($args, ...$valores);
+        }
+        if ($tipo === 'FOLIOS' || $tipo === 'VENDEDOR') {
+            $valores = $tipo === 'VENDEDOR'
+                ? [(string)($scope['folio'] ?? '')]
+                : (array)($scope['folios'] ?? []);
+            $folios = array_values(array_unique(array_filter(array_map('trim',array_map('strval',$valores)), static fn($v)=>$v!=='')));
+            if (!$folios) return $sql.' AND 1=0'; // sin folios nunca se convierte en REGIÓN
+            $sql .= ' AND folio_empleado IN ('.implode(',',array_fill(0,count($folios),'?')).')';
+            array_push($args, ...$folios);
+        }
+        // Filtro opcional por uno o varios canales; una lista explícita vacía
+        // devuelve cero, evitando un ensanchamiento accidental del alcance.
+        if (array_key_exists('canales',$scope)) {
+            $canales = array_values(array_unique(array_filter(array_map(
+                static fn($v)=>self::normalizar($v), (array)$scope['canales']
+            ),static fn($v)=>$v!=='')));
+            if (!$canales) return $sql.' AND 1=0';
+            $col = $origen === 'ventas' ? 'canal_venta' : 'origen_prospecto';
+            $sql .= ' AND UPPER(TRIM(`'.$col.'`)) IN ('.implode(',',array_fill(0,count($canales),'?')).')';
+            array_push($args, ...$canales);
+        }
+        return $sql;
+    }
+
+    /**
+     * Todos los canales en el alcance recibido. Cuenta REGISTROS de instalaciones,
+     * igual que Evolución (no deduplica cuentas para evitar perder volumen).
+     * Calcula simultáneamente ARPU ponderado, 2P/3P, RES/NEG y Bundle.
+     * Usa clasificación exacta del mismo catálogo y precios lista sin IVA.
+     * Devuelve valores mensuales junto con auditoría de precios/clasificación.
+     */
+    public function indicadoresInstalacionesPorCatalogo(
+        string $desde, string $hasta, string $modo, int $diaInicio, int $diaFin, array $scope
+    ): array {
+        $inicio = DateTimeImmutable::createFromFormat('!Y-m-d', $desde);
+        $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $hasta);
+        if (!$inicio || !$fin || $inicio->format('Y-m-d') !== $desde || $fin->format('Y-m-d') !== $hasta || $inicio > $fin) {
+            throw new InvalidArgumentException('Indicadores Comerciales: fechas inválidas');
+        }
+        if (!in_array($modo,['completo','mtd','custom'],true) || $diaInicio<1 || $diaInicio>31 || $diaFin<$diaInicio || $diaFin>31) {
+            throw new InvalidArgumentException('Indicadores Comerciales: rango diario inválido');
+        }
+        $out = ['meses'=>[], 'datos'=>[]];
+        $cursor = $inicio->modify('first day of this month');
+        $ultimo = $fin->modify('first day of this month');
+        while ($cursor <= $ultimo) {
+            $ym = $cursor->format('Y-m');
+            $out['meses'][] = $ym;
+            $out['datos'][$ym] = self::resumenVacio();
+            $cursor = $cursor->modify('+1 month');
+        }
+        $tienePrecio = isset($this->columnasInst['precio_lista']);
+        $precioSelect = $tienePrecio ? '`precio_lista`' : 'NULL';
+        $sql = "SELECT DATE_FORMAT(`fecha`,'%Y-%m') AS ym, `plan`, {$precioSelect} AS precio, COUNT(*) AS n
+                FROM `instalaciones` WHERE `fecha` >= ? AND `fecha` <= ? AND `origen_prospecto` <> '-'";
+        $args = [$desde,$hasta];
+        if ($modo !== 'completo') {
+            $sql .= ' AND DAY(`fecha`) BETWEEN ? AND ?';
+            $args[] = $diaInicio; $args[] = $diaFin;
+        }
+        $sql .= $this->filtrosGerenciales('instalaciones',$scope,$args);
+        $sql .= " GROUP BY DATE_FORMAT(`fecha`,'%Y-%m'), `plan`".($tienePrecio?', `precio_lista`':'');
+        $stmt = $this->db->prepare($sql);
+        if (!$stmt) throw new RuntimeException('Indicadores Comerciales: no se pudo preparar instalaciones');
+        $stmt->bind_param(str_repeat('s',count($args)), ...$args);
+        if (!$stmt->execute()) throw new RuntimeException('Indicadores Comerciales: falló consulta instalaciones');
+        $rs = $stmt->get_result();
+        if (!$rs) throw new RuntimeException('Indicadores Comerciales: falló lectura instalaciones');
+        while ($row = $rs->fetch_assoc()) {
+            $ym = (string)($row['ym'] ?? '');
+            if (!isset($out['datos'][$ym])) continue;
+            $n = (int)$row['n'];
+            if ($n <= 0) continue;
+            $c = self::clasificarCuenta([['plan'=>$row['plan'] ?? '', 'precio_lista'=>$row['precio'] ?? null]],$this->catalogo);
+            $s = &$out['datos'][$ym];
+            $s['total'] += $n;
+            $s[$c['play']] += $n;
+            $s[$c['oferta']] += $n;
+            $s[$c['bundle']] += $n;
+            if ($c['catalogo_estado'] === 'SIN_MATCH') $s['catalogo_sin_match'] += $n;
+            if ($c['catalogo_estado'] === 'AMBIGUO') $s['catalogo_ambiguo'] += $n;
+            if ($c['plan_ambiguo']) $s['instalacion_plan_ambiguo'] += $n;
+            if ($c['precio_ambiguo']) $s['arpu_precio_ambiguo'] += $n;
+            if ($c['precio_neto'] !== null) {
+                $s['arpu_ingreso_neto'] += $c['precio_neto']*$n;
+                $s['arpu_cuentas'] += $n;
+                if ($c['fuente_precio'] === 'CATALOGO_ACTUAL') $s['arpu_fuente_catalogo'] += $n;
+            }
+            unset($s);
+        }
+        $rs->free(); $stmt->close();
+        foreach ($out['datos'] as &$s) self::finalizar($s);
+        unset($s);
+        return $out;
+    }
+
+    /**
      * STAGING v0.2.0+evolucion: agrupa por mes y clasificación del catálogo.
      * A diferencia de resumirVendedores(), aquí NO se asegura pertenencia al universo
      * certificado HC. Es un reporte gerencial de TODOS LOS CANALES que conserva las
@@ -343,10 +479,6 @@ final class MotorComercial
         if (!in_array($modo, ['completo','mtd','custom'], true) || $diaInicio < 1 || $diaInicio > 31 || $diaFin < $diaInicio || $diaFin > 31) {
             throw new InvalidArgumentException('Evolución Comercial: selección de días inválida');
         }
-        $tipo = (string)($scope['tipo'] ?? '');
-        if (!in_array($tipo, ['REGION','DISTRITO','FOLIOS'], true)) {
-            throw new InvalidArgumentException('Evolución Comercial: alcance no autorizado');
-        }
         $labels = [];
         $d = $inicio->modify('first day of this month');
         $last = $fin->modify('first day of this month');
@@ -366,18 +498,6 @@ final class MotorComercial
             }
         }
         $out = ['meses'=>$labels,'datos'=>$plantilla,'totales'=>['ventas'=>array_fill_keys($labels,0),'instalaciones'=>array_fill_keys($labels,0)]];
-        $district = self::normalizar((string)($scope['distrito'] ?? ''));
-        $districtCompact = preg_replace('/[^A-Z0-9]/','',strtr($district,['Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ü'=>'U']));
-        $districtAlternates = [
-            'CANCUN'=>['CANCUN'], 'MERIDA'=>['MERIDA'], 'TUXTLA'=>['TUXTLA','TUXTLA GUTIERREZ','TUXTLA GUTIÉRREZ'],
-            'VILLAHERMOSA'=>['VILLAHERMOSA'],
-            'COATZAMINA'=>['COATZA MINA','COATZA/MINA','COATZA / MINA','COATZA-MINA','COATZACOALCOS MINATITLAN','COATZACOALCOS - MINATITLAN','COATZACOALCOS - MINATITLÁN'],
-            'COATZACOALCOSMINATITLAN'=>['COATZA MINA','COATZA/MINA','COATZA / MINA','COATZA-MINA','COATZACOALCOS MINATITLAN','COATZACOALCOS - MINATITLAN','COATZACOALCOS - MINATITLÁN'],
-        ];
-        $districtOptions = $districtAlternates[$districtCompact] ?? [];
-        if ($tipo === 'DISTRITO' && !$districtOptions) throw new InvalidArgumentException('Evolución Comercial: distrito desconocido');
-        $folios = array_values(array_unique(array_filter(array_map('strval',(array)($scope['folios'] ?? [])),static fn($v)=>trim($v)!=='')));
-        if ($tipo === 'FOLIOS' && !$folios) return $out; // fail-closed
         foreach (['ventas','instalaciones'] as $origen) {
             $tabla = $origen === 'ventas' ? 'ventas' : 'instalaciones';
             $fecha = $origen === 'ventas' ? 'fecha_cierre' : 'fecha';
@@ -390,13 +510,7 @@ final class MotorComercial
                 $args[] = $diaInicio;
                 $args[] = $diaFin;
             }
-            if ($tipo === 'DISTRITO') {
-                $sql .= ' AND UPPER(TRIM(distrito)) IN ('.implode(',',array_fill(0,count($districtOptions),'?')).')';
-                foreach ($districtOptions as $option) $args[] = self::normalizar($option);
-            } elseif ($tipo === 'FOLIOS') {
-                $sql .= ' AND folio_empleado IN ('.implode(',',array_fill(0,count($folios),'?')).')';
-                foreach ($folios as $folio) $args[] = $folio;
-            }
+            $sql .= $this->filtrosGerenciales($origen,$scope,$args);
             $sql .= " GROUP BY DATE_FORMAT(`{$fecha}`, '%Y-%m'), `{$plan}`";
             $st = $this->db->prepare($sql);
             if (!$st) throw new RuntimeException('Evolución Comercial: consulta no preparada de '.$tabla);
