@@ -3214,7 +3214,36 @@ function tx_sparkline_coach_dashboard($conexion, $folios, $fecha_corte_timestamp
     return array_values($map);
 }
 
-function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $mes, $anio, $cond_dia_fecha, $dias_productividad, $fecha_corte_timestamp) {
+/**
+ * TalIA STAGING — Piso mínimo TOP Five Coaches.
+ * 150 instalaciones por mes natural, prorrateadas por días CALENDARIO
+ * inclusivos. Un período que cruza meses suma sus componentes, y el
+ * redondeo se realiza UNA sola vez al final (hacia arriba).
+ * Ejemplo: 26-30 Sep + 01-05 Oct = ceil(150*5/30 + 150*5/31) = 50.
+ * Esta regla solo determina elegibilidad del TOP; NO modifica PROD ni BOTTOM.
+ */
+function tx_piso_volumen_top_coaches_dashboard(string $fecha_inicio, string $fecha_fin, int $piso_mensual = 150): int {
+    $inicio = DateTimeImmutable::createFromFormat('!Y-m-d', $fecha_inicio);
+    $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $fecha_fin);
+    if (!$inicio || !$fin || $inicio->format('Y-m-d') !== $fecha_inicio
+        || $fin->format('Y-m-d') !== $fecha_fin || $inicio > $fin || $piso_mensual < 0) {
+        throw new InvalidArgumentException('TOP Coaches: rango de fechas o piso mensual inválido');
+    }
+
+    $piso_prorrateado = 0.0;
+    for ($mes = $inicio->modify('first day of this month'); $mes <= $fin; $mes = $mes->modify('first day of next month')) {
+        $ultimo_dia = $mes->modify('last day of this month');
+        $desde = $inicio > $mes ? $inicio : $mes;
+        $hasta = $fin < $ultimo_dia ? $fin : $ultimo_dia;
+        $dias_inclusivos = (int)$desde->diff($hasta)->days + 1;
+        $dias_del_mes = (int)$mes->format('t');
+        $piso_prorrateado += $piso_mensual * $dias_inclusivos / $dias_del_mes;
+    }
+    // Evitar que errores minúsculos de coma flotante eleven un piso entero exacto.
+    return (int)ceil($piso_prorrateado - 1e-9);
+}
+
+function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $fecha_inicio, $fecha_fin, $dias_productividad, $fecha_corte_timestamp) {
     if (empty($coaches)) return [[], []];
 
     foreach ($coaches as $id_pos => &$coach) {
@@ -3231,9 +3260,7 @@ function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $mes, $ani
                 COALESCE(SUM(precio_pronto_pago),0) AS ingreso,
                 SUM(CASE WHEN precio_pronto_pago > 0 THEN 1 ELSE 0 END) AS inst_arpu
             FROM instalaciones
-            WHERE MONTH(fecha)=".(int)$mes."
-              AND YEAR(fecha)=".(int)$anio."
-              $cond_dia_fecha
+            WHERE fecha BETWEEN '$fecha_inicio' AND '$fecha_fin'
               AND origen_prospecto <> '-'
               AND folio_empleado IN ($folios_sql)
         ";
@@ -3280,7 +3307,13 @@ function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $mes, $ani
         return strtoupper(trim((string)($r['coach'] ?? ''))) !== 'VACANTE';
     }));
 
-    $top = $lista;
+    // SOLO TOP: primero exigir el piso mínimo de instalaciones del rango.
+    // Un coach con mejor PROD pero sin volumen NO desplaza a uno elegible.
+    // BOTTOM se calcula desde $lista sin filtrar, exactamente como antes.
+    $piso_minimo_top = tx_piso_volumen_top_coaches_dashboard($fecha_inicio, $fecha_fin);
+    $top = array_values(array_filter($lista, static function($r) use ($piso_minimo_top) {
+        return (int)($r['instalaciones'] ?? 0) >= $piso_minimo_top;
+    }));
     usort($top, function($a, $b) {
         if ($a['productividad'] == $b['productividad']) return $b['instalaciones'] <=> $a['instalaciones'];
         return $b['productividad'] <=> $a['productividad'];
@@ -3325,12 +3358,16 @@ $coaches_regional_productividad = tx_get_coaches_regional_dashboard(
     $puestos_comerciales
 );
 
+// Se prorratea sobre el rango real seleccionado, incluso si cruza meses.
+// Los días hábiles siguen reservados para la fórmula de productividad.
+$tx_piso_min_top_coaches = tx_piso_volumen_top_coaches_dashboard($fecha_inicio_dashboard, $fecha_fin_dashboard);
+$tx_dias_cal_top_coaches = (int)((new DateTimeImmutable($fecha_inicio_dashboard))
+    ->diff(new DateTimeImmutable($fecha_fin_dashboard))->days) + 1;
 list($top_productividad_coaches, $top_offender_coaches) = tx_build_top_regional_coaches_dashboard(
     $conexion,
     $coaches_regional_productividad,
-    $mes_actual,
-    $anio_query,
-    $cond_dia_fecha,
+    $fecha_inicio_dashboard,
+    $fecha_fin_dashboard,
     $dias_productividad_vendedor,
     $fecha_corte_timestamp
 );
@@ -5361,7 +5398,7 @@ include __DIR__ . '/includes/sidebar.php';
     <?php if (!empty($top_productividad_coaches) || !empty($top_offender_coaches)): ?>
     <div class="top-productividad-grid">
         <?php
-            $renderTopCoachTable = function($titulo, $subtitulo, $items, $extraClass = '') {
+            $renderTopCoachTable = function($titulo, $subtitulo, $items, $extraClass = '', $mensajeVacio = 'Sin datos para el rango seleccionado.') {
         ?>
         <div class="evo-card top-productividad-card <?= $extraClass ?>">
             <div class="top-productividad-head">
@@ -5410,7 +5447,7 @@ include __DIR__ . '/includes/sidebar.php';
                         </tr>
                         <?php endforeach; ?>
                         <?php if (empty($items)): ?>
-                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
+                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($mensajeVacio, ENT_QUOTES, 'UTF-8') ?></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -5418,7 +5455,13 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopCoachTable('TOP Five Coaches', 'Mejor PROD. regional de coaches del rango seleccionado', $top_productividad_coaches, 'top-productividad'); ?>
+        <?php $renderTopCoachTable(
+            'TOP Five Coaches',
+            'Mejor PROD. regional · Piso mínimo: '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días calendario)',
+            $top_productividad_coaches,
+            'top-productividad',
+            'Ningún coach cumple el piso mínimo de '.number_format($tx_piso_min_top_coaches).' instalaciones para este rango.'
+        ); ?>
         <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender'); ?>
     </div>
     <?php endif; ?>
