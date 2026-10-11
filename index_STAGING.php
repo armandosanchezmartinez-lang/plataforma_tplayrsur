@@ -3042,176 +3042,119 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
 // ── TOP REGIONAL PRODUCTIVIDAD COACHES ──────────────────────────────────────
 // Se muestra antes del Top de vendedores y es regional para todos los niveles.
 // Productividad Coach = instalaciones / HC activo a cargo / días hábiles del rango seleccionado.
-function tx_get_coaches_regional_dashboard($conexion, $semana, $anio, $puestos_comerciales) {
-    /*
-    |--------------------------------------------------------------------------
-    | TOTALXPEDIENT - TOP/BOTTOM COACHES DE VENTA
-    |--------------------------------------------------------------------------
-    |
-    | Esta lista debe coincidir con el universo del Ranking Coach en
-    | ranking_productividad.php.
-    |
-    | Regla:
-    |   Coach de Venta = colaborador/vacante que reporta a un Líder de Venta
-    |   y que además tiene vendedores asignados debajo en HC.
-    |
-    | Importante:
-    |   No basta con buscar posicion LIKE '%COACH%'. Eso puede incluir perfiles
-    |   de acompañamiento/operación que no aparecen en Ranking Coach.
-    |
-    | Homologación tomada del Ranking Coach:
-    |   - Coach reporta al líder: c.nombre_linea_reporte = líder.
-    |   - Vendedor reporta al coach: v.nombre_linea_reporte = coach.
-    |   - Si el coach es VACANTE, se amarra por v.posicion_lr = c.id_posicion.
-    |   - v.puesto_lr LIKE '%COACH%'.
-    |--------------------------------------------------------------------------
-    */
-    $sql = "
-        SELECT DISTINCT
-            c.id_posicion AS id_posicion,
-            c.nombre_colaborador AS coach,
-            c.distrito,
-            COALESCE(l.nombre_colaborador, c.nombre_linea_reporte, '') AS lider
-        FROM hc c
-        INNER JOIN hc l
-            ON l.nombre_colaborador = c.nombre_linea_reporte
-           AND l.distrito = c.distrito
-           AND l.semana = c.semana
-           AND l.anio = c.anio
-           AND UPPER(l.posicion) LIKE '%LIDER VENTAS%'
-           AND l.numero_talento_gs NOT LIKE '%VACANTE%'
-           AND l.nombre_colaborador <> 'VACANTE'
-        WHERE c.semana=".(int)$semana."
-          AND c.anio=".(int)$anio."
-          AND c.puesto_lr LIKE '%LIDER%'
-          AND c.id_posicion IS NOT NULL
-          AND c.id_posicion <> ''
-          AND c.numero_talento_gs NOT LIKE '%VACANTE%'
-          AND UPPER(TRIM(COALESCE(c.nombre_colaborador,''))) <> 'VACANTE'
-          AND EXISTS (
-              SELECT 1
-              FROM hc v
-              WHERE v.semana = c.semana
-                AND v.anio = c.anio
-                AND v.distrito = c.distrito
-                AND v.puesto_lr LIKE '%COACH%'
-                AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-                AND UPPER(TRIM(COALESCE(v.nombre_colaborador,''))) <> 'VACANTE'
-                AND (
-                    (c.nombre_colaborador <> 'VACANTE' AND v.nombre_linea_reporte = c.nombre_colaborador)
-                    OR
-                    (c.nombre_colaborador = 'VACANTE' AND v.posicion_lr = c.id_posicion)
-                )
-          )
-        ORDER BY c.distrito, c.nombre_colaborador
-    ";
+// ── TOP/BOTTOM COACHES · FUENTE MOTOR HC v0.6.2 ─────────────────────────────
+// La atribución de cada cuenta procede del HC histórico por semana del evento.
+// NO se reconstruye el vendedor→coach con nombres de instalaciones o folios
+// de la foto vigente. El HC activo se toma de la última foto <= fecha de corte.
+// Así el numerador es el mismo universo certificado que Ranking Productividad.
 
-    $res = mysqli_query($conexion, $sql);
-    $out = [];
+/** Clave de nombre solo para fallback HC de líder autorreferenciado. */
+function tx_coach_nombre_clave_hc_staging(string $nombre): string {
+    $nombre = RankingAtribucionServiceV06::norm($nombre);
+    $partes = array_values(array_filter(preg_split('/\s+/u', $nombre) ?: []));
+    sort($partes, SORT_STRING);
+    return implode(' ', $partes);
+}
 
-    while ($res && $row = mysqli_fetch_assoc($res)) {
-        $id_pos = trim((string)($row['id_posicion'] ?? ''));
-        $coach_nombre = trim((string)($row['coach'] ?? ''));
-        $distrito = trim((string)($row['distrito'] ?? ''));
+/**
+ * Catálogo regional de coaches y HC activo de la foto vigente AL CORTE.
+ * El nombre y el líder proceden exclusivamente de HC, nunca de instalaciones.
+ * El HC usa personas distintas (con HIC verificable), no cantidad de aliases.
+ * Cada coach queda identificado como DISTRITO_CANONICO|ID_POSICION.
+ */
+function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, string $inicio, string $fin): array {
+    $hc = $motor->cargarHc($inicio, $fin);
+    $fotos = $hc['datos'] ?? [];
+    if (empty($fotos)) throw new RuntimeException('TOP/BOTTOM Coaches: no existe una foto HC anterior o igual al corte');
+    $claveFoto = array_key_last($fotos); // cargarHc entrega las fotos en orden cronológico.
+    $filas = $fotos[$claveFoto];
+    if (!is_array($filas) || !$filas) throw new RuntimeException('TOP/BOTTOM Coaches: foto HC sin registros');
 
-        if ($id_pos === '' || $coach_nombre === '' || $distrito === '') continue;
+    $porPosicion = [];
+    foreach ($filas as $fila) {
+        $distrito = RankingAtribucionServiceV06::normalizarDistrito($fila['distrito'] ?? null);
+        $posicion = trim((string)($fila['id_posicion'] ?? ''));
+        if ($distrito === null || $posicion === '') continue;
+        $porPosicion[$distrito][$posicion][] = $fila;
+    }
 
-        $id_pos_esc = mysqli_real_escape_string($conexion, $id_pos);
-        $coach_esc = mysqli_real_escape_string($conexion, $coach_nombre);
-        $distrito_esc = mysqli_real_escape_string($conexion, $distrito);
+    // El catálogo de líderes lo certifica el Motor HC. El nombre a mostrar
+    // se obtiene del ocupante de esa plaza en la fotografía de corte.
+    $lideres = [];
+    foreach ($motor->catalogoLideres($inicio, $fin) as $id => $info) {
+        $distrito = (string)($info['distrito'] ?? '');
+        $plaza = trim((string)($info['plaza'] ?? ''));
+        $asientos = $porPosicion[$distrito][$plaza] ?? [];
+        if (count($asientos) !== 1) continue;
+        $fila = $asientos[0];
+        $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
+        $talento = trim((string)($fila['numero_talento_gs'] ?? ''));
+        if ($nombre === '' || strtoupper($nombre) === 'VACANTE' || stripos($talento,'VACANTE') !== false) continue;
+        $lideres[(string)$id] = $nombre;
+    }
+    $lideresPorNombre = [];
+    foreach ($lideres as $id => $nombre) {
+        $d = explode('|', $id, 2)[0];
+        $lideresPorNombre[$d][tx_coach_nombre_clave_hc_staging($nombre)][] = $id;
+    }
 
-        /*
-         * Folios y HC activo del coach con la misma lógica del Ranking Coach.
-         * Evita tomar líneas que no son de venta y evita que entren coaches
-         * operativos que no aparecen en el ranking_productividad.php.
-         */
-        $sql_vendedores = "
-            SELECT DISTINCT
-                v.numero_talento_gs AS folio_empleado
-            FROM hc v
-            WHERE v.semana = ".(int)$semana."
-              AND v.anio = ".(int)$anio."
-              AND v.distrito = '$distrito_esc'
-              AND v.puesto_lr LIKE '%COACH%'
-              AND (
-                    ('$coach_esc' <> 'VACANTE' AND v.nombre_linea_reporte = '$coach_esc')
-                    OR
-                    ('$coach_esc' = 'VACANTE' AND v.posicion_lr = '$id_pos_esc')
-              )
-              AND v.numero_talento_gs <> ''
-              AND v.numero_talento_gs NOT LIKE '%VACANTE%'
-              AND v.nombre_colaborador <> 'VACANTE'
-        ";
+    $coaches = [];
+    foreach ($filas as $fila) {
+        // Misma señal estructural que usa Motor HC para reconocer el coach:
+        // su puesto_lr apunta a un líder de ventas, por posición, no por texto.
+        if (stripos((string)($fila['puesto_lr'] ?? ''), 'LIDER') === false) continue;
+        $d = RankingAtribucionServiceV06::normalizarDistrito($fila['distrito'] ?? null);
+        $pos = trim((string)($fila['id_posicion'] ?? ''));
+        $super = trim((string)($fila['posicion_lr'] ?? ''));
+        $talento = trim((string)($fila['numero_talento_gs'] ?? ''));
+        $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
+        if ($d === null || $pos === '' || $super === '' || $talento === ''
+            || stripos($talento, 'VACANTE') !== false || $nombre === '' || strtoupper($nombre) === 'VACANTE') continue;
+        if (count($porPosicion[$d][$pos] ?? []) !== 1) continue; // HC duplicado = no certificar.
 
-        $folios = [];
-        $res_v = mysqli_query($conexion, $sql_vendedores);
-        while ($res_v && $vrow = mysqli_fetch_assoc($res_v)) {
-            $folio = trim((string)($vrow['folio_empleado'] ?? ''));
-            if ($folio !== '') $folios[] = $folio;
+        if ($super === $pos) {
+            // Parche de autorreferencia: solo HC → nombre del líder único de la MISMA foto.
+            $nomSuperior = tx_coach_nombre_clave_hc_staging((string)($fila['nombre_linea_reporte'] ?? ''));
+            $candidatos = $lideresPorNombre[$d][$nomSuperior] ?? [];
+            if ($nomSuperior === '' || count($candidatos) !== 1) continue;
+            $idLider = $candidatos[0];
+        } else {
+            $idLider = $d.'|'.$super;
         }
-        $folios = array_unique(array_values($folios));
-        $hc_activo_real = count($folios);
-
-        // Parche HIC-Fallback v1.0:
-        // - Para instalaciones/ARPU/spark se agregan folios históricos equivalentes.
-        // - Para productividad Coach, el denominador debe conservar el HC activo real
-        //   de la semana vigente, NO el total de aliases HIC. Si se cuenta cada alias
-        //   como HC adicional, la productividad se subestima (caso Carrillo Camacho).
-        $folios_hic = tx_hic_aliases_folios_dashboard($conexion, $folios);
-        if (!empty($folios_hic)) {
-            $folios = $folios_hic;
-        }
-
-        $out[$id_pos] = [
-            'id_posicion' => $id_pos,
-            'coach' => $row['coach'] ?? '',
-            'distrito' => $row['distrito'] ?? '',
-            'lider' => $row['lider'] ?? '',
-            'folios' => $folios,
-            'hc_activo' => $hc_activo_real,
-            'instalaciones' => 0,
-            'arpu' => 0,
-            'productividad' => 0,
-            'prod3m' => 0,
-            'spark' => []
+        if (!isset($lideres[$idLider]) || $idLider === $d.'|'.$pos) continue;
+        $clave = $d.'|'.$pos;
+        $coaches[$clave] = [
+            'id_posicion'=>$pos, 'coach'=>$nombre, 'distrito'=>$d,
+            'lider'=>$lideres[$idLider], 'lider_id'=>$idLider,
+            'hc_activo'=>0, 'instalaciones'=>0, 'productividad'=>0.0,
+            'arpu'=>0.0, 'spark'=>array_fill(0, 6, 0), '_personas'=>[],
+            '_ingreso_neto'=>0.0, '_arpu_cuentas'=>0,
         ];
     }
 
-    return $out;
-}
-
-function tx_sparkline_coach_dashboard($conexion, $folios, $fecha_corte_timestamp) {
-    $out = array_fill(0, 6, 0);
-    if (empty($folios)) return $out;
-
-    $folios_sql = tx_sql_in_escaped($conexion, $folios);
-    $fecha_fin = date('Y-m-d', $fecha_corte_timestamp);
-    $fecha_ini = date('Y-m-d', strtotime('-5 weeks', strtotime('monday this week', $fecha_corte_timestamp)));
-
-    $sql = "
-        SELECT YEARWEEK(fecha, 3) AS yw, COUNT(cuenta) AS total
-        FROM instalaciones
-        WHERE fecha BETWEEN '$fecha_ini' AND '$fecha_fin'
-          AND folio_empleado IN ($folios_sql)
-          AND origen_prospecto <> '-'
-        GROUP BY YEARWEEK(fecha, 3)
-        ORDER BY yw
-    ";
-    $res = mysqli_query($conexion, $sql);
-
-    $keys = [];
-    for ($i = 5; $i >= 0; $i--) {
-        $ts = strtotime('-'.$i.' weeks', strtotime('monday this week', $fecha_corte_timestamp));
-        $keys[] = date('oW', $ts);
+    // HIC identifica PERSONAS, no plazas. Solo equivalencias no ambiguas.
+    $hic = $motor->resolverEquivalenciasHic($motor->cargarHic());
+    foreach ($filas as $fila) {
+        if (stripos((string)($fila['puesto_lr'] ?? ''), 'COACH') === false) continue;
+        $d = RankingAtribucionServiceV06::normalizarDistrito($fila['distrito'] ?? null);
+        $posCoach = trim((string)($fila['posicion_lr'] ?? ''));
+        $folio = trim((string)($fila['numero_talento_gs'] ?? ''));
+        $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
+        if ($d === null || $posCoach === '' || $folio === '' || stripos($folio, 'VACANTE') !== false
+            || $nombre === '' || strtoupper($nombre) === 'VACANTE') continue;
+        $key = $d.'|'.$posCoach;
+        if (!isset($coaches[$key])) continue;
+        $persona = (($hic['estados'][$folio] ?? '') === 'HIC_AMBIGUA')
+            ? $folio : ($hic['canonicos'][$folio] ?? $folio);
+        $coaches[$key]['_personas'][(string)$persona] = true;
     }
-    $map = array_fill_keys($keys, 0);
-
-    while ($res && $row = mysqli_fetch_assoc($res)) {
-        $yw = (string)($row['yw'] ?? '');
-        if (isset($map[$yw])) $map[$yw] = (int)($row['total'] ?? 0);
+    foreach ($coaches as $key => &$coach) {
+        $coach['hc_activo'] = count($coach['_personas']);
+        unset($coach['_personas']);
     }
-
-    return array_values($map);
+    unset($coach);
+    // Igual que el Ranking Coach, únicamente plazas con vendedores activos.
+    return array_filter($coaches, static fn($c)=>(int)$c['hc_activo'] > 0);
 }
 
 /**
@@ -3243,101 +3186,113 @@ function tx_piso_volumen_top_coaches_dashboard(string $fecha_inicio, string $fec
     return (int)ceil($piso_prorrateado - 1e-9);
 }
 
-function tx_build_top_regional_coaches_dashboard($conexion, $coaches, $fecha_inicio, $fecha_fin, $dias_productividad, $fecha_corte_timestamp) {
-    if (empty($coaches)) return [[], []];
+/**
+ * Calcula ambos cuadros sobre EXACTAMENTE las cuentas certificadas de Motor HC.
+ * TOP mantiene el piso prorrateado (150/mes); BOTTOM no aplica filtro de piso.
+ * Reutiliza el cálculo HC ya disponible en INDEX si cubre la ventana necesaria.
+ */
+function tx_build_coaches_motor_hc_staging(
+    mysqli $conexion, RankingAtribucionServiceV06 $motor,
+    string $desde, string $hasta, int $diasHabiles,
+    ?array $respuestaAnterior = null, ?string $respuestaDesde = null
+): array {
+    $coaches = tx_coaches_foto_motor_hc_staging($motor, $desde, $hasta);
+    $fechaCorte = new DateTimeImmutable($hasta);
+    $lunesActual = $fechaCorte->modify('monday this week');
+    $inicioSpark = $lunesActual->modify('-5 weeks')->format('Y-m-d');
+    $mesesVerificados = false;
+    if ($respuestaAnterior !== null && $respuestaDesde !== null && $respuestaDesde <= $inicioSpark
+        && !empty($respuestaAnterior['conciliacion_comercial']['verificada'])) {
+        $respuesta = $respuestaAnterior;
+        $mesesVerificados = true;
+    } else {
+        $fechaInicioMotor = min($desde, $inicioSpark);
+        $respuesta = $motor->obtenerInstalacionesJerarquia($fechaInicioMotor, $hasta);
+    }
+    if (empty($respuesta['conciliacion_comercial']['verificada'])) {
+        throw new RuntimeException('TOP/BOTTOM Coaches: conciliación Motor HC no verificada');
+    }
 
-    foreach ($coaches as $id_pos => &$coach) {
-        $folios = $coach['folios'] ?? [];
-        if (empty($folios)) {
-            $coach['spark'] = array_fill(0, 6, 0);
-            continue;
+    $clavesSemana = [];
+    for ($i = 5; $i >= 0; --$i) {
+        $fecha = $lunesActual->modify('-'.$i.' weeks');
+        $clavesSemana[$fecha->format('oW')] = count($clavesSemana);
+    }
+
+    $eventosPeriodo = []; $claveGrupoCoach = []; $sinPlaza = 0;
+    foreach (($respuesta['cuentas'] ?? []) as $evento) {
+        $fecha = substr((string)($evento['fecha'] ?? ''), 0, 10);
+        if ($fecha < $inicioSpark || $fecha > $hasta) {
+            if ($fecha < $desde || $fecha > $hasta) continue;
         }
-
-        $folios_sql = tx_sql_in_escaped($conexion, $folios);
-        $sql = "
-            SELECT
-                COUNT(cuenta) AS instalaciones,
-                COALESCE(SUM(precio_pronto_pago),0) AS ingreso,
-                SUM(CASE WHEN precio_pronto_pago > 0 THEN 1 ELSE 0 END) AS inst_arpu
-            FROM instalaciones
-            WHERE fecha BETWEEN '$fecha_inicio' AND '$fecha_fin'
-              AND origen_prospecto <> '-'
-              AND folio_empleado IN ($folios_sql)
-        ";
-        $res = mysqli_query($conexion, $sql);
-        $row = $res ? mysqli_fetch_assoc($res) : null;
-
-        $inst = (int)($row['instalaciones'] ?? 0);
-        $ingreso = (float)($row['ingreso'] ?? 0);
-        $inst_arpu = (int)($row['inst_arpu'] ?? 0);
-        $hc_activo = max(0, (int)($coach['hc_activo'] ?? 0));
-
-        $coach['instalaciones'] = $inst;
-        $coach['productividad'] = ($dias_productividad > 0 && $hc_activo > 0) ? round($inst / $hc_activo / $dias_productividad, 2) : 0;
-        $coach['arpu'] = $inst_arpu > 0 ? round($ingreso / $inst_arpu, 2) : 0;
-        $coach['spark'] = tx_sparkline_coach_dashboard($conexion, $folios, $fecha_corte_timestamp);
-    }
-    unset($coach);
-
-    $fecha_ini_3m = date('Y-m-01', strtotime('first day of -3 month', $fecha_corte_timestamp));
-    $fecha_fin_3m = date('Y-m-t', strtotime('last day of -1 month', $fecha_corte_timestamp));
-    $dias_3m = tx_dias_habiles_ultimos_3_meses_dashboard($conexion, $fecha_corte_timestamp);
-
-    foreach ($coaches as $id_pos => &$coach) {
-        $folios = $coach['folios'] ?? [];
-        if (empty($folios)) continue;
-
-        $folios_sql = tx_sql_in_escaped($conexion, $folios);
-        $sql3 = "
-            SELECT COUNT(cuenta) AS instalaciones_3m
-            FROM instalaciones
-            WHERE fecha BETWEEN '$fecha_ini_3m' AND '$fecha_fin_3m'
-              AND origen_prospecto <> '-'
-              AND folio_empleado IN ($folios_sql)
-        ";
-        $res3 = mysqli_query($conexion, $sql3);
-        $row3 = $res3 ? mysqli_fetch_assoc($res3) : null;
-        $inst3m = (int)($row3['instalaciones_3m'] ?? 0);
-        $hc_activo = max(0, (int)($coach['hc_activo'] ?? 0));
-        $coach['prod3m'] = ($dias_3m > 0 && $hc_activo > 0) ? round($inst3m / $hc_activo / $dias_3m, 2) : 0;
-    }
-    unset($coach);
-
-    $lista = array_values(array_filter($coaches, function($r) {
-        return strtoupper(trim((string)($r['coach'] ?? ''))) !== 'VACANTE';
-    }));
-
-    // SOLO TOP: primero exigir el piso mínimo de instalaciones del rango.
-    // Un coach con mejor PROD pero sin volumen NO desplaza a uno elegible.
-    // BOTTOM se calcula desde $lista sin filtrar, exactamente como antes.
-    $piso_minimo_top = tx_piso_volumen_top_coaches_dashboard($fecha_inicio, $fecha_fin);
-    $top = array_values(array_filter($lista, static function($r) use ($piso_minimo_top) {
-        return (int)($r['instalaciones'] ?? 0) >= $piso_minimo_top;
-    }));
-    usort($top, function($a, $b) {
-        if ($a['productividad'] == $b['productividad']) return $b['instalaciones'] <=> $a['instalaciones'];
-        return $b['productividad'] <=> $a['productividad'];
-    });
-    $top = array_slice($top, 0, 5);
-
-    // BOTTOM Five Coaches:
-    // Debe salir del mismo universo de Coaches de Venta que Ranking Coach,
-    // no de todos los puestos que contengan la palabra COACH.
-    // Equivale a tomar los últimos 5 del Ranking Coach regional:
-    // menor productividad del rango seleccionado; en empate, menos instalaciones.
-    $off = $lista;
-    usort($off, function($a, $b) {
-        if ($a['productividad'] == $b['productividad']) {
-            if ((int)$a['instalaciones'] === (int)$b['instalaciones']) {
-                return strcmp((string)$a['coach'], (string)$b['coach']);
+        $lider = (string)($evento['lider_id'] ?? '');
+        $idCoach = trim((string)($evento['coach_id'] ?? ''));
+        if ($lider === '' || $idCoach === '') continue;
+        $d = explode('|', $lider, 2)[0];
+        $clave = $d.'|'.$idCoach;
+        if (!isset($coaches[$clave])) { if ($fecha >= $desde && $fecha <= $hasta) ++$sinPlaza; continue; }
+        $fechaISO = new DateTimeImmutable($fecha);
+        $semana = $fechaISO->format('oW');
+        if (isset($clavesSemana[$semana])) {
+            $coaches[$clave]['spark'][$clavesSemana[$semana]]++;
+        }
+        if ($fecha >= $desde && $fecha <= $hasta) {
+            $coaches[$clave]['instalaciones']++;
+            $eventosPeriodo[] = $evento;
+            $grupo = $lider.'|'.$idCoach.'|'.(string)($evento['vendedor_id'] ?? '');
+            if (isset($claveGrupoCoach[$grupo]) && $claveGrupoCoach[$grupo] !== $clave) {
+                throw new LogicException('Motor HC: agrupación comercial de Coach inconsistente');
             }
-            return ((int)$a['instalaciones']) <=> ((int)$b['instalaciones']);
+            $claveGrupoCoach[$grupo] = $clave;
         }
-        return $a['productividad'] <=> $b['productividad'];
-    });
-    $off = array_slice($off, 0, 5);
+    }
 
-    return [$top, $off];
+    // Precio lista sin IVA del Motor Comercial, sobre LAS MISMAS cuentas HC.
+    if ($eventosPeriodo) {
+        require_once __DIR__.'/includes/motor_comercial_STAGING.php';
+        if (!class_exists('MotorComercial')) throw new RuntimeException('Motor Comercial STAGING no disponible para ARPU Coach');
+        $motorComercial = new MotorComercial($conexion);
+        $detalles = $motorComercial->resumirVendedores($eventosPeriodo, $desde, $hasta);
+        $acumuladas = 0;
+        foreach ($detalles as $grupo => $detalle) {
+            $clave = $claveGrupoCoach[$grupo] ?? null;
+            if ($clave === null || !isset($coaches[$clave])) throw new LogicException('Grupo HC del Coach sin correspondencia');
+            $coaches[$clave]['_ingreso_neto'] += (float)($detalle['arpu_ingreso_neto'] ?? 0);
+            $coaches[$clave]['_arpu_cuentas'] += (int)($detalle['arpu_cuentas'] ?? 0);
+            $acumuladas += (int)($detalle['total'] ?? 0);
+        }
+        if ($acumuladas !== count($eventosPeriodo)) throw new LogicException('TOP/BOTTOM Coaches: Motor Comercial no concilia con Motor HC');
+    }
+
+    foreach ($coaches as &$coach) {
+        $ins = (int)$coach['instalaciones'];
+        $hc = (int)$coach['hc_activo'];
+        $coach['productividad'] = ($hc > 0 && $diasHabiles > 0) ? round($ins / $hc / $diasHabiles, 2) : 0.0;
+        $coach['arpu'] = (int)$coach['_arpu_cuentas'] > 0
+            ? round($coach['_ingreso_neto'] / $coach['_arpu_cuentas'], 2) : 0.0;
+        unset($coach['_arpu_cuentas'], $coach['_ingreso_neto']);
+    }
+    unset($coach);
+
+    $lista = array_values($coaches);
+    $piso = tx_piso_volumen_top_coaches_dashboard($desde, $hasta);
+    $top = array_values(array_filter($lista, static fn($c)=>(int)$c['instalaciones'] >= $piso));
+    usort($top, static function($a,$b) {
+        $r = $b['productividad'] <=> $a['productividad'];
+        if ($r !== 0) return $r;
+        $r = $b['instalaciones'] <=> $a['instalaciones'];
+        return $r !== 0 ? $r : strcmp((string)$a['coach'], (string)$b['coach']);
+    });
+    $bottom = $lista;
+    usort($bottom, static function($a,$b) {
+        $r = $a['productividad'] <=> $b['productividad'];
+        if ($r !== 0) return $r;
+        $r = $a['instalaciones'] <=> $b['instalaciones'];
+        return $r !== 0 ? $r : strcmp((string)$a['coach'], (string)$b['coach']);
+    });
+    return [array_slice($top,0,5), array_slice($bottom,0,5),
+        ['coaches'=>count($coaches),'certificadas'=>count($eventosPeriodo),
+         'sin_coach_foto'=>$sinPlaza, 'hc_reutilizado'=>$mesesVerificados]];
 }
 
 // Productividad vendedor = instalaciones / días hábiles del rango seleccionado.
@@ -3350,27 +3305,37 @@ $dias_productividad_vendedor = tx_dias_habiles_rango_mes(
 );
 if ($dias_productividad_vendedor <= 0) $dias_productividad_vendedor = $dias_rango_dashboard;
 
-// TOP REGIONAL COACHES: se calcula con todos los coaches activos de la región.
-$coaches_regional_productividad = tx_get_coaches_regional_dashboard(
-    $conexion,
-    $semana_actual,
-    $anio_actual,
-    $puestos_comerciales
-);
-
-// Se prorratea sobre el rango real seleccionado, incluso si cruza meses.
-// Los días hábiles siguen reservados para la fórmula de productividad.
+// TOP/BOTTOM COACHES: cuenta certificada con jerarquía por semana del evento.
+// Se calcula REGIONAL para todos los perfiles, independiente del drill-down.
 $tx_piso_min_top_coaches = tx_piso_volumen_top_coaches_dashboard($fecha_inicio_dashboard, $fecha_fin_dashboard);
 $tx_dias_cal_top_coaches = (int)((new DateTimeImmutable($fecha_inicio_dashboard))
     ->diff(new DateTimeImmutable($fecha_fin_dashboard))->days) + 1;
-list($top_productividad_coaches, $top_offender_coaches) = tx_build_top_regional_coaches_dashboard(
-    $conexion,
-    $coaches_regional_productividad,
-    $fecha_inicio_dashboard,
-    $fecha_fin_dashboard,
-    $dias_productividad_vendedor,
-    $fecha_corte_timestamp
-);
+$top_productividad_coaches = [];
+$top_offender_coaches = [];
+$tx_coaches_motor_auditoria = [];
+$tx_coaches_motor_error = null;
+try {
+    require_once __DIR__.'/includes/motor_hc.php';
+    if (!class_exists('RankingAtribucionServiceV06')) {
+        throw new RuntimeException('La clase Motor HC v0.6.2 no está disponible');
+    }
+    $tx_motor_coaches = isset($tx_stg_motor_hc) && $tx_stg_motor_hc instanceof RankingAtribucionServiceV06
+        ? $tx_stg_motor_hc : new RankingAtribucionServiceV06($conexion);
+    $tx_respuesta_previa_coaches = isset($tx_stg_respuesta_hc) && is_array($tx_stg_respuesta_hc)
+        ? $tx_stg_respuesta_hc : null;
+    list($top_productividad_coaches, $top_offender_coaches, $tx_coaches_motor_auditoria) =
+        tx_build_coaches_motor_hc_staging(
+            $conexion, $tx_motor_coaches,
+            $fecha_inicio_dashboard, $fecha_fin_dashboard,
+            $dias_productividad_vendedor,
+            $tx_respuesta_previa_coaches,
+            $tx_respuesta_previa_coaches !== null ? ($tx_stg_inicio_tendencia ?? null) : null
+        );
+} catch (Throwable $e) {
+    // Fallo explícito: NO exhibir números reconstruidos por texto/folios.
+    $tx_coaches_motor_error = $e->getMessage();
+    error_log('TalIA INDEX STAGING TOP/BOTTOM Coaches Motor HC: '.$tx_coaches_motor_error);
+}
 
 // TOP REGIONAL: se calcula con toda la plantilla comercial activa, sin importar el scope del tablero.
 $vendedores_regional_productividad = tx_get_vendedores_regional_dashboard(
@@ -5395,7 +5360,7 @@ include __DIR__ . '/includes/sidebar.php';
 
 
     <!-- TOP REGIONAL PRODUCTIVIDAD COACHES -->
-    <?php if (!empty($top_productividad_coaches) || !empty($top_offender_coaches)): ?>
+    <?php if (!empty($top_productividad_coaches) || !empty($top_offender_coaches) || $tx_coaches_motor_error !== null): ?>
     <div class="top-productividad-grid">
         <?php
             $renderTopCoachTable = function($titulo, $subtitulo, $items, $extraClass = '', $mensajeVacio = 'Sin datos para el rango seleccionado.') {
@@ -5432,10 +5397,10 @@ include __DIR__ . '/includes/sidebar.php';
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
                             <td><div class="seller-small" title="<?= htmlspecialchars($row['lider'] ?? '') ?>"><?= htmlspecialchars($row['lider'] ?? '') ?></div></td>
-                            <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
+                            <td class="seller-num" title="Cuentas certificadas por Motor HC v0.6.2"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
                             <td class="seller-num">
                                 <div class="seller-prod">
-                                    <strong><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
+                                    <strong title="<?= htmlspecialchars(number_format((int)($row['instalaciones'] ?? 0)).' INS / '.number_format((int)($row['hc_activo'] ?? 0)).' HC activo / '.(int)$GLOBALS['dias_productividad_vendedor'].' días hábiles', ENT_QUOTES, 'UTF-8') ?>"><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
                                     <div class="sparkline" title="Tendencia últimas 6 semanas">
                                         <?php foreach ($spark as $sv): ?>
                                             <span style="height:<?= max(3, round(((int)$sv / $sparkMax) * 16)) ?>px;"></span>
@@ -5457,12 +5422,12 @@ include __DIR__ . '/includes/sidebar.php';
 
         <?php $renderTopCoachTable(
             'TOP Five Coaches',
-            'Mejor PROD. regional · Piso mínimo: '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días calendario)',
+            'Motor HC · Mejor PROD. · Piso mínimo '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días)',
             $top_productividad_coaches,
             'top-productividad',
-            'Ningún coach cumple el piso mínimo de '.number_format($tx_piso_min_top_coaches).' instalaciones para este rango.'
+            ($tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Ningún coach cumple el piso mínimo de '.number_format($tx_piso_min_top_coaches).' instalaciones para este rango.')
         ); ?>
-        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender'); ?>
+        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Motor HC · Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender', $tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Sin coaches activos para este corte.'); ?>
     </div>
     <?php endif; ?>
 
