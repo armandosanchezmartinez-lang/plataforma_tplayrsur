@@ -4553,6 +4553,68 @@ if ($tx_geo_sum_count > 0) {
         .tx-evo-participacion-table th:not(:first-child) {min-width:67px;}
         .tx-evo-participacion-table td:not(:first-child) {min-width:67px;}
         .evo-toggle {flex-wrap:wrap;}
+        /* STAGING navegabilidad v2.1: dos matrices independientes en su tarjeta.
+           minmax(0,1fr) impide que el contenido de 10 meses empuje Instalaciones fuera.
+           Sólo afecta Participación; NO cambia la grilla de gráficas Evolución. */
+        #txEvoParticipationCard .tx-participacion-grid {
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:22px;
+            width:100%;
+            max-width:100%;
+            align-items:start;
+        }
+        #txEvoParticipationCard .tx-participacion-grid > div {
+            min-width:0;
+            max-width:100%;
+            width:100%;
+            overflow:hidden;
+        }
+        #txEvoParticipationCard .tx-evo-table-scroll {
+            display:block;
+            width:100%;
+            min-width:0;
+            max-width:100%;
+            overflow-x:auto !important;
+            overflow-y:hidden;
+            box-sizing:border-box;
+            scrollbar-width:thin;
+            scrollbar-color:#8b9db7 #eef2f8;
+            scrollbar-gutter:auto;
+            -webkit-overflow-scrolling:touch;
+            touch-action:pan-x pan-y;
+        }
+        #txEvoParticipationCard .tx-evo-participacion-table {
+            width:max-content !important;
+            min-width:100%;
+            table-layout:auto;
+        }
+        #txEvoParticipationCard .tx-evo-participacion-table th,
+        #txEvoParticipationCard .tx-evo-participacion-table td {white-space:nowrap;}
+        #txEvoParticipationCard .tx-evo-participacion-table th:first-child,
+        #txEvoParticipationCard .tx-evo-participacion-table td:first-child {min-width:130px;}
+        .tx-participacion-nav {
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+            flex-wrap:wrap;
+            margin-bottom:7px;
+        }
+        .tx-participacion-nav-controls {display:inline-flex;align-items:center;gap:7px;}
+        .tx-participacion-nav-label {font-size:.63rem;font-weight:700;color:#71809d;white-space:nowrap;}
+        .tx-participacion-arrow {
+            width:29px;height:28px;display:inline-flex;align-items:center;justify-content:center;
+            border:1px solid #d8def0;background:#f0f4ff;border-radius:9px;
+            color:#6f28cf;font-size:1rem;font-weight:900;cursor:pointer;
+        }
+        .tx-participacion-arrow:hover:not(:disabled){background:#e7deff;border-color:#ae8aff;}
+        .tx-participacion-arrow:disabled{opacity:.3;cursor:default;}
+        .tx-participacion-arrow:focus-visible,
+        #txEvoParticipationCard .tx-evo-table-scroll:focus-visible{outline:2px solid #8237e8;outline-offset:2px;}
+        @media(max-width:900px){
+            #txEvoParticipationCard .tx-participacion-grid{grid-template-columns:minmax(0,1fr);}
+        }
 
 </style>
 
@@ -5115,11 +5177,18 @@ include __DIR__ . '/includes/sidebar.php';
     <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked) || $tx_evo_desde_enero): ?>
     <div class="evo-card" id="txEvoParticipationCard" style="margin-top:20px;">
         <div class="chart-title" id="txEvoParticipationTitle"><?= htmlspecialchars($evo_participacion_titulo) ?></div>
-        <div class="evo-grid" style="margin-top:16px;">
+        <div class="evo-grid tx-participacion-grid" style="margin-top:16px;">
             <!-- VENTAS -->
             <div>
-                <div class="evo-sub" id="txEvoParticipationVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
-                <div class="top-productividad-table-wrap tx-evo-table-scroll">
+                <div class="tx-participacion-nav">
+                    <div class="evo-sub" id="txEvoParticipationVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                    <div class="tx-participacion-nav-controls" aria-label="Navegar los meses de ventas">
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="-1" aria-label="Ver meses anteriores en Ventas" title="Meses anteriores">&#8592;</button>
+                        <span class="tx-participacion-nav-label">Desplazar meses</span>
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="1" aria-label="Ver meses siguientes en Ventas" title="Meses siguientes">&#8594;</button>
+                    </div>
+                </div>
+                <div class="top-productividad-table-wrap tx-evo-table-scroll" id="txEvoVentScroll" tabindex="0" role="region" aria-label="Matriz de participación de ventas, desplázate horizontalmente para consultar todos los meses">
                 <table class="tx-evo-participacion-table" id="txEvoVentTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead id="txEvoVentThead">
                         <tr>
@@ -5160,8 +5229,15 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
             <!-- INSTALACIONES -->
             <div>
-                <div class="evo-sub" id="txEvoParticipationInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
-                <div class="top-productividad-table-wrap tx-evo-table-scroll">
+                <div class="tx-participacion-nav">
+                    <div class="evo-sub" id="txEvoParticipationInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                    <div class="tx-participacion-nav-controls" aria-label="Navegar los meses de instalaciones">
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="-1" aria-label="Ver meses anteriores en Instalaciones" title="Meses anteriores">&#8592;</button>
+                        <span class="tx-participacion-nav-label">Desplazar meses</span>
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="1" aria-label="Ver meses siguientes en Instalaciones" title="Meses siguientes">&#8594;</button>
+                    </div>
+                </div>
+                <div class="top-productividad-table-wrap tx-evo-table-scroll" id="txEvoInstScroll" tabindex="0" role="region" aria-label="Matriz de participación de instalaciones, desplázate horizontalmente para consultar todos los meses">
                 <table class="tx-evo-participacion-table" id="txEvoInstTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead id="txEvoInstThead">
                         <tr>
@@ -5644,7 +5720,7 @@ new Chart(document.getElementById('cArpuHist'), {
                 clip: false,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
-                display: ctx => arpuLabels.length <= 7 || ctx.dataIndex === arpuLabels.length - 1 || ctx.dataIndex % 2 === 0,
+                display: ctx => ((arpuLabels.length - 1 - ctx.dataIndex) % 2 === 0) && Number(arpuData[ctx.dataIndex] || 0) > 0,
                 formatter: value => value > 0 ? '$' + Math.round(value).toLocaleString('es-MX') : ''
             },
             tooltip: {
@@ -5982,8 +6058,47 @@ document.querySelectorAll('.tx-evo-toggle-link').forEach(a => {
     });
 });
 
+// STAGING navegabilidad: control por matriz, independiente de la otra tabla.
+// Por defecto se muestra el mes más reciente, que es el corte ejecutivo vigente.
+const txEvoScrollElements = {
+    vent: document.getElementById('txEvoVentScroll'),
+    inst: document.getElementById('txEvoInstScroll')
+};
+function txUpdateParticipationArrows(source) {
+    const el = txEvoScrollElements[source];
+    if (!el) return;
+    const max = Math.max(0, el.scrollWidth - el.clientWidth);
+    document.querySelectorAll('.tx-participacion-arrow[data-scroll-table="' + source + '"]').forEach(btn => {
+        const dir = Number(btn.dataset.scrollDir || 0);
+        btn.disabled = dir < 0 ? el.scrollLeft <= 2 : el.scrollLeft >= max - 2;
+    });
+}
+function txResetParticipationToLatest() {
+    Object.entries(txEvoScrollElements).forEach(([source, el]) => {
+        if (!el) return;
+        el.scrollLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+        txUpdateParticipationArrows(source);
+    });
+}
+Object.entries(txEvoScrollElements).forEach(([source, el]) => {
+    if (el) el.addEventListener('scroll', () => txUpdateParticipationArrows(source), {passive:true});
+});
+document.querySelectorAll('.tx-participacion-arrow').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const source = btn.dataset.scrollTable;
+        const el = txEvoScrollElements[source];
+        if (!el) return;
+        const dir = Number(btn.dataset.scrollDir || 0);
+        const delta = Math.max(200, Math.round(el.clientWidth * .70));
+        el.scrollBy({left:delta * dir,behavior:'smooth'});
+    });
+});
 // Re-render inicial para que tablas y controles queden bajo el mismo motor JS.
 txApplyEvoView(txEvoInitialView, false);
+requestAnimationFrame(txResetParticipationToLatest);
+window.addEventListener('resize', () => {
+    Object.keys(txEvoScrollElements).forEach(txUpdateParticipationArrows);
+}, {passive:true});
 </script>
 
 
