@@ -1854,7 +1854,7 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
 
         // UNA sola certificacion HC para toda la tendencia Ene-2026..periodo elegido.
         // Cada mes se recorta al rango seleccionado (MTD, custom o completo).
-        $tx_stg_inicio_tendencia = min('2026-01-01', $fecha_inicio_dashboard);
+        $tx_stg_inicio_tendencia = ($periodo === 'semanal') ? min('2025-12-29', $fecha_inicio_dashboard) : min('2026-01-01', $fecha_inicio_dashboard);
         $tx_stg_hasta_tendencia = $fecha_fin_dashboard;
         if ($tx_stg_hasta_tendencia < $tx_stg_inicio_tendencia) {
             throw new RuntimeException('Periodo anterior a enero de 2026');
@@ -1999,7 +1999,7 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
 // Preservar resultado de MOTOR HC para la tarjeta jerárquica.
 // En perfiles gerenciales, ARPU y Mix se calculan con un universo independiente.
 $tx_stg_hc_ok = $tx_stg_ok;
-if ($tx_stg_aplicable && $tx_stg_gerencial) {
+if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal') {
     try {
         require_once __DIR__ . '/includes/motor_comercial_STAGING.php';
         $tx_stg_motor_gerencial = (isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial)
@@ -2314,7 +2314,26 @@ $vent_2p = (int)($mix_vent['p2'] ?? 0);
 // Canal conserva consultas históricas originales, solo amplía ventana de fechas.
 $tx_evo_desde_enero = ((int)$anio_query >= 2026 && !$tx_stg_es_vendedor);
 $meses_labels = [];
-if ($tx_evo_desde_enero) {
+$tx_evo_week_keys = [];
+$tx_evo_week_ranges = [];
+if ($periodo === 'semanal' && (int)$tx_nav_anio_semana >= 2026) {
+    // ISO 2026-S01: LUN 29/12/2025 a DOM 04/01/2026. No iniciar el 01-ene.
+    $tx_evo_primer_lunes = (new DateTimeImmutable('2026-01-04'))->setISODate(2026,1,1);
+    $tx_evo_ultimo_lunes = $tx_semana_lunes;
+    for ($lunes = $tx_evo_primer_lunes; $lunes <= $tx_evo_ultimo_lunes; $lunes = $lunes->modify('+7 days')) {
+        $domingo = $lunes->modify('+6 days');
+        // En el último período se rotula la fecha del corte, no un domingo futuro.
+        $finRotulo = ($lunes == $tx_evo_ultimo_lunes && $domingo->format('Y-m-d') > $fecha_fin_dashboard)
+            ? new DateTimeImmutable($fecha_fin_dashboard) : $domingo;
+        $tx_evo_week_keys[] = $lunes->format('oW');
+        $esSemanaCambioAnio = $lunes->format('Y') !== $finRotulo->format('Y');
+        $meses_labels[] = 'S'.$lunes->format('W').' · '.($esSemanaCambioAnio
+            ? $lunes->format('d/m/y').'–'.$finRotulo->format('d/m/y')
+            : $lunes->format('d/m').'–'.$finRotulo->format('d/m'));
+        $tx_evo_week_ranges[] = [$lunes->format('Y-m-d'),$finRotulo->format('Y-m-d')];
+    }
+    $fecha_inicio_evolucion = '2025-12-29';
+} elseif ($tx_evo_desde_enero) {
     $tx_evo_cursor = new DateTimeImmutable('2026-01-01');
     $tx_evo_hasta = new DateTimeImmutable(sprintf('%04d-%02d-01',$anio_query,$mes_actual));
     while ($tx_evo_cursor <= $tx_evo_hasta) {
@@ -2353,8 +2372,27 @@ $evo_vent_sub=match($evo_view) { 'oferta'=>'Ventas por oferta RES-NEG', 'play'=>
 $evo_inst_sub=match($evo_view) { 'oferta'=>'Instalaciones por oferta RES-NEG', 'play'=>'Instalaciones por Plays', 'bundle'=>'Instalaciones por Bundle', default=>'Instalaciones por origen' };
 $evo_col_label=match($evo_view) { 'oferta'=>'Oferta', 'play'=>'Play', 'bundle'=>'Bundle', default=>'Canal' };
 
+// En modo semanal los encabezados y las tablas representan SEMANAS ISO.
+if ($periodo === 'semanal' && $tx_evo_week_keys) {
+    $tx_evo_wlabel = 'Semanal ISO · desde S01 de 2026';
+    $evo_titulo = match($evo_view) {
+        'oferta' => 'Evolución semanal — Oferta RES-NEG',
+        'play' => 'Evolución semanal — Plays',
+        'bundle' => 'Evolución semanal — Bundle',
+        default => 'Evolución semanal — Canal de venta',
+    };
+    $evo_participacion_titulo = match($evo_view) {
+        'oferta' => 'Participación semanal por oferta RES-NEG (%)',
+        'play' => 'Participación semanal por Plays (%)',
+        'bundle' => 'Participación semanal por Bundle (%)',
+        default => 'Participación semanal por canal (%)',
+    };
+}
 // ARPU anterior del STAGING conserva íntegra su lógica.
-if ($tx_stg_aplicable && $tx_stg_ok) {
+if ($periodo === 'semanal' && $tx_evo_week_keys) {
+    $arpu_labels = $meses_labels;
+    $arpu_data = array_fill(0,count($meses_labels),null);
+} elseif ($tx_stg_aplicable && $tx_stg_ok) {
     $arpu_labels = $tx_stg_arpu_labels;
     $arpu_data = $tx_stg_arpu_data;
 } elseif (!$tx_stg_aplicable) {
@@ -2375,6 +2413,7 @@ if ($tx_stg_aplicable && $tx_stg_ok) {
 
 // CANAL DE VENTA: mismos SELECT, filtros, clasificaciones y participaciones del producto.
 // Sólo se amplía el período inicial; se limita al cierre seleccionado.
+if ($periodo !== 'semanal' || !$tx_evo_week_keys) {
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total
     FROM instalaciones
     WHERE fecha >= '$fecha_inicio_evolucion' AND fecha <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
@@ -2420,10 +2459,11 @@ while ($res_v && ($row=mysqli_fetch_assoc($res_v))) {
     }
 }
 
+}
 $tx_evo_fuente_catalogo_ok=false;
 $tx_evo_catalogo_error=null;
 $tx_evo_total_inst=[];$tx_evo_total_vent=[];
-if ($tx_evo_desde_enero) {
+if ($tx_evo_desde_enero && $periodo !== 'semanal') {
     try {
         if (!($conexion instanceof mysqli)) throw new RuntimeException('Conexión comercial no disponible');
         require_once __DIR__.'/includes/motor_comercial_STAGING.php';
@@ -2480,7 +2520,7 @@ if ($tx_evo_desde_enero) {
         $tx_evo_catalogo_error=$tx_evo_exc->getMessage();
         error_log('TalIA Index Evolution STAGING: '.$tx_evo_catalogo_error);
     }
-} else {
+} elseif ($periodo !== 'semanal') {
     // Perfil vendedor intacto: rama legado de RES/NEG de evolución, sin botón Bundle.
     $segmento_inst_expr_evo=tx_segmento_instalacion_expr_dashboard($conexion);
     $query_inst_oferta = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, ($segmento_inst_expr_evo) as oferta, COUNT(*) as total FROM instalaciones
@@ -2512,6 +2552,121 @@ if ($tx_evo_desde_enero) {
         }
     }
 }
+// ── SEMANAS ISO: una sola consulta agrupada por fuente; ENERO 2026 empieza 29-DIC-2025 ──
+// Nunca obtener el alcance desde GET: se reutiliza el scope de rol ya autorizado.
+// El motor STAGING clasifica con las MISMAS funciones que el mensual.
+if ($periodo === 'semanal' && $tx_evo_week_keys) {
+    try {
+        require_once __DIR__.'/includes/motor_comercial_STAGING.php';
+        $tx_evo_motor_sem = (isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial)
+            ? $tx_stg_motor_com : new MotorComercial($conexion);
+        if (!method_exists($tx_evo_motor_sem,'seriesSemanalesPorCatalogo')) {
+            throw new RuntimeException('Actualizar también motor_comercial_STAGING.php: faltan series ISO');
+        }
+        $tx_evo_scope_sem = $tx_stg_gerencial ? $tx_stg_scope_gerencial : ['tipo'=>'FOLIOS','folios'=>$folio_ids];
+        $tx_evo_result_sem = $tx_evo_motor_sem->seriesSemanalesPorCatalogo(
+            $fecha_inicio_evolucion,$fecha_fin_dashboard,$tx_evo_scope_sem,$tx_dashboard_dias_iso
+        );
+        if ($tx_evo_result_sem['semanas'] !== $tx_evo_week_keys) {
+            throw new LogicException('Semanas ISO de índice y Motor Comercial no concilian');
+        }
+        $tx_evo_fuente_catalogo_ok = true;
+        $tx_evo_total_inst = $tx_evo_result_sem['totales']['instalaciones'];
+        $tx_evo_total_vent = $tx_evo_result_sem['totales']['ventas'];
+        $tx_evo_dim_arrays = [];
+        foreach (['canal','oferta','play','bundle'] as $dim) {
+            foreach (['instalaciones','ventas'] as $origen) {
+                $matrix = [];
+                foreach ($tx_evo_result_sem['datos'][$dim][$origen] as $categoria => $serie) {
+                    $matrix[$categoria] = array_values($serie);
+                }
+                $tx_evo_dim_arrays[$dim][$origen]=$matrix;
+            }
+        }
+        $datos_inst_stacked=$tx_evo_dim_arrays['canal']['instalaciones'];
+        $datos_vent_stacked=$tx_evo_dim_arrays['canal']['ventas'];
+        $datos_inst_oferta_stacked=$tx_evo_dim_arrays['oferta']['instalaciones'];
+        $datos_vent_oferta_stacked=$tx_evo_dim_arrays['oferta']['ventas'];
+        $datos_inst_play_stacked=$tx_evo_dim_arrays['play']['instalaciones'];
+        $datos_vent_play_stacked=$tx_evo_dim_arrays['play']['ventas'];
+        $datos_inst_bundle_stacked=$tx_evo_dim_arrays['bundle']['instalaciones'];
+        $datos_vent_bundle_stacked=$tx_evo_dim_arrays['bundle']['ventas'];
+        // ARPU gerencial: TODOS los canales. Coach/Líder: SOLO eventos certificados HC.
+        if ($tx_stg_gerencial) {
+            $arpu_data=array_values($tx_evo_result_sem['arpu']);
+            $tx_stg_ok=true; $tx_stg_error=null;
+            $tx_stg_auditoria_arpu=[
+                'validos'=>(int)($tx_evo_result_sem['arpu_cuentas'][end($tx_evo_week_keys)]??0),
+                'catalogo_actual'=>0,
+            ];
+            $tx_evo_ultima_key=end($tx_evo_week_keys);
+            $tx_stg_universo_mes=(int)($tx_evo_total_inst[$tx_evo_ultima_key]??0);
+            $tx_stg_mix_2p=(int)($tx_evo_result_sem['datos']['play']['instalaciones']['2P'][$tx_evo_ultima_key]??0);
+            $tx_stg_mix_3p=(int)($tx_evo_result_sem['datos']['play']['instalaciones']['3P'][$tx_evo_ultima_key]??0);
+            $tx_stg_mix_sin_clasificar=(int)($tx_evo_result_sem['datos']['play']['instalaciones']['Sin clasificar'][$tx_evo_ultima_key]??0);
+        } elseif ($tx_stg_aplicable && $tx_stg_hc_ok) {
+            if (!method_exists($tx_evo_motor_sem,'indicadoresSemanalesHc')) {
+                throw new RuntimeException('Actualizar Motor Comercial STAGING: falta serie HC ISO');
+            }
+            $eventosHc = [];
+            foreach (($tx_stg_por_mes ?? []) as $eventosMes) foreach ($eventosMes as $e) {
+                $f=substr((string)($e['fecha']??''),0,10);
+                if ($f>=$fecha_inicio_evolucion && $f<=$fecha_fin_dashboard) $eventosHc[]=$e;
+            }
+            $arpuHcPorSemana = $tx_evo_motor_sem->indicadoresSemanalesHc(
+                $eventosHc,$fecha_inicio_evolucion,$fecha_fin_dashboard,$tx_dashboard_dias_iso
+            );
+            $arpu_data=[];
+            foreach ($tx_evo_week_keys as $key) $arpu_data[]=$arpuHcPorSemana[$key]['arpu']??null;
+            $tx_stg_ok=true; $tx_stg_error=null;
+        } elseif ($tx_stg_aplicable) {
+            // No convertir una falla del HC en permiso para mostrar ARPU de otros canales.
+            $arpu_data=array_fill(0,count($tx_evo_week_keys),null);
+        } else {
+            // Vendedor: se conserva alcance limitado exclusivamente a sus folios.
+            $arpu_data=array_values($tx_evo_result_sem['arpu']);
+        }
+        $arpu_labels=$meses_labels;
+        $tx_evo_semana_last=end($tx_evo_week_keys);
+        $tx_evo_semana_resumen=(string)($tx_evo_result_sem['rangos'][$tx_evo_semana_last]['desde']??'');
+        // El total semanal por dimensión debe coincidir EXACTAMENTE con el KPI de corte
+        // solo cuando están seleccionados los mismos días y se usa el mismo scope.
+        foreach (['ventas','instalaciones'] as $fuente) foreach (['canal','oferta','play','bundle'] as $dim) {
+            foreach ($tx_evo_week_keys as $k) {
+                $n=0;
+                foreach ($tx_evo_result_sem['datos'][$dim][$fuente] as $serie) $n+=(int)($serie[$k]??0);
+                if ($n !== (int)$tx_evo_result_sem['totales'][$fuente][$k]) {
+                    throw new LogicException('Índice: totales semanales no concilian '.$fuente.' '.$dim.' '.$k);
+                }
+            }
+        }
+    } catch (Throwable $tx_evo_sem_ex) {
+        $tx_evo_fuente_catalogo_ok=false;
+        $tx_evo_catalogo_error=$tx_evo_sem_ex->getMessage();
+        error_log('TalIA INDEX series ISO STAGING: '.$tx_evo_catalogo_error);
+        $datos_inst_stacked=$datos_vent_stacked=[];
+        $datos_inst_oferta_stacked=$datos_vent_oferta_stacked=[];
+        $datos_inst_play_stacked=$datos_vent_play_stacked=[];
+        $datos_inst_bundle_stacked=$datos_vent_bundle_stacked=[];
+        $arpu_data=array_fill(0,count($meses_labels),null);
+        $arpu_labels=$meses_labels;
+        if ($tx_stg_aplicable) {
+            $tx_stg_ok=false;
+            $tx_stg_error=$tx_evo_catalogo_error;
+        }
+    }
+}
+// El MIX circular se inicializó antes de cargar las series semanales. Sincronizar
+// sus variables finales con el Motor Comercial para evitar un donut en cero.
+if ($periodo === 'semanal' && $tx_evo_week_keys && $tx_stg_aplicable && $tx_stg_ok && $tx_stg_gerencial) {
+    $inst_2p = (int)$tx_stg_mix_2p;
+    $inst_3p = (int)$tx_stg_mix_3p;
+}
+// La vista vendedor conserva acceso limitado; las 4 dimensiones siguen el motor único.
+// Los títulos se ajustan para que la caché JS no restituya textos mensuales.
+$tx_evo_periodo_descripcion = ($periodo === 'semanal' && $tx_evo_week_keys)
+    ? 'Semanal ISO · desde S01 de 2026' : 'Desde enero 2026';
+
 // Guardar las cuatro vistas completas para navegación instantánea en cliente.
 // Canal conserva su fuente original; Oferta/Plays/Bundle provienen del Motor Comercial.
 $tx_evo_cache_views = [
@@ -2557,6 +2712,16 @@ $tx_evo_cache_views = [
     ],
 ];
 
+if ($periodo === 'semanal' && $tx_evo_week_keys) {
+    foreach ($tx_evo_cache_views as $key => &$cfg) {
+        $label = match($key) {
+            'oferta'=>'Oferta RES-NEG', 'play'=>'Plays', 'bundle'=>'Bundle', default=>'Canal de venta'
+        };
+        $cfg['titulo']='Evolución semanal ISO — '.$label;
+        $cfg['participacion_titulo']='Participación semanal ISO por '.$label.' (%)';
+    }
+    unset($cfg);
+}
 if ($evo_view==='oferta') {
     $datos_inst_stacked=$tx_evo_cache_views['oferta']['inst'];
     $datos_vent_stacked=$tx_evo_cache_views['oferta']['vent'];
@@ -4462,6 +4627,13 @@ if ($tx_geo_sum_count > 0) {
             box-sizing:border-box;
             overflow:hidden;
         }
+        /* Semanal: las 41+ semanas NO se comprimen: scroll horizontal por gráfica. */
+        .tx-historical-scroll {max-width:100%;min-width:0;}
+        .tx-weekly-scroll {width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;}
+        .tx-weekly-scroll .tx-weekly-evo-inner {width:max(100%, var(--tx-weekly-evo-width, 2100px));max-width:none;min-width:0;}
+        .tx-weekly-scroll .tx-weekly-arpu-inner {width:max(100%, var(--tx-weekly-arpu-width, 1900px));max-width:none;min-width:0;}
+        .tx-weekly-scroll .tx-weekly-arpu-inner canvas,
+        .tx-weekly-scroll .tx-weekly-evo-inner canvas {max-width:none !important;}
         .chart-wrap,
         .evo-wrap{
             position:relative;
@@ -5362,15 +5534,15 @@ include __DIR__ . '/includes/sidebar.php';
 
 
         <div class="chart-card arpu-card">
-            <div class="chart-title"><?= ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses') ?></div>
-            <div class="hierarchy-performance-sub" style="margin-top:2px;"><?= $tx_stg_aplicable ? 'Motor Comercial · Precio lista sin IVA · '.htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') : 'Mismo rango seleccionado · precio pronto pago' ?></div>
+            <div class="chart-title"><?= ($periodo === 'semanal' && $tx_evo_week_keys ? 'ARPU — Tendencia semanal ISO desde S01 de 2026' : ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses')) ?></div>
+            <div class="hierarchy-performance-sub" style="margin-top:2px;"><?= $tx_stg_aplicable ? 'Motor Comercial · Precio lista sin IVA · '.htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') : ($periodo === 'semanal' && $tx_evo_week_keys ? 'Motor Comercial · Precio lista sin IVA · Folios autorizados' : 'Mismo rango seleccionado · precio pronto pago') ?></div>
             <?php if ($tx_stg_aplicable && $tx_stg_ok && count($arpu_labels) > 0):
                 $tx_arpu_last = count($arpu_labels)-1;
                 $tx_arpu_last_value = $arpu_data[$tx_arpu_last] ?? null;
                 $tx_arpu_last_label = $arpu_labels[$tx_arpu_last] ?? '';
             ?>
-                <div class="tx-arpu-ultimo" aria-label="ARPU del último mes seleccionado">
-                    <span>Último mes · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
+                <div class="tx-arpu-ultimo" aria-label="ARPU del último período seleccionado">
+                    <span><?= $periodo === 'semanal' ? 'Última semana' : 'Último mes' ?> · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
                     <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin precio válido' ?></strong>
                 </div>
             <?php endif; ?>
@@ -5380,7 +5552,7 @@ include __DIR__ . '/includes/sidebar.php';
             <?php if ($tx_stg_aplicable && $tx_stg_error !== null): ?>
                 <div style="font-size:12px;color:#b91c1c;padding:8px 0;">Indicador no disponible: revisar el registro de errores de STAGING. No se muestran valores incompletos.</div>
             <?php endif; ?>
-            <div class="chart-wrap"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cArpuHist"></canvas></div>
+            <div class="tx-historical-scroll<?= $periodo === 'semanal' ? ' tx-weekly-scroll' : '' ?>" id="txArpuScroll"><div class="chart-wrap tx-weekly-arpu-inner"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cArpuHist"></canvas></div></div>
         </div>
 
         <div class="chart-card">
@@ -5420,16 +5592,16 @@ include __DIR__ . '/includes/sidebar.php';
                 <?php endif; ?>
             </div>
         </div>
-        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Totales por registro según el alcance autorizado; todos los canales en vistas gerenciales y folios autorizados en las demás.</div>
+        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Totales por registro según alcance autorizado; en vista SEMANAL, semana ISO 01 incluye los días de diciembre del año natural anterior.</div>
         <div id="txEvoError" class="tx-evo-error" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal' && !$tx_evo_fuente_catalogo_ok) ? '' : 'display:none;' ?>">No se pudo verificar la clasificación comercial. Consulta el log STAGING; no se muestran resultados estimados.</div>
         <div class="evo-grid">
             <div>
                 <div class="evo-sub" id="txEvoVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
-                <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
+                <div class="tx-historical-scroll<?= $periodo === 'semanal' ? ' tx-weekly-scroll' : '' ?>" id="txVentEvoScroll"><div class="evo-wrap tx-weekly-evo-inner"><canvas id="cVentEvo"></canvas></div></div>
             </div>
             <div>
                 <div class="evo-sub" id="txEvoInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
-                <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
+                <div class="tx-historical-scroll<?= $periodo === 'semanal' ? ' tx-weekly-scroll' : '' ?>" id="txInstEvoScroll"><div class="evo-wrap tx-weekly-evo-inner"><canvas id="cInstEvo"></canvas></div></div>
             </div>
         </div>
     </div>
@@ -5444,13 +5616,13 @@ include __DIR__ . '/includes/sidebar.php';
             <div>
                 <div class="tx-participacion-nav">
                     <div class="evo-sub" id="txEvoParticipationVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
-                    <div class="tx-participacion-nav-controls" aria-label="Navegar los meses de ventas">
-                        <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="-1" aria-label="Ver meses anteriores en Ventas" title="Meses anteriores">&#8592;</button>
-                        <span class="tx-participacion-nav-label">Desplazar meses</span>
-                        <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="1" aria-label="Ver meses siguientes en Ventas" title="Meses siguientes">&#8594;</button>
+                    <div class="tx-participacion-nav-controls" aria-label="Navegar los períodos de ventas">
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="-1" aria-label="Ver períodos anteriores en Ventas" title="Meses anteriores">&#8592;</button>
+                        <span class="tx-participacion-nav-label">Desplazar <?= $periodo === 'semanal' ? 'semanas' : 'meses' ?></span>
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="1" aria-label="Ver períodos siguientes en Ventas" title="Meses siguientes">&#8594;</button>
                     </div>
                 </div>
-                <div class="top-productividad-table-wrap tx-evo-table-scroll" id="txEvoVentScroll" tabindex="0" role="region" aria-label="Matriz de participación de ventas, desplázate horizontalmente para consultar todos los meses">
+                <div class="top-productividad-table-wrap tx-evo-table-scroll" id="txEvoVentScroll" tabindex="0" role="region" aria-label="Matriz de participación de ventas, desplázate horizontalmente para consultar todos los períodos">
                 <table class="tx-evo-participacion-table" id="txEvoVentTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead id="txEvoVentThead">
                         <tr>
@@ -5493,13 +5665,13 @@ include __DIR__ . '/includes/sidebar.php';
             <div>
                 <div class="tx-participacion-nav">
                     <div class="evo-sub" id="txEvoParticipationInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
-                    <div class="tx-participacion-nav-controls" aria-label="Navegar los meses de instalaciones">
-                        <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="-1" aria-label="Ver meses anteriores en Instalaciones" title="Meses anteriores">&#8592;</button>
-                        <span class="tx-participacion-nav-label">Desplazar meses</span>
-                        <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="1" aria-label="Ver meses siguientes en Instalaciones" title="Meses siguientes">&#8594;</button>
+                    <div class="tx-participacion-nav-controls" aria-label="Navegar los períodos de instalaciones">
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="-1" aria-label="Ver períodos anteriores en Instalaciones" title="Meses anteriores">&#8592;</button>
+                        <span class="tx-participacion-nav-label">Desplazar <?= $periodo === 'semanal' ? 'semanas' : 'meses' ?></span>
+                        <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="1" aria-label="Ver períodos siguientes en Instalaciones" title="Meses siguientes">&#8594;</button>
                     </div>
                 </div>
-                <div class="top-productividad-table-wrap tx-evo-table-scroll" id="txEvoInstScroll" tabindex="0" role="region" aria-label="Matriz de participación de instalaciones, desplázate horizontalmente para consultar todos los meses">
+                <div class="top-productividad-table-wrap tx-evo-table-scroll" id="txEvoInstScroll" tabindex="0" role="region" aria-label="Matriz de participación de instalaciones, desplázate horizontalmente para consultar todos los períodos">
                 <table class="tx-evo-participacion-table" id="txEvoInstTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead id="txEvoInstThead">
                         <tr>
@@ -6361,6 +6533,20 @@ document.querySelectorAll('.tx-participacion-arrow').forEach(btn => {
         el.scrollBy({left:delta * dir,behavior:'smooth'});
     });
 });
+// En semanal, desplazar también ARPU y gráficas apiladas a las semanas recientes.
+const txWeeklyVisible = <?= ($periodo === 'semanal' && (bool)$tx_evo_week_keys) ? 'true' : 'false' ?>;
+if (txWeeklyVisible) {
+    const anchoEvo = Math.max(650, labels6.length * 72);
+    const anchoArpu = Math.max(300, arpuLabels.length * 58);
+    document.documentElement.style.setProperty('--tx-weekly-evo-width', anchoEvo + 'px');
+    document.documentElement.style.setProperty('--tx-weekly-arpu-width', anchoArpu + 'px');
+    requestAnimationFrame(() => {
+        ['txVentEvoScroll','txInstEvoScroll','txArpuScroll'].forEach(id => {
+            const el=document.getElementById(id);
+            if(el) el.scrollLeft=Math.max(0,el.scrollWidth-el.clientWidth);
+        });
+    });
+}
 // Re-render inicial para que tablas y controles queden bajo el mismo motor JS.
 txApplyEvoView(txEvoInitialView, false);
 requestAnimationFrame(txResetParticipationToLatest);

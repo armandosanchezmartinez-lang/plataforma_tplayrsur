@@ -550,4 +550,176 @@ final class MotorComercial
         return $out;
     }
 
+
+    /**
+     * STAGING / Series semanales ISO del universo gerencial, sin consultas por semana.
+     * Semana 01 de 2026 inicia 2025-12-29; YEARWEEK(,3) no trunca el año natural.
+     * Reutiliza EXACTAMENTE clasificarCuenta() y el catálogo de este motor.
+     * $diasIso permite que la selección LUN-SÁB se aplique a todas las semanas.
+     * Devuelve una serie conjunta ARPU, Canal, Oferta, Plays y Bundle (ventas/INS).
+     */
+    public function seriesSemanalesPorCatalogo(
+        string $desde, string $hasta, array $scope, array $diasIso = []
+    ): array {
+        $fi=DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
+        $ff=DateTimeImmutable::createFromFormat('!Y-m-d',$hasta);
+        if (!$fi || !$ff || $fi->format('Y-m-d')!==$desde || $ff->format('Y-m-d')!==$hasta || $fi>$ff) {
+            throw new InvalidArgumentException('Series ISO: rango de fechas inválido');
+        }
+        foreach ($diasIso as $dia) {
+            if (!is_int($dia) || $dia<1 || $dia>7) throw new InvalidArgumentException('Series ISO: día inválido');
+        }
+        $primera = $fi->modify('-'.((int)$fi->format('N')-1).' days');
+        $ultima  = $ff->modify('-'.((int)$ff->format('N')-1).' days');
+        $keys=[]; $labels=[]; $rangos=[];
+        for($lunes=$primera;$lunes<=$ultima;$lunes=$lunes->modify('+7 days')) {
+            $k=$lunes->format('oW');
+            $keys[]=$k;
+            $domingo=$lunes->modify('+6 days');
+            $rangos[$k]=['desde'=>$lunes->format('Y-m-d'),'hasta'=>$domingo->format('Y-m-d')];
+            $etiquetaCorta=($lunes->format('m')===$domingo->format('m'))
+                ? $lunes->format('d').'–'.$domingo->format('d/m')
+                : $lunes->format('d/m').'–'.$domingo->format('d/m');
+            $labels[$k]='S'.$lunes->format('W').' · '.$etiquetaCorta;
+        }
+        $dimensiones=[
+            'oferta'=>['Residencial','Negocios','Sin clasificar'],
+            'play'=>['2P','3P','Sin clasificar'],
+            'bundle'=>['Bundle','No Bundle','Sin clasificar'],
+        ];
+        $datos=[];
+        foreach(['ventas','instalaciones'] as $origen) {
+            foreach ($dimensiones as $dim=>$categorias) {
+                foreach($categorias as $cat) $datos[$dim][$origen][$cat]=array_fill_keys($keys,0);
+            }
+            $datos['canal'][$origen]=[];
+        }
+        $out=[
+            'semanas'=>$keys,'labels'=>$labels,'rangos'=>$rangos,'datos'=>$datos,
+            'totales'=>['ventas'=>array_fill_keys($keys,0),'instalaciones'=>array_fill_keys($keys,0)],
+            'arpu'=>array_fill_keys($keys,null),
+            'arpu_cuentas'=>array_fill_keys($keys,0),
+        ];
+        $ingresos=array_fill_keys($keys,0.0);
+        foreach(['ventas','instalaciones'] as $origen) {
+            $tabla=$origen==='ventas' ? 'ventas':'instalaciones';
+            $fecha=$origen==='ventas' ? 'fecha_cierre':'fecha';
+            $plan=$origen==='ventas' ? 'nombre_plan':'plan';
+            $canal=$origen==='ventas' ? 'canal_venta':'origen_prospecto';
+            $precio=($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) ? '`precio_lista`' : 'NULL';
+            $sql="SELECT YEARWEEK(`{$fecha}`,3) AS semana_iso, `{$plan}` AS plan, `{$canal}` AS canal, {$precio} AS precio, COUNT(*) AS n
+                FROM `{$tabla}` WHERE `{$fecha}` >= ? AND `{$fecha}` <= ?";
+            $args=[$desde,$hasta];
+            if($origen==='instalaciones') $sql.=" AND `origen_prospecto` <> '-'";
+            if($diasIso) {
+                $mysqlDias=array_map(static fn(int $d):int=>$d===7?1:$d+1,$diasIso);
+                $sql.=' AND DAYOFWEEK(`'.$fecha.'`) IN ('.implode(',',array_map('intval',$mysqlDias)).')';
+            }
+            $sql.=$this->filtrosGerenciales($origen,$scope,$args);
+            $sql.=" GROUP BY YEARWEEK(`{$fecha}`,3), `{$plan}`, `{$canal}`";
+            if($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) $sql.=', `precio_lista`';
+            $st=$this->db->prepare($sql);
+            if (!$st) throw new RuntimeException('Series ISO: no pudo preparar '.$tabla);
+            $st->bind_param(str_repeat('s',count($args)),...$args);
+            if (!$st->execute()) throw new RuntimeException('Series ISO: consulta falló para '.$tabla);
+            $rs=$st->get_result();
+            if (!$rs) throw new RuntimeException('Series ISO: resultados no disponibles '.$tabla);
+            while($r=$rs->fetch_assoc()) {
+                $k=(string)($r['semana_iso']??'');
+                if(!array_key_exists($k,$out['totales'][$origen])) continue;
+                $n=(int)$r['n'];
+                if($n<=0) continue;
+                $out['totales'][$origen][$k]+=$n;
+                $nombreCanal=trim((string)($r['canal']??''));
+                if($nombreCanal==='') $nombreCanal='OTROS';
+                if(!isset($out['datos']['canal'][$origen][$nombreCanal])) {
+                    $out['datos']['canal'][$origen][$nombreCanal]=array_fill_keys($keys,0);
+                }
+                $out['datos']['canal'][$origen][$nombreCanal][$k]+=$n;
+                $cl=self::clasificarCuenta([['plan'=>$r['plan']??'','precio_lista'=>$r['precio']??null]],$this->catalogo);
+                $oferta=match($cl['oferta']) {'residencial'=>'Residencial','negocios'=>'Negocios',default=>'Sin clasificar'};
+                $play=match($cl['play']) {'doble_play'=>'2P','triple_play'=>'3P',default=>'Sin clasificar'};
+                $bundle=match($cl['bundle']) {'bundle'=>'Bundle','no_bundle'=>'No Bundle',default=>'Sin clasificar'};
+                $out['datos']['oferta'][$origen][$oferta][$k]+=$n;
+                $out['datos']['play'][$origen][$play][$k]+=$n;
+                $out['datos']['bundle'][$origen][$bundle][$k]+=$n;
+                if($origen==='instalaciones' && $cl['precio_neto']!==null) {
+                    $ingresos[$k]+=(float)$cl['precio_neto']*$n;
+                    $out['arpu_cuentas'][$k]+=$n;
+                }
+            }
+            $rs->free();$st->close();
+        }
+        foreach($keys as $key) {
+            $n=(int)$out['arpu_cuentas'][$key];
+            if($n>0) $out['arpu'][$key]=round($ingresos[$key]/$n,2);
+            foreach(['ventas','instalaciones'] as $origen) foreach(['canal','oferta','play','bundle'] as $dim) {
+                $suma=0;
+                foreach($out['datos'][$dim][$origen] as $cat=>$serie) $suma+=(int)($serie[$key]??0);
+                if($suma!==(int)$out['totales'][$origen][$key]) {
+                    throw new LogicException('Series ISO: sin conciliación '.$origen.' '.$dim.' '.$key);
+                }
+            }
+        }
+        return $out;
+    }
+
+
+    /** Series HC certificadas, una lectura por lotes de instalaciones para toda la ventana ISO.
+     * Recibe exclusivamente cuentas previamente autorizadas por Motor HC.
+     */
+    public function indicadoresSemanalesHc(array $eventos, string $desde, string $hasta, array $diasIso=[]): array
+    {
+        $inicio=DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
+        $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$hasta);
+        if(!$inicio || !$fin || $inicio->format('Y-m-d')!==$desde || $fin->format('Y-m-d')!==$hasta || $inicio>$fin) {
+            throw new InvalidArgumentException('Series HC semanales: fecha inválida');
+        }
+        foreach($diasIso as $d) if(!is_int($d)||$d<1||$d>7) throw new InvalidArgumentException('Series HC: día ISO inválido');
+        $semanas=[]; $lunes=$inicio->modify('-'.((int)$inicio->format('N')-1).' days');
+        for($d=$lunes;$d<=$fin;$d=$d->modify('+7 days')) $semanas[$d->format('oW')]=self::resumenVacio();
+        $ids=[];$fechaPorCuenta=[];
+        foreach($eventos as $e) {
+            $cuenta=trim((string)($e['cuenta']??''));
+            $f=substr((string)($e['fecha']??''),0,10);
+            if($cuenta==='' || $f<$desde || $f>$hasta) continue;
+            if($diasIso && !in_array((int)(new DateTimeImmutable($f))->format('N'),$diasIso,true)) continue;
+            if(isset($ids[$cuenta])) throw new LogicException('Serie HC: cuenta duplicada '.$cuenta);
+            $ids[$cuenta]=true;
+            $fechaPorCuenta[$cuenta]=$f;
+        }
+        $filas=[];
+        if($ids) {
+            $cols='`cuenta`, `fecha`, `plan`'.(isset($this->columnasInst['precio_lista'])?', `precio_lista`':'');
+            $finExc=$fin->modify('+1 day')->format('Y-m-d');
+            foreach(array_chunk(array_keys($ids),300) as $chunk) {
+                $ph=implode(',',array_fill(0,count($chunk),'?'));
+                $sql="SELECT {$cols} FROM `instalaciones` WHERE `cuenta` IN ({$ph}) AND `fecha` >= ? AND `fecha` < ? AND UPPER(TRIM(`origen_prospecto`)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
+                $st=$this->db->prepare($sql);
+                if(!$st) throw new RuntimeException('Serie HC: no pudo preparar lectura');
+                $args=array_merge($chunk,[$desde,$finExc]);
+                $st->bind_param(str_repeat('s',count($args)),...$args);
+                if(!$st->execute()) throw new RuntimeException('Serie HC: consulta fallida');
+                $rs=$st->get_result();
+                if(!$rs) throw new RuntimeException('Serie HC: sin resultados');
+                while($r=$rs->fetch_assoc()) {
+                    $key=trim((string)($r['cuenta']??''));
+                    if(!isset($ids[$key])) continue;
+                    $fechaFila=substr((string)($r['fecha']??''),0,10);
+                    if($diasIso && !in_array((int)(new DateTimeImmutable($fechaFila))->format('N'),$diasIso,true)) continue;
+                    $filas[$key][]=$r;
+                }
+                $rs->free();$st->close();
+            }
+        }
+        foreach($fechaPorCuenta as $cuenta=>$f) {
+            $week=(new DateTimeImmutable($f))->format('oW');
+            if(!isset($semanas[$week])) throw new LogicException('Serie HC: semana fuera del rango '.$week);
+            self::acumular($semanas[$week],self::clasificarCuenta($filas[$cuenta]??[],$this->catalogo));
+        }
+        foreach($semanas as &$r) self::finalizar($r);
+        unset($r);
+        return $semanas;
+    }
+
 }
