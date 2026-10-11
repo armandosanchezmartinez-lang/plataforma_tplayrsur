@@ -1558,6 +1558,8 @@ $root_dashboard_id = $scope_activo ? ($scope_registro['id_posicion'] ?? '') : $i
 $root_dashboard_distrito = $scope_activo ? ($distrito_scope ?? $distrito_usuario) : $distrito_usuario;
 
 
+// Determinar vendedor ANTES de evaluar las ramas; el STAGING previo lo evaluaba sin inicializar.
+$tx_stg_es_vendedor = ($rol === 'vendedor' || ($scope_activo && $scope_nivel === 'vendedor'));
 // Solo vendedor y administracion regional sin scope mantienen el bloque legado de esta tarjeta.
 if ($tx_stg_es_vendedor || (!$scope_activo && in_array($rol, ['admin','director_regional'], true))) {
 if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
@@ -1693,7 +1695,6 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
 // Motor Comercial v0.2.0: resumen comercial de LAS MISMAS cuentas HC.
 // El universo comercial es parcial: no representa el ARPU/Mix de todos los canales.
 // ============================================================================
-$tx_stg_es_vendedor = ($rol === 'vendedor' || ($scope_activo && $scope_nivel === 'vendedor'));
 $tx_stg_aplicable = !$tx_stg_es_vendedor && (int)$anio_query >= 2026;
 $tx_stg_ok = false;
 $tx_stg_error = null;
@@ -1718,7 +1719,7 @@ if ($tx_stg_aplicable) {
             throw new RuntimeException('No hay conexion mysqli activa para motores TalIA');
         }
         require_once __DIR__ . '/includes/motor_hc.php';
-        require_once __DIR__ . '/includes/motor_comercial.php';
+        require_once __DIR__ . '/includes/motor_comercial_STAGING.php';
         if (!class_exists('RankingAtribucionServiceV06') || !class_exists('MotorComercial')) {
             throw new RuntimeException('Motores no disponibles');
         }
@@ -2104,98 +2105,70 @@ $mix_vent = $r_mix_vent ? mysqli_fetch_assoc($r_mix_vent) : ['p3'=>0,'p2'=>0];
 $vent_3p = (int)($mix_vent['p3'] ?? 0);
 $vent_2p = (int)($mix_vent['p2'] ?? 0);
 
-// ── EVOLUCIÓN 6 MESES APILADA ────────────────────────────────────────────────
+// ── EVOLUCIÓN STAGING: desde enero 2026; cada selector tiene sus propias matrices/tablas. ──
+// Canal conserva consultas históricas originales, solo amplía ventana de fechas.
+$tx_evo_desde_enero = ((int)$anio_query >= 2026 && !$tx_stg_es_vendedor);
 $meses_labels = [];
-$datos_inst_stacked = []; 
-$datos_vent_stacked = [];
-$datos_inst_oferta_stacked = [
-    'Residencial' => array_fill(0, 6, 0),
-    'Negocios' => array_fill(0, 6, 0),
-];
-$datos_vent_oferta_stacked = [
-    'Residencial' => array_fill(0, 6, 0),
-    'Negocios' => array_fill(0, 6, 0),
-];
-
-// Selector exclusivo para las tarjetas Evolución y Participación.
-$evo_view = (isset($_GET['evo_view']) && $_GET['evo_view'] === 'oferta') ? 'oferta' : 'canal';
-$evo_titulo = ($evo_view === 'oferta') ? 'Evolución — Últimos 6 meses por oferta RES-NEG' : 'Evolución — Últimos 6 meses por canal';
-$evo_participacion_titulo = ($evo_view === 'oferta') ? 'Participación por oferta RES-NEG — Últimos 6 meses (%)' : 'Participación por canal — Últimos 6 meses (%)';
-$evo_vent_sub = ($evo_view === 'oferta') ? 'Ventas por oferta RES-NEG' : 'Ventas por canal';
-$evo_inst_sub = ($evo_view === 'oferta') ? 'Instalaciones por oferta RES-NEG' : 'Instalaciones por origen';
-$evo_col_label = ($evo_view === 'oferta') ? 'Oferta' : 'Canal';
-
-// Fecha inicial alineada a los 6 meses mostrados en el dashboard.
-// Evita que el primer mes del periodo quede incompleto o en cero
-// cuando CURDATE() ya cambió de mes.
-$fecha_inicio_evolucion = date(
-    'Y-m-01',
-    mktime(0, 0, 0, $mes_actual - 5, 1, $anio_query)
-);
-
-// Generar etiquetas de meses (eje X)
-for ($i = 5; $i >= 0; $i--) {
-    $ts = mktime(0, 0, 0, $mes_actual - $i, 1, $anio_query);
-    $meses_labels[] = date('M Y', $ts);
+if ($tx_evo_desde_enero) {
+    $tx_evo_cursor = new DateTimeImmutable('2026-01-01');
+    $tx_evo_hasta = new DateTimeImmutable(sprintf('%04d-%02d-01',$anio_query,$mes_actual));
+    while ($tx_evo_cursor <= $tx_evo_hasta) {
+        $meses_labels[] = $tx_evo_cursor->format('M Y');
+        $tx_evo_cursor = $tx_evo_cursor->modify('+1 month');
+    }
+    $fecha_inicio_evolucion = '2026-01-01';
+} else {
+    $fecha_inicio_evolucion = date('Y-m-01',mktime(0,0,0,$mes_actual-5,1,$anio_query));
+    for ($i=5;$i>=0;$i--) $meses_labels[]=date('M Y',mktime(0,0,0,$mes_actual-$i,1,$anio_query));
 }
+$tx_evo_nmeses = count($meses_labels);
+$datos_inst_stacked=[];
+$datos_vent_stacked=[];
+$datos_inst_oferta_stacked=['Residencial'=>array_fill(0,$tx_evo_nmeses,0),'Negocios'=>array_fill(0,$tx_evo_nmeses,0)];
+$datos_vent_oferta_stacked=['Residencial'=>array_fill(0,$tx_evo_nmeses,0),'Negocios'=>array_fill(0,$tx_evo_nmeses,0)];
+$datos_inst_bundle_stacked=[];
+$datos_vent_bundle_stacked=[];
+$evo_view = in_array($_GET['evo_view'] ?? '',['canal','oferta','bundle'],true) ? $_GET['evo_view'] : 'canal';
+if ($tx_stg_es_vendedor && $evo_view === 'bundle') $evo_view='canal';
+$evo_titulo = match($evo_view) {
+    'oferta'=>'Evolución — Desde enero 2026 por oferta RES-NEG',
+    'bundle'=>'Evolución — Desde enero 2026 por Bundle',
+    default=>$tx_evo_desde_enero?'Evolución — Desde enero 2026 por canal':'Evolución — Últimos 6 meses por canal',
+};
+$evo_participacion_titulo = match($evo_view) {
+    'oferta'=>'Participación por oferta RES-NEG — Desde enero 2026 (%)',
+    'bundle'=>'Participación por Bundle — Desde enero 2026 (%)',
+    default=>$tx_evo_desde_enero?'Participación por canal — Desde enero 2026 (%)':'Participación por canal — Últimos 6 meses (%)',
+};
+$evo_vent_sub=match($evo_view) { 'oferta'=>'Ventas por oferta RES-NEG', 'bundle'=>'Ventas por Bundle', default=>'Ventas por canal' };
+$evo_inst_sub=match($evo_view) { 'oferta'=>'Instalaciones por oferta RES-NEG', 'bundle'=>'Instalaciones por Bundle', default=>'Instalaciones por origen' };
+$evo_col_label=match($evo_view) { 'oferta'=>'Oferta', 'bundle'=>'Bundle', default=>'Canal' };
 
-
-// ── ARPU STAGING: enero 2026 hasta el mes consultado / Motor Comercial ──
+// ARPU anterior del STAGING conserva íntegra su lógica.
 if ($tx_stg_aplicable && $tx_stg_ok) {
     $arpu_labels = $tx_stg_arpu_labels;
     $arpu_data = $tx_stg_arpu_data;
 } elseif (!$tx_stg_aplicable) {
-// ── ARPU HISTÓRICO 6 MESES ──────────────────────────────────────────────────
-// Sustituye Mix 2P/3P Ventas porque aporta una lectura más ejecutiva.
-// Compara el mismo rango de días seleccionado en cada mes.
-// Ejemplo MTD vencido 01-09: calcula ARPU del día 01 al 09 de cada mes.
-$arpu_labels = $meses_labels;
-$arpu_data = array_fill(0, 6, 0);
-
-for ($i_arpu = 5; $i_arpu >= 0; $i_arpu--) {
-    $ts_arpu = mktime(0, 0, 0, $mes_actual - $i_arpu, 1, $anio_query);
-    $mes_arpu = (int)date('n', $ts_arpu);
-    $anio_arpu = (int)date('Y', $ts_arpu);
-    $idx_arpu = 5 - $i_arpu;
-
-    $ultimo_dia_mes_arpu = (int)date('t', $ts_arpu);
-    if ($rango_mode === 'completo') {
-        $cond_arpu_dia = '';
-    } else {
-        $dia_ini_arpu = min($dia_inicio_dashboard, $ultimo_dia_mes_arpu);
-        $dia_fin_arpu = min($dia_fin_dashboard, $ultimo_dia_mes_arpu);
-        $cond_arpu_dia = " AND DAY(fecha) BETWEEN $dia_ini_arpu AND $dia_fin_arpu";
+    $arpu_labels = $meses_labels;
+    $arpu_data = array_fill(0,$tx_evo_nmeses,0);
+    foreach ($meses_labels as $idx_arpu=>$etiqueta) {
+        $fecha_mes = DateTimeImmutable::createFromFormat('!M Y',$etiqueta);
+        if (!$fecha_mes) continue;
+        $mes_arpu=(int)$fecha_mes->format('n');$anio_arpu=(int)$fecha_mes->format('Y');
+        $ultimo_dia_mes_arpu=(int)$fecha_mes->format('t');
+        $cond_arpu_dia=($rango_mode==='completo')?'':(' AND DAY(fecha) BETWEEN '.min($dia_inicio_dashboard,$ultimo_dia_mes_arpu).' AND '.min($dia_fin_dashboard,$ultimo_dia_mes_arpu));
+        if ($rol_consulta==='admin') $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia);
+        elseif ($scope_filtrar_por_distrito) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,$scope_distritos_sql);
+        elseif ($por_distrito) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,$distritos_sql);
+        else $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,'',$folio_ids);
     }
+} else { $arpu_labels=[];$arpu_data=[]; }
 
-    if ($rol_consulta === 'admin') {
-        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
-            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia
-        );
-    } elseif ($scope_filtrar_por_distrito) {
-        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
-            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia, $scope_distritos_sql
-        );
-    } elseif ($por_distrito) {
-        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
-            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia, $distritos_sql
-        );
-    } else {
-        $arpu_data[$idx_arpu] = tx_arpu_instalaciones_dashboard(
-            $conexion, $mes_arpu, $anio_arpu, $cond_arpu_dia, '', $folio_ids
-        );
-    }
-}
-
-
-} else {
-    $arpu_labels = [];
-    $arpu_data = [];
-}
-
-// 1. Datos Instalaciones por Origen
-$query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total 
-    FROM instalaciones 
-    WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
+// CANAL DE VENTA: mismos SELECT, filtros, clasificaciones y participaciones del producto.
+// Sólo se amplía el período inicial; se limita al cierre seleccionado.
+$query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total
+    FROM instalaciones
+    WHERE fecha >= '$fecha_inicio_evolucion' AND fecha <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
 if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
     $query_inst .= " AND distrito IN ($scope_distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
@@ -2205,22 +2178,19 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
     $query_inst .= " AND folio_empleado IN ($ph)";
 }
 $query_inst .= " GROUP BY anio, mes, origen_prospecto";
-
-$res_i = mysqli_query($conexion, $query_inst);
-while($row = mysqli_fetch_assoc($res_i)) {
-    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
-    $idx = array_search($label_mes, $meses_labels);
-    if($idx !== false) {
-        $orig = $row['origen_prospecto'] ?: 'OTROS';
-        if(!isset($datos_inst_stacked[$orig])) $datos_inst_stacked[$orig] = array_fill(0, 6, 0);
-        $datos_inst_stacked[$orig][$idx] = (int)$row['total'];
+$res_i = mysqli_query($conexion,$query_inst);
+while ($res_i && ($row=mysqli_fetch_assoc($res_i))) {
+    $label_mes=date('M Y',mktime(0,0,0,$row['mes'],1,$row['anio']));
+    $idx=array_search($label_mes,$meses_labels,true);
+    if ($idx!==false) {
+        $orig=$row['origen_prospecto']?:'OTROS';
+        if (!isset($datos_inst_stacked[$orig])) $datos_inst_stacked[$orig]=array_fill(0,$tx_evo_nmeses,0);
+        $datos_inst_stacked[$orig][$idx]=(int)$row['total'];
     }
 }
-
-// 2. Datos Ventas por Canal
-$query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total 
-    FROM ventas 
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha_cierre ";
+$query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total
+    FROM ventas
+    WHERE fecha_cierre >= '$fecha_inicio_evolucion' AND fecha_cierre <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha_cierre ";
 if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
     $query_vent .= " AND distrito IN ($scope_distritos_sql)";
 } elseif ($rol_consulta !== 'admin' && $por_distrito) {
@@ -2230,85 +2200,112 @@ if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
     $query_vent .= " AND folio_empleado IN ($ph)";
 }
 $query_vent .= " GROUP BY anio, mes, canal_venta";
-
-$res_v = mysqli_query($conexion, $query_vent);
-while($row = mysqli_fetch_assoc($res_v)) {
-    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
-    $idx = array_search($label_mes, $meses_labels);
-    if($idx !== false) {
-        $canal = $row['canal_venta'] ?: 'OTROS';
-        if(!isset($datos_vent_stacked[$canal])) $datos_vent_stacked[$canal] = array_fill(0, 6, 0);
-        $datos_vent_stacked[$canal][$idx] = (int)$row['total'];
+$res_v = mysqli_query($conexion,$query_vent);
+while ($res_v && ($row=mysqli_fetch_assoc($res_v))) {
+    $label_mes=date('M Y',mktime(0,0,0,$row['mes'],1,$row['anio']));
+    $idx=array_search($label_mes,$meses_labels,true);
+    if ($idx!==false) {
+        $canal=$row['canal_venta']?:'OTROS';
+        if (!isset($datos_vent_stacked[$canal])) $datos_vent_stacked[$canal]=array_fill(0,$tx_evo_nmeses,0);
+        $datos_vent_stacked[$canal][$idx]=(int)$row['total'];
     }
 }
 
-// 3. Datos por Oferta RES-NEG para las mismas tarjetas de Evolución y Participación.
-// Este selector NO afecta las tarjetas superiores ni los TOP/BOTTOM.
-$segmento_inst_expr_evo = tx_segmento_instalacion_expr_dashboard($conexion);
-$query_inst_oferta = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, ($segmento_inst_expr_evo) as oferta, COUNT(*) as total
-    FROM instalaciones
-    WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_inst_oferta .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
-    $query_inst_oferta .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = tx_sql_in_escaped($conexion, $folio_ids);
-    $query_inst_oferta .= " AND folio_empleado IN ($ph)";
-}
-$query_inst_oferta .= " GROUP BY anio, mes, oferta";
-
-$res_io = mysqli_query($conexion, $query_inst_oferta);
-while($row = $res_io ? mysqli_fetch_assoc($res_io) : null) {
-    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
-    $idx = array_search($label_mes, $meses_labels);
-    if($idx !== false) {
-        $oferta = (strtoupper((string)$row['oferta']) === 'NEG' || strtoupper((string)$row['oferta']) === 'NEGOCIOS') ? 'Negocios' : 'Residencial';
-        $datos_inst_oferta_stacked[$oferta][$idx] = (int)$row['total'];
+$tx_evo_fuente_catalogo_ok=false;
+$tx_evo_catalogo_error=null;
+$tx_evo_total_inst=[];$tx_evo_total_vent=[];
+if ($tx_evo_desde_enero) {
+    try {
+        if (!($conexion instanceof mysqli)) throw new RuntimeException('Conexión comercial no disponible');
+        require_once __DIR__.'/includes/motor_comercial_STAGING.php';
+        $tx_evo_motor = isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial ? $tx_stg_motor_com : new MotorComercial($conexion);
+        // Visibilidad ADMIN/REGIONAL sin HC propio; filtro de distrito y línea para demás.
+        if (!$scope_activo && in_array($rol,['admin','director_regional'],true)) {
+            $tx_evo_scope=['tipo'=>'REGION'];
+        } elseif ($scope_filtrar_por_distrito || (!$scope_activo && $rol==='director_distrital')) {
+            $tx_evo_scope=['tipo'=>'DISTRITO','distrito'=>(string)($scope_filtrar_por_distrito ? ($distrito_scope ?? '') : $distrito_usuario)];
+        } else {
+            $tx_evo_scope=['tipo'=>'FOLIOS','folios'=>$folio_ids];
+        }
+        $tx_evo_res=$tx_evo_motor->evolucionPorCatalogo($fecha_inicio_evolucion,$fecha_fin_dashboard,$rango_mode,(int)$dia_inicio_dashboard,(int)$dia_fin_dashboard,$tx_evo_scope);
+        $tx_evo_total_inst=$tx_evo_res['totales']['instalaciones'];
+        $tx_evo_total_vent=$tx_evo_res['totales']['ventas'];
+        // Conciliación cruzada contra el Canal de Venta que el ADMIN ya validó.
+        // Falla explícita: un universo comercial distinto no se disfraza de igualdad.
+        if (!$scope_activo && $rol === 'admin') {
+            foreach ($meses_labels as $idx_can => $label_can) {
+                $ym_can=date('Y-m',strtotime('1 '.$label_can));
+                $c_inst=array_sum(array_map(static fn($a)=>(int)($a[$idx_can]??0),$datos_inst_stacked));
+                $c_vent=array_sum(array_map(static fn($a)=>(int)($a[$idx_can]??0),$datos_vent_stacked));
+                if ($c_inst !== (int)($tx_evo_total_inst[$ym_can]??-1) || $c_vent !== (int)($tx_evo_total_vent[$ym_can]??-1)) {
+                    throw new LogicException('Evolución: no concilia con Canal de Venta para '.$ym_can);
+                }
+            }
+        }
+        foreach (['oferta','bundle'] as $dim) {
+            foreach (['instalaciones','ventas'] as $source) {
+                $matrix=[];
+                foreach ($tx_evo_res['datos'][$dim][$source] as $cat=>$months) $matrix[$cat]=array_values($months);
+                if ($dim==='oferta' && $source==='instalaciones') $datos_inst_oferta_stacked=$matrix;
+                elseif ($dim==='oferta') $datos_vent_oferta_stacked=$matrix;
+                elseif ($source==='instalaciones') $datos_inst_bundle_stacked=$matrix;
+                else $datos_vent_bundle_stacked=$matrix;
+            }
+        }
+        $tx_evo_fuente_catalogo_ok=true;
+    } catch (Throwable $tx_evo_exc) {
+        $tx_evo_catalogo_error=$tx_evo_exc->getMessage();
+        error_log('TalIA Index Evolution STAGING: '.$tx_evo_catalogo_error);
+    }
+} else {
+    // Perfil vendedor intacto: rama legado de RES/NEG de evolución, sin botón Bundle.
+    $segmento_inst_expr_evo=tx_segmento_instalacion_expr_dashboard($conexion);
+    $query_inst_oferta = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, ($segmento_inst_expr_evo) as oferta, COUNT(*) as total FROM instalaciones
+       WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
+    if ($rol_consulta!=='admin' && $scope_filtrar_por_distrito) $query_inst_oferta.=" AND distrito IN ($scope_distritos_sql)";
+    elseif ($rol_consulta!=='admin' && $por_distrito) $query_inst_oferta.=" AND distrito IN ($distritos_sql)";
+    elseif ($rol_consulta!=='admin' && !empty($folio_ids)) $query_inst_oferta.=" AND folio_empleado IN (".tx_sql_in_escaped($conexion,$folio_ids).")";
+    $query_inst_oferta.=' GROUP BY anio, mes, oferta';
+    $res_io=mysqli_query($conexion,$query_inst_oferta);
+    while($res_io && ($row=mysqli_fetch_assoc($res_io))) {
+        $idx=array_search(date('M Y',mktime(0,0,0,$row['mes'],1,$row['anio'])),$meses_labels,true);
+        if ($idx!==false) {
+            $cat=in_array(strtoupper((string)$row['oferta']),['NEG','NEGOCIOS'],true)?'Negocios':'Residencial';
+            $datos_inst_oferta_stacked[$cat][$idx]=(int)$row['total'];
+        }
+    }
+    $segmento_venta_expr_evo=tx_segmento_venta_expr_dashboard($conexion,'v');
+    $query_vent_oferta="SELECT MONTH(v.fecha_cierre) as mes,YEAR(v.fecha_cierre) as anio,($segmento_venta_expr_evo) as oferta,COUNT(*) as total FROM ventas v WHERE v.fecha_cierre >= '$fecha_inicio_evolucion' ".str_replace('fecha_cierre','v.fecha_cierre',$cond_dia_evolucion_fecha_cierre)." ";
+    if ($rol_consulta!=='admin' && $scope_filtrar_por_distrito) $query_vent_oferta.=" AND v.distrito IN ($scope_distritos_sql)";
+    elseif ($rol_consulta!=='admin' && $por_distrito) $query_vent_oferta.=" AND v.distrito IN ($distritos_sql)";
+    elseif ($rol_consulta!=='admin' && !empty($folio_ids)) $query_vent_oferta.=" AND v.folio_empleado IN (".tx_sql_in_escaped($conexion,$folio_ids).")";
+    $query_vent_oferta.=' GROUP BY anio, mes, oferta';
+    $res_vo=mysqli_query($conexion,$query_vent_oferta);
+    while($res_vo && ($row=mysqli_fetch_assoc($res_vo))) {
+        $idx=array_search(date('M Y',mktime(0,0,0,$row['mes'],1,$row['anio'])),$meses_labels,true);
+        if ($idx!==false) {
+            $cat=in_array(strtoupper((string)$row['oferta']),['NEG','NEGOCIOS'],true)?'Negocios':'Residencial';
+            $datos_vent_oferta_stacked[$cat][$idx]=(int)$row['total'];
+        }
     }
 }
-
-$segmento_venta_expr_evo = tx_segmento_venta_expr_dashboard($conexion, 'v');
-$query_vent_oferta = "SELECT MONTH(v.fecha_cierre) as mes, YEAR(v.fecha_cierre) as anio, ($segmento_venta_expr_evo) as oferta, COUNT(*) as total
-    FROM ventas v
-    WHERE v.fecha_cierre >= '$fecha_inicio_evolucion' " . str_replace('fecha_cierre', 'v.fecha_cierre', $cond_dia_evolucion_fecha_cierre) . " ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
-    $query_vent_oferta .= " AND v.distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
-    $query_vent_oferta .= " AND v.distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
-    $ph = tx_sql_in_escaped($conexion, $folio_ids);
-    $query_vent_oferta .= " AND v.folio_empleado IN ($ph)";
+if ($evo_view==='oferta') {
+    $datos_inst_stacked=$tx_evo_desde_enero && !$tx_evo_fuente_catalogo_ok?[]:$datos_inst_oferta_stacked;
+    $datos_vent_stacked=$tx_evo_desde_enero && !$tx_evo_fuente_catalogo_ok?[]:$datos_vent_oferta_stacked;
+} elseif ($evo_view==='bundle') {
+    $datos_inst_stacked=$tx_evo_fuente_catalogo_ok?$datos_inst_bundle_stacked:[];
+    $datos_vent_stacked=$tx_evo_fuente_catalogo_ok?$datos_vent_bundle_stacked:[];
 }
-$query_vent_oferta .= " GROUP BY anio, mes, oferta";
-
-$res_vo = mysqli_query($conexion, $query_vent_oferta);
-while($row = $res_vo ? mysqli_fetch_assoc($res_vo) : null) {
-    $label_mes = date('M Y', mktime(0,0,0, $row['mes'], 1, $row['anio']));
-    $idx = array_search($label_mes, $meses_labels);
-    if($idx !== false) {
-        $oferta = (strtoupper((string)$row['oferta']) === 'NEG' || strtoupper((string)$row['oferta']) === 'NEGOCIOS') ? 'Negocios' : 'Residencial';
-        $datos_vent_oferta_stacked[$oferta][$idx] = (int)$row['total'];
-    }
-}
-
-// Si el selector está en Oferta RES-NEG, sustituimos únicamente las matrices usadas
-// por las tarjetas Evolución y Participación.
-if ($evo_view === 'oferta') {
-    $datos_inst_stacked = $datos_inst_oferta_stacked;
-    $datos_vent_stacked = $datos_vent_oferta_stacked;
-}
-
 $colores_palette = ['#FF006C', '#7A2BFF', '#00A6FF', '#00E5FF', '#FF6500', '#7CFF00', '#2C2F3A'];
 
 // ── TABLA DE PARTICIPACIÓN POR CANAL ─────────────────────────────────────────
 // Calcular totales por mes para instalaciones
-$totales_inst_mes = array_fill(0, 6, 0);
+$totales_inst_mes = array_fill(0, $tx_evo_nmeses, 0);
 foreach ($datos_inst_stacked as $canal => $vals) {
     foreach ($vals as $i => $v) $totales_inst_mes[$i] += $v;
 }
 // Calcular totales por mes para ventas
-$totales_vent_mes = array_fill(0, 6, 0);
+$totales_vent_mes = array_fill(0, $tx_evo_nmeses, 0);
 foreach ($datos_vent_stacked as $canal => $vals) {
     foreach ($vals as $i => $v) $totales_vent_mes[$i] += $v;
 }
@@ -2316,10 +2313,10 @@ foreach ($datos_vent_stacked as $canal => $vals) {
 // Ordenamiento de tablas de participación.
 // Vista inicial: mes en curso (última columna) de mayor a menor.
 // Cada encabezado de mes permite alternar mayor-menor / menor-mayor.
-$sort_vent_idx = isset($_GET['sort_vent_mes']) ? max(0, min(5, (int)$_GET['sort_vent_mes'])) : 5;
+$sort_vent_idx = isset($_GET['sort_vent_mes']) ? max(0, min($tx_evo_nmeses - 1, (int)$_GET['sort_vent_mes'])) : ($tx_evo_nmeses - 1);
 $sort_vent_dir = (isset($_GET['sort_vent_dir']) && $_GET['sort_vent_dir'] === 'asc') ? 'asc' : 'desc';
 
-$sort_inst_idx = isset($_GET['sort_inst_mes']) ? max(0, min(5, (int)$_GET['sort_inst_mes'])) : 5;
+$sort_inst_idx = isset($_GET['sort_inst_mes']) ? max(0, min($tx_evo_nmeses - 1, (int)$_GET['sort_inst_mes'])) : ($tx_evo_nmeses - 1);
 $sort_inst_dir = (isset($_GET['sort_inst_dir']) && $_GET['sort_inst_dir'] === 'asc') ? 'asc' : 'desc';
 
 $datos_vent_table = $datos_vent_stacked;
@@ -4468,6 +4465,27 @@ if ($tx_geo_sum_count > 0) {
             box-shadow:0 8px 18px rgba(122,43,255,.18);
         }
 
+
+        /* INDEX STAGING – última etiqueta ARPU protegida contra recorte. */
+        .tx-arpu-ultimo { display:flex;justify-content:space-between;align-items:baseline;
+            flex-wrap:wrap;gap:5px 8px;margin:6px 0 3px;padding:7px 9px;
+            background:rgba(122,43,255,.055);border:1px solid rgba(122,43,255,.12);border-radius:10px; }
+        .tx-arpu-ultimo span {font-size:.65rem;font-weight:800;color:#617291;}
+        .tx-arpu-ultimo strong {font-size:.90rem;font-weight:950;color:#152642;white-space:nowrap;}
+        .tx-evo-source-note {font-size:.70rem;color:#64748b;margin:9px 0 3px;line-height:1.5;}
+        .tx-evo-error {font-size:.72rem;color:#b91c1c;margin:8px 0;font-weight:800;}
+        .tx-evo-table-scroll {overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;max-width:100%;}
+        .tx-evo-participacion-table {min-width:980px;table-layout:auto;}
+        .tx-evo-participacion-table th:first-child, .tx-evo-participacion-table td:first-child {
+            position:sticky;left:0;z-index:2;background:#f0f5ff;min-width:130px;
+            box-shadow:2px 0 4px rgba(15,23,42,.06);
+        }
+        .tx-evo-participacion-table td:first-child {background:#fff;}
+        .tx-evo-participacion-table tr:last-child td:first-child {background:#e8f0fe;}
+        .tx-evo-participacion-table th:not(:first-child) {min-width:67px;}
+        .tx-evo-participacion-table td:not(:first-child) {min-width:67px;}
+        .evo-toggle {flex-wrap:wrap;}
+
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -4957,6 +4975,16 @@ include __DIR__ . '/includes/sidebar.php';
         <div class="chart-card arpu-card">
             <div class="chart-title"><?= ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses') ?></div>
             <div class="hierarchy-performance-sub" style="margin-top:2px;"><?= $tx_stg_aplicable ? 'Motor Comercial · Precio lista sin IVA · HC certificado Cambaceo/PDV' : 'Mismo rango seleccionado · precio pronto pago' ?></div>
+            <?php if ($tx_stg_aplicable && $tx_stg_ok && count($arpu_labels) > 0):
+                $tx_arpu_last = count($arpu_labels)-1;
+                $tx_arpu_last_value = $arpu_data[$tx_arpu_last] ?? null;
+                $tx_arpu_last_label = $arpu_labels[$tx_arpu_last] ?? '';
+            ?>
+                <div class="tx-arpu-ultimo" aria-label="ARPU del último mes seleccionado">
+                    <span>Último mes · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
+                    <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin dato certificado' ?></strong>
+                </div>
+            <?php endif; ?>
             <?php if ($tx_stg_aplicable && $tx_stg_error !== null): ?>
                 <div style="font-size:12px;color:#b91c1c;padding:8px 0;">Indicador no disponible: revisar el registro de errores de STAGING. No se muestran valores no certificados.</div>
             <?php endif; ?>
@@ -4983,6 +5011,8 @@ include __DIR__ . '/includes/sidebar.php';
         $qs_evo_canal['evo_view'] = 'canal';
         $qs_evo_oferta = $_GET;
         $qs_evo_oferta['evo_view'] = 'oferta';
+        $qs_evo_bundle = $_GET;
+        $qs_evo_bundle['evo_view'] = 'bundle';
     ?>
     <div class="evo-card">
         <div class="evo-card-head">
@@ -4990,8 +5020,13 @@ include __DIR__ . '/includes/sidebar.php';
             <div class="evo-toggle" aria-label="Selector de vista de evolución">
                 <a class="<?= $evo_view === 'canal' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_canal)) ?>">CANAL DE VENTA</a>
                 <a class="<?= $evo_view === 'oferta' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_oferta)) ?>">OFERTA RES-NEG</a>
+                <?php if (!$tx_stg_es_vendedor && $tx_evo_desde_enero): ?><a class="<?= $evo_view === 'bundle' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_bundle)) ?>">BUNDLE</a><?php endif; ?>
             </div>
         </div>
+        <?php if ($tx_evo_desde_enero && $evo_view !== 'canal'): ?>
+            <div class="tx-evo-source-note">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Universo gerencial por registros, diferente del HC certificado Cambaceo/PDV.</div>
+            <?php if (!$tx_evo_fuente_catalogo_ok): ?><div class="tx-evo-error">No se pudo verificar la clasificación comercial. Consulta el log STAGING; no se muestran resultados estimados.</div><?php endif; ?>
+        <?php endif; ?>
         <div class="evo-grid">
             <div>
                 <div class="evo-sub"><?= htmlspecialchars($evo_vent_sub) ?></div>
@@ -5013,8 +5048,8 @@ include __DIR__ . '/includes/sidebar.php';
             <!-- VENTAS -->
             <div>
                 <div class="evo-sub"><?= htmlspecialchars($evo_vent_sub) ?></div>
-                <div class="top-productividad-table-wrap">
-                <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+                <div class="top-productividad-table-wrap tx-evo-table-scroll">
+                <table class="tx-evo-participacion-table" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead>
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;"><?= htmlspecialchars($evo_col_label) ?></th>
@@ -5055,8 +5090,8 @@ include __DIR__ . '/includes/sidebar.php';
             <!-- INSTALACIONES -->
             <div>
                 <div class="evo-sub"><?= htmlspecialchars($evo_inst_sub) ?></div>
-                <div class="top-productividad-table-wrap">
-                <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+                <div class="top-productividad-table-wrap tx-evo-table-scroll">
+                <table class="tx-evo-participacion-table" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                     <thead>
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;"><?= htmlspecialchars($evo_col_label) ?></th>
@@ -5528,13 +5563,14 @@ new Chart(document.getElementById('cArpuHist'), {
     options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 24, right: 8, left: 4 } },
+        layout: { padding: { top: 24, right: 32, left: 4 } },
         plugins: {
             legend: { display: false },
             datalabels: {
                 anchor: 'end',
-                align: 'top',
-                offset: 4,
+                align: ctx => ctx.dataIndex === arpuLabels.length - 1 ? 'left' : 'top',
+                offset: ctx => ctx.dataIndex === arpuLabels.length - 1 ? 7 : 4,
+                clip: false,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
                 display: ctx => arpuLabels.length <= 7 || ctx.dataIndex === arpuLabels.length - 1 || ctx.dataIndex % 2 === 0,
@@ -5565,7 +5601,7 @@ new Chart(document.getElementById('cArpuHist'), {
     plugins: [ChartDataLabels]
 });
 
-// --- EVOLUCIÓN APILADA (6 MESES) ---
+// --- EVOLUCIÓN APILADA (ENERO 2026 → CORTE SELECCIONADO) ---
 const labels6 = <?= json_encode($meses_labels) ?>;
 
 const canalColores = {
@@ -5582,6 +5618,9 @@ const canalColores = {
     'Otro':                        txBrandColors.grisClaro,
     'Residencial':                 txBrandColors.azulElectrico,
     'Negocios':                    txBrandColors.magenta,
+    'Bundle':                      txBrandColors.magenta,
+    'No Bundle':                   txBrandColors.azulElectrico,
+    'Sin clasificar':              '#94a3b8',
 };
 
 // ... (Obtención de datasets igual que antes) ...
@@ -5594,6 +5633,7 @@ const ventData    = <?= json_encode(empty($datos_vent_stacked) ? [] : array_valu
 const pluginTotalesArriba = {
     id: 'pluginTotalesArriba',
     afterDatasetsDraw: (chart) => {
+        if (!chart.data.datasets || !chart.data.datasets.length) return;
         const ctx = chart.ctx;
         chart.data.datasets[0].data.forEach((_, index) => {
             let total = 0;
@@ -5681,7 +5721,7 @@ function makeStackOpts(matrix){
             x: { 
                 stacked: true, 
                 grid: { display: false },
-                ticks: { font: { size: 11, weight: 'bold' } } 
+                ticks: { font: { size: 10, weight: 'bold' }, autoSkip: true, maxTicksLimit: 10, maxRotation: 40 } 
             }
         }
     };
