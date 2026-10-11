@@ -356,6 +356,7 @@ final class MotorComercial
         }
         $dimensiones = [
             'oferta'=>['Residencial','Negocios','Sin clasificar'],
+            'play'=>['2P','3P','Sin clasificar'],
             'bundle'=>['Bundle','No Bundle','Sin clasificar'],
         ];
         $plantilla = [];
@@ -414,16 +415,20 @@ final class MotorComercial
                 $oferta = match($clas['oferta']) {
                     'residencial'=>'Residencial', 'negocios'=>'Negocios', default=>'Sin clasificar',
                 };
+                $play = match($clas['play']) {
+                    'doble_play'=>'2P', 'triple_play'=>'3P', default=>'Sin clasificar',
+                };
                 $bundle = match($clas['bundle']) {
                     'bundle'=>'Bundle', 'no_bundle'=>'No Bundle', default=>'Sin clasificar',
                 };
                 $out['datos']['oferta'][$origen][$oferta][$ym] += $n;
+                $out['datos']['play'][$origen][$play][$ym] += $n;
                 $out['datos']['bundle'][$origen][$bundle][$ym] += $n;
             }
             $rs->free();
             $st->close();
         }
-        foreach (['oferta','bundle'] as $dimension) foreach (['ventas','instalaciones'] as $origen) foreach ($labels as $ym) {
+        foreach (['oferta','play','bundle'] as $dimension) foreach (['ventas','instalaciones'] as $origen) foreach ($labels as $ym) {
             $suma=0;
             foreach ($out['datos'][$dimension][$origen] as $arr) $suma += $arr[$ym];
             if ($suma !== $out['totales'][$origen][$ym]) throw new LogicException('Evolución Comercial: no concilia '.$dimension.' '.$origen.' '.$ym);

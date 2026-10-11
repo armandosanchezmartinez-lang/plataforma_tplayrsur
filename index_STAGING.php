@@ -2126,23 +2126,27 @@ $datos_inst_stacked=[];
 $datos_vent_stacked=[];
 $datos_inst_oferta_stacked=['Residencial'=>array_fill(0,$tx_evo_nmeses,0),'Negocios'=>array_fill(0,$tx_evo_nmeses,0)];
 $datos_vent_oferta_stacked=['Residencial'=>array_fill(0,$tx_evo_nmeses,0),'Negocios'=>array_fill(0,$tx_evo_nmeses,0)];
+$datos_inst_play_stacked=[];
+$datos_vent_play_stacked=[];
 $datos_inst_bundle_stacked=[];
 $datos_vent_bundle_stacked=[];
-$evo_view = in_array($_GET['evo_view'] ?? '',['canal','oferta','bundle'],true) ? $_GET['evo_view'] : 'canal';
-if ($tx_stg_es_vendedor && $evo_view === 'bundle') $evo_view='canal';
+$evo_view = in_array($_GET['evo_view'] ?? '',['canal','oferta','play','bundle'],true) ? $_GET['evo_view'] : 'canal';
+if ($tx_stg_es_vendedor && in_array($evo_view,['play','bundle'],true)) $evo_view='canal';
 $evo_titulo = match($evo_view) {
     'oferta'=>'Evolución — Desde enero 2026 por oferta RES-NEG',
+    'play'=>'Evolución — Desde enero 2026 por Plays',
     'bundle'=>'Evolución — Desde enero 2026 por Bundle',
     default=>$tx_evo_desde_enero?'Evolución — Desde enero 2026 por canal':'Evolución — Últimos 6 meses por canal',
 };
 $evo_participacion_titulo = match($evo_view) {
     'oferta'=>'Participación por oferta RES-NEG — Desde enero 2026 (%)',
+    'play'=>'Participación por Plays — Desde enero 2026 (%)',
     'bundle'=>'Participación por Bundle — Desde enero 2026 (%)',
     default=>$tx_evo_desde_enero?'Participación por canal — Desde enero 2026 (%)':'Participación por canal — Últimos 6 meses (%)',
 };
-$evo_vent_sub=match($evo_view) { 'oferta'=>'Ventas por oferta RES-NEG', 'bundle'=>'Ventas por Bundle', default=>'Ventas por canal' };
-$evo_inst_sub=match($evo_view) { 'oferta'=>'Instalaciones por oferta RES-NEG', 'bundle'=>'Instalaciones por Bundle', default=>'Instalaciones por origen' };
-$evo_col_label=match($evo_view) { 'oferta'=>'Oferta', 'bundle'=>'Bundle', default=>'Canal' };
+$evo_vent_sub=match($evo_view) { 'oferta'=>'Ventas por oferta RES-NEG', 'play'=>'Ventas por Plays', 'bundle'=>'Ventas por Bundle', default=>'Ventas por canal' };
+$evo_inst_sub=match($evo_view) { 'oferta'=>'Instalaciones por oferta RES-NEG', 'play'=>'Instalaciones por Plays', 'bundle'=>'Instalaciones por Bundle', default=>'Instalaciones por origen' };
+$evo_col_label=match($evo_view) { 'oferta'=>'Oferta', 'play'=>'Play', 'bundle'=>'Bundle', default=>'Canal' };
 
 // ARPU anterior del STAGING conserva íntegra su lógica.
 if ($tx_stg_aplicable && $tx_stg_ok) {
@@ -2242,12 +2246,14 @@ if ($tx_evo_desde_enero) {
                 }
             }
         }
-        foreach (['oferta','bundle'] as $dim) {
+        foreach (['oferta','play','bundle'] as $dim) {
             foreach (['instalaciones','ventas'] as $source) {
                 $matrix=[];
                 foreach ($tx_evo_res['datos'][$dim][$source] as $cat=>$months) $matrix[$cat]=array_values($months);
                 if ($dim==='oferta' && $source==='instalaciones') $datos_inst_oferta_stacked=$matrix;
                 elseif ($dim==='oferta') $datos_vent_oferta_stacked=$matrix;
+                elseif ($dim==='play' && $source==='instalaciones') $datos_inst_play_stacked=$matrix;
+                elseif ($dim==='play') $datos_vent_play_stacked=$matrix;
                 elseif ($source==='instalaciones') $datos_inst_bundle_stacked=$matrix;
                 else $datos_vent_bundle_stacked=$matrix;
             }
@@ -2289,12 +2295,60 @@ if ($tx_evo_desde_enero) {
         }
     }
 }
+// Guardar las cuatro vistas completas para navegación instantánea en cliente.
+// Canal conserva su fuente original; Oferta/Plays/Bundle provienen del Motor Comercial.
+$tx_evo_cache_views = [
+    'canal' => [
+        'inst' => $datos_inst_stacked,
+        'vent' => $datos_vent_stacked,
+        'titulo' => $tx_evo_desde_enero ? 'Evolución — Desde enero 2026 por canal' : 'Evolución — Últimos 6 meses por canal',
+        'participacion_titulo' => $tx_evo_desde_enero ? 'Participación por canal — Desde enero 2026 (%)' : 'Participación por canal — Últimos 6 meses (%)',
+        'vent_sub' => 'Ventas por canal',
+        'inst_sub' => 'Instalaciones por origen',
+        'col_label' => 'Canal',
+        'catalogo' => false,
+    ],
+    'oferta' => [
+        'inst' => $tx_evo_desde_enero && !$tx_evo_fuente_catalogo_ok ? [] : $datos_inst_oferta_stacked,
+        'vent' => $tx_evo_desde_enero && !$tx_evo_fuente_catalogo_ok ? [] : $datos_vent_oferta_stacked,
+        'titulo' => 'Evolución — Desde enero 2026 por oferta RES-NEG',
+        'participacion_titulo' => 'Participación por oferta RES-NEG — Desde enero 2026 (%)',
+        'vent_sub' => 'Ventas por oferta RES-NEG',
+        'inst_sub' => 'Instalaciones por oferta RES-NEG',
+        'col_label' => 'Oferta',
+        'catalogo' => true,
+    ],
+    'play' => [
+        'inst' => $tx_evo_fuente_catalogo_ok ? $datos_inst_play_stacked : [],
+        'vent' => $tx_evo_fuente_catalogo_ok ? $datos_vent_play_stacked : [],
+        'titulo' => 'Evolución — Desde enero 2026 por Plays',
+        'participacion_titulo' => 'Participación por Plays — Desde enero 2026 (%)',
+        'vent_sub' => 'Ventas por Plays',
+        'inst_sub' => 'Instalaciones por Plays',
+        'col_label' => 'Play',
+        'catalogo' => true,
+    ],
+    'bundle' => [
+        'inst' => $tx_evo_fuente_catalogo_ok ? $datos_inst_bundle_stacked : [],
+        'vent' => $tx_evo_fuente_catalogo_ok ? $datos_vent_bundle_stacked : [],
+        'titulo' => 'Evolución — Desde enero 2026 por Bundle',
+        'participacion_titulo' => 'Participación por Bundle — Desde enero 2026 (%)',
+        'vent_sub' => 'Ventas por Bundle',
+        'inst_sub' => 'Instalaciones por Bundle',
+        'col_label' => 'Bundle',
+        'catalogo' => true,
+    ],
+];
+
 if ($evo_view==='oferta') {
-    $datos_inst_stacked=$tx_evo_desde_enero && !$tx_evo_fuente_catalogo_ok?[]:$datos_inst_oferta_stacked;
-    $datos_vent_stacked=$tx_evo_desde_enero && !$tx_evo_fuente_catalogo_ok?[]:$datos_vent_oferta_stacked;
+    $datos_inst_stacked=$tx_evo_cache_views['oferta']['inst'];
+    $datos_vent_stacked=$tx_evo_cache_views['oferta']['vent'];
+} elseif ($evo_view==='play') {
+    $datos_inst_stacked=$tx_evo_cache_views['play']['inst'];
+    $datos_vent_stacked=$tx_evo_cache_views['play']['vent'];
 } elseif ($evo_view==='bundle') {
-    $datos_inst_stacked=$tx_evo_fuente_catalogo_ok?$datos_inst_bundle_stacked:[];
-    $datos_vent_stacked=$tx_evo_fuente_catalogo_ok?$datos_vent_bundle_stacked:[];
+    $datos_inst_stacked=$tx_evo_cache_views['bundle']['inst'];
+    $datos_vent_stacked=$tx_evo_cache_views['bundle']['vent'];
 }
 $colores_palette = ['#FF006C', '#7A2BFF', '#00A6FF', '#00E5FF', '#FF6500', '#7CFF00', '#2C2F3A'];
 
@@ -4474,8 +4528,22 @@ if ($tx_geo_sum_count > 0) {
         .tx-arpu-ultimo strong {font-size:.90rem;font-weight:950;color:#152642;white-space:nowrap;}
         .tx-evo-source-note {font-size:.70rem;color:#64748b;margin:9px 0 3px;line-height:1.5;}
         .tx-evo-error {font-size:.72rem;color:#b91c1c;margin:8px 0;font-weight:800;}
-        .tx-evo-table-scroll {overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;max-width:100%;}
-        .tx-evo-participacion-table {min-width:980px;table-layout:auto;}
+        .tx-evo-table-scroll {
+            width:100%;
+            max-width:100%;
+            overflow-x:scroll !important;
+            overflow-y:hidden;
+            scrollbar-width:auto;
+            scrollbar-gutter:stable both-edges;
+            padding-bottom:8px;
+            overscroll-behavior-x:contain;
+            -webkit-overflow-scrolling:touch;
+        }
+        .tx-evo-table-scroll::-webkit-scrollbar{height:12px;}
+        .tx-evo-table-scroll::-webkit-scrollbar-track{background:#eef2f8;border-radius:999px;}
+        .tx-evo-table-scroll::-webkit-scrollbar-thumb{background:#9aa8bf;border-radius:999px;border:2px solid #eef2f8;}
+        .tx-evo-table-scroll::-webkit-scrollbar-thumb:hover{background:#71819b;}
+        .tx-evo-participacion-table {min-width:1040px;width:max-content !important;table-layout:auto;}
         .tx-evo-participacion-table th:first-child, .tx-evo-participacion-table td:first-child {
             position:sticky;left:0;z-index:2;background:#f0f5ff;min-width:130px;
             box-shadow:2px 0 4px rgba(15,23,42,.06);
@@ -5011,29 +5079,32 @@ include __DIR__ . '/includes/sidebar.php';
         $qs_evo_canal['evo_view'] = 'canal';
         $qs_evo_oferta = $_GET;
         $qs_evo_oferta['evo_view'] = 'oferta';
+        $qs_evo_play = $_GET;
+        $qs_evo_play['evo_view'] = 'play';
         $qs_evo_bundle = $_GET;
         $qs_evo_bundle['evo_view'] = 'bundle';
     ?>
     <div class="evo-card">
         <div class="evo-card-head">
-            <div class="chart-title"><?= htmlspecialchars($evo_titulo) ?></div>
+            <div class="chart-title" id="txEvoTitle"><?= htmlspecialchars($evo_titulo) ?></div>
             <div class="evo-toggle" aria-label="Selector de vista de evolución">
-                <a class="<?= $evo_view === 'canal' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_canal)) ?>">CANAL DE VENTA</a>
-                <a class="<?= $evo_view === 'oferta' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_oferta)) ?>">OFERTA RES-NEG</a>
-                <?php if (!$tx_stg_es_vendedor && $tx_evo_desde_enero): ?><a class="<?= $evo_view === 'bundle' ? 'active' : '' ?>" href="?<?= htmlspecialchars(http_build_query($qs_evo_bundle)) ?>">BUNDLE</a><?php endif; ?>
+                <a class="tx-evo-toggle-link <?= $evo_view === 'canal' ? 'active' : '' ?>" data-evo-view="canal" href="?<?= htmlspecialchars(http_build_query($qs_evo_canal)) ?>">CANAL DE VENTA</a>
+                <a class="tx-evo-toggle-link <?= $evo_view === 'oferta' ? 'active' : '' ?>" data-evo-view="oferta" href="?<?= htmlspecialchars(http_build_query($qs_evo_oferta)) ?>">OFERTA RES-NEG</a>
+                <?php if (!$tx_stg_es_vendedor && $tx_evo_desde_enero): ?>
+                    <a class="tx-evo-toggle-link <?= $evo_view === 'play' ? 'active' : '' ?>" data-evo-view="play" href="?<?= htmlspecialchars(http_build_query($qs_evo_play)) ?>">PLAYS</a>
+                    <a class="tx-evo-toggle-link <?= $evo_view === 'bundle' ? 'active' : '' ?>" data-evo-view="bundle" href="?<?= htmlspecialchars(http_build_query($qs_evo_bundle)) ?>">BUNDLE</a>
+                <?php endif; ?>
             </div>
         </div>
-        <?php if ($tx_evo_desde_enero && $evo_view !== 'canal'): ?>
-            <div class="tx-evo-source-note">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Universo gerencial por registros, diferente del HC certificado Cambaceo/PDV.</div>
-            <?php if (!$tx_evo_fuente_catalogo_ok): ?><div class="tx-evo-error">No se pudo verificar la clasificación comercial. Consulta el log STAGING; no se muestran resultados estimados.</div><?php endif; ?>
-        <?php endif; ?>
+        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Universo gerencial por registros, diferente del HC certificado Cambaceo/PDV.</div>
+        <div id="txEvoError" class="tx-evo-error" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal' && !$tx_evo_fuente_catalogo_ok) ? '' : 'display:none;' ?>">No se pudo verificar la clasificación comercial. Consulta el log STAGING; no se muestran resultados estimados.</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                <div class="evo-sub" id="txEvoVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
                 <div class="evo-wrap"><canvas id="cVentEvo"></canvas></div>
             </div>
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                <div class="evo-sub" id="txEvoInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
                 <div class="evo-wrap"><canvas id="cInstEvo"></canvas></div>
             </div>
         </div>
@@ -5041,16 +5112,16 @@ include __DIR__ . '/includes/sidebar.php';
 
 
     <!-- TABLA DE PARTICIPACIÓN POR CANAL -->
-    <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked)): ?>
-    <div class="evo-card" style="margin-top:20px;">
-        <div class="chart-title"><?= htmlspecialchars($evo_participacion_titulo) ?></div>
+    <?php if (!empty($datos_inst_stacked) || !empty($datos_vent_stacked) || $tx_evo_desde_enero): ?>
+    <div class="evo-card" id="txEvoParticipationCard" style="margin-top:20px;">
+        <div class="chart-title" id="txEvoParticipationTitle"><?= htmlspecialchars($evo_participacion_titulo) ?></div>
         <div class="evo-grid" style="margin-top:16px;">
             <!-- VENTAS -->
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                <div class="evo-sub" id="txEvoParticipationVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
                 <div class="top-productividad-table-wrap tx-evo-table-scroll">
-                <table class="tx-evo-participacion-table" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
-                    <thead>
+                <table class="tx-evo-participacion-table" id="txEvoVentTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+                    <thead id="txEvoVentThead">
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;"><?= htmlspecialchars($evo_col_label) ?></th>
                             <?php foreach ($meses_labels as $idx_mes => $ml): ?>
@@ -5062,7 +5133,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <?php endforeach; ?>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="txEvoVentTbody">
                     <?php foreach ($datos_vent_table as $canal => $vals):
                         if (array_sum($vals) == 0) continue;
                     ?>
@@ -5089,10 +5160,10 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
             <!-- INSTALACIONES -->
             <div>
-                <div class="evo-sub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                <div class="evo-sub" id="txEvoParticipationInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
                 <div class="top-productividad-table-wrap tx-evo-table-scroll">
-                <table class="tx-evo-participacion-table" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
-                    <thead>
+                <table class="tx-evo-participacion-table" id="txEvoInstTable" style="width:100%;border-collapse:collapse;font-size:0.75rem;">
+                    <thead id="txEvoInstThead">
                         <tr>
                             <th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;"><?= htmlspecialchars($evo_col_label) ?></th>
                             <?php foreach ($meses_labels as $idx_mes => $ml): ?>
@@ -5104,7 +5175,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <?php endforeach; ?>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="txEvoInstTbody">
                     <?php foreach ($datos_inst_table as $canal => $vals):
                         if (array_sum($vals) == 0) continue;
                     ?>
@@ -5618,6 +5689,8 @@ const canalColores = {
     'Otro':                        txBrandColors.grisClaro,
     'Residencial':                 txBrandColors.azulElectrico,
     'Negocios':                    txBrandColors.magenta,
+    '2P':                          txBrandColors.azulElectrico,
+    '3P':                          txBrandColors.magenta,
     'Bundle':                      txBrandColors.magenta,
     'No Bundle':                   txBrandColors.azulElectrico,
     'Sin clasificar':              '#94a3b8',
@@ -5628,6 +5701,18 @@ const instCanales = <?= json_encode(empty($datos_inst_stacked) ? [] : array_keys
 const instData    = <?= json_encode(empty($datos_inst_stacked) ? [] : array_values($datos_inst_stacked)) ?>;
 const ventCanales = <?= json_encode(empty($datos_vent_stacked) ? [] : array_keys($datos_vent_stacked)) ?>;
 const ventData    = <?= json_encode(empty($datos_vent_stacked) ? [] : array_values($datos_vent_stacked)) ?>;
+
+// CACHE CLIENTE DE EVOLUCIÓN
+// Las cuatro vistas se calculan una sola vez en PHP y se entregan juntas.
+// Al cambiar de botón no se hace request, no se recarga el dashboard y no se recalculan KPIs.
+const txEvoViewCache = <?= json_encode($tx_evo_cache_views, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+const txEvoInitialView = <?= json_encode($evo_view) ?>;
+const txEvoCatalogOk = <?= $tx_evo_fuente_catalogo_ok ? 'true' : 'false' ?>;
+window.txEvoViewCache = txEvoViewCache;
+try {
+    const txEvoStorageKey = 'talia:evo:' + <?= json_encode(hash('sha256', ($rol ?? '').'|'.($scope_pos ?? '').'|'.$anio_query.'|'.$mes_actual.'|'.$rango_mode.'|'.$dia_inicio_dashboard.'|'.$dia_fin_dashboard)) ?>;
+    sessionStorage.setItem(txEvoStorageKey, JSON.stringify(txEvoViewCache));
+} catch (e) { /* cache persistente opcional */ }
 
 // 1. PLUGIN PARA LOS TOTALES (Con ajuste de margen superior)
 const pluginTotalesArriba = {
@@ -5727,7 +5812,7 @@ function makeStackOpts(matrix){
     };
 }
 
-new Chart(document.getElementById('cInstEvo'), {
+const txInstEvoChart = new Chart(document.getElementById('cInstEvo'), {
     type: 'bar',
     data: {
         labels: labels6,
@@ -5742,7 +5827,7 @@ new Chart(document.getElementById('cInstEvo'), {
     plugins: [pluginTotalesArriba]
 });
 
-new Chart(document.getElementById('cVentEvo'), {
+const txVentEvoChart = new Chart(document.getElementById('cVentEvo'), {
     type: 'bar',
     data: {
         labels: labels6,
@@ -5756,6 +5841,149 @@ new Chart(document.getElementById('cVentEvo'), {
     options: makeStackOpts(ventData),
     plugins: [pluginTotalesArriba]
 });
+
+function txEvoMatrix(view, source){
+    const cfg = txEvoViewCache[view] || txEvoViewCache.canal || {};
+    const matrix = cfg[source] || {};
+    const labels = Object.keys(matrix);
+    return {
+        labels,
+        data: labels.map(label => Array.isArray(matrix[label]) ? matrix[label].map(v => Number(v || 0)) : [])
+    };
+}
+
+function txEvoDatasets(matrix){
+    return matrix.labels.map((label, i) => ({
+        label,
+        data: matrix.data[i],
+        backgroundColor: canalColores[label] || txBrandColors.grisClaro,
+        borderRadius: i === matrix.labels.length - 1 ? 4 : 0,
+    }));
+}
+
+const txEvoSortState = {
+    vent: { idx: Math.max(0, labels6.length - 1), dir: 'desc' },
+    inst: { idx: Math.max(0, labels6.length - 1), dir: 'desc' }
+};
+
+function txEscapeHtml(value){
+    return String(value ?? '')
+        .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+        .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+}
+
+function txEvoTotals(matrix){
+    const totals = Array(labels6.length).fill(0);
+    Object.values(matrix || {}).forEach(vals => {
+        (vals || []).forEach((v, i) => { if (i < totals.length) totals[i] += Number(v || 0); });
+    });
+    return totals;
+}
+
+function txRenderEvoTable(view, source){
+    const cfg = txEvoViewCache[view] || txEvoViewCache.canal;
+    const matrix = cfg[source] || {};
+    const totals = txEvoTotals(matrix);
+    const stateKey = source === 'vent' ? 'vent' : 'inst';
+    const state = txEvoSortState[stateKey];
+    const thead = document.getElementById(source === 'vent' ? 'txEvoVentThead' : 'txEvoInstThead');
+    const tbody = document.getElementById(source === 'vent' ? 'txEvoVentTbody' : 'txEvoInstTbody');
+    if (!thead || !tbody) return;
+
+    const arrow = idx => idx === state.idx ? (state.dir === 'desc' ? '↓' : '↑') : '⇅';
+    thead.innerHTML = '<tr>' +
+        '<th style="text-align:left;padding:7px 10px;background:#e8f0fe;color:#000;border-radius:6px 0 0 0;font-size:0.7rem;">' + txEscapeHtml(cfg.col_label) + '</th>' +
+        labels6.map((label, idx) => '<th style="text-align:center;padding:7px 8px;background:#e8f0fe;color:#000;font-size:0.7rem;">' +
+            '<button type="button" class="tx-evo-sort-btn" data-evo-source="' + stateKey + '" data-evo-idx="' + idx + '" style="border:0;background:transparent;color:#000;display:inline-flex;gap:4px;align-items:center;justify-content:center;font-weight:700;cursor:pointer;white-space:nowrap;">' +
+            txEscapeHtml(label) + ' <span>' + arrow(idx) + '</span></button></th>').join('') + '</tr>';
+
+    const entries = Object.entries(matrix).filter(([, vals]) => (vals || []).reduce((a,v)=>a+Number(v||0),0) > 0);
+    entries.sort((a,b) => {
+        const av = Number((a[1] || [])[state.idx] || 0);
+        const bv = Number((b[1] || [])[state.idx] || 0);
+        return state.dir === 'asc' ? av - bv : bv - av;
+    });
+
+    let html = '';
+    entries.forEach(([name, vals]) => {
+        html += '<tr style="border-bottom:1px solid #e2e8f4;">';
+        html += '<td style="padding:6px 10px;font-weight:600;color:#1a2540;">' + txEscapeHtml(name) + '</td>';
+        labels6.forEach((_, i) => {
+            const v = Number((vals || [])[i] || 0);
+            const pct = totals[i] > 0 ? Math.round((v / totals[i]) * 1000) / 10 : 0;
+            html += '<td style="text-align:center;padding:6px 8px;color:' + (pct > 0 ? '#1a2540' : '#9ca3af') + ';">' + (pct > 0 ? pct.toLocaleString('es-MX',{maximumFractionDigits:1}) + '%' : '—') + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '<tr style="background:#e8f0fe;font-weight:700;"><td style="padding:6px 10px;color:#2b57a7;">Total</td>' +
+        totals.map(t => '<td style="text-align:center;padding:6px 8px;color:#2b57a7;">' + Number(t).toLocaleString('es-MX') + '</td>').join('') + '</tr>';
+    tbody.innerHTML = html;
+
+    thead.querySelectorAll('.tx-evo-sort-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const idx = Number(btn.dataset.evoIdx || 0);
+            if (state.idx === idx) state.dir = state.dir === 'desc' ? 'asc' : 'desc';
+            else { state.idx = idx; state.dir = 'desc'; }
+            txRenderEvoTable(view, source);
+        });
+    });
+}
+
+function txApplyEvoView(view, updateUrl = true){
+    if (!txEvoViewCache[view]) view = 'canal';
+    const cfg = txEvoViewCache[view];
+    const inst = txEvoMatrix(view, 'inst');
+    const vent = txEvoMatrix(view, 'vent');
+
+    txInstEvoChart.data.datasets = txEvoDatasets(inst);
+    txInstEvoChart.options = makeStackOpts(inst.data);
+    txInstEvoChart.update();
+
+    txVentEvoChart.data.datasets = txEvoDatasets(vent);
+    txVentEvoChart.options = makeStackOpts(vent.data);
+    txVentEvoChart.update();
+
+    const mapText = {
+        txEvoTitle: cfg.titulo,
+        txEvoParticipationTitle: cfg.participacion_titulo,
+        txEvoVentSub: cfg.vent_sub,
+        txEvoInstSub: cfg.inst_sub,
+        txEvoParticipationVentSub: cfg.vent_sub,
+        txEvoParticipationInstSub: cfg.inst_sub,
+    };
+    Object.entries(mapText).forEach(([id, value]) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value || '';
+    });
+
+    const sourceNote = document.getElementById('txEvoSourceNote');
+    const sourceError = document.getElementById('txEvoError');
+    if (sourceNote) sourceNote.style.display = cfg.catalogo ? '' : 'none';
+    if (sourceError) sourceError.style.display = (cfg.catalogo && !txEvoCatalogOk) ? '' : 'none';
+
+    document.querySelectorAll('.tx-evo-toggle-link').forEach(a => {
+        a.classList.toggle('active', a.dataset.evoView === view);
+    });
+
+    txRenderEvoTable(view, 'vent');
+    txRenderEvoTable(view, 'inst');
+
+    if (updateUrl && window.history && window.history.replaceState) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('evo_view', view);
+        history.replaceState({evo_view:view}, '', url.toString());
+    }
+}
+
+document.querySelectorAll('.tx-evo-toggle-link').forEach(a => {
+    a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        txApplyEvoView(a.dataset.evoView || 'canal', true);
+    });
+});
+
+// Re-render inicial para que tablas y controles queden bajo el mismo motor JS.
+txApplyEvoView(txEvoInitialView, false);
 </script>
 
 
