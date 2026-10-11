@@ -1693,7 +1693,7 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
 // NO cambia selectores, KPIs superiores, canal de ventas ni perfil vendedor.
 // Motor HC v0.6.2: solo Cambaceo/PDV con jerarquia certificada.
 // Motor Comercial v0.2.0: resumen comercial de LAS MISMAS cuentas HC.
-// El universo comercial es parcial: no representa el ARPU/Mix de todos los canales.
+// Vista gerencial: ARPU/Mix universales por registros; Lider/Coach mantienen HC.
 // ============================================================================
 $tx_stg_aplicable = !$tx_stg_es_vendedor && (int)$anio_query >= 2026;
 $tx_stg_ok = false;
@@ -1713,7 +1713,25 @@ $tx_stg_catalogo_lideres = [];
 $tx_stg_hc_foto = [];
 $tx_stg_hic_canonicos = [];
 
-if ($tx_stg_aplicable) {
+// Alcance comercial gerencial: todas las instalaciones de TODOS los canales.
+// Jamás se obtiene de parámetros GET. Una vista drill-down prevalece sobre rol.
+$tx_stg_scope_gerencial = null;
+if ($tx_stg_aplicable && !$scope_activo && in_array($rol, ['admin','director_regional'], true)) {
+    $tx_stg_scope_gerencial = ['tipo'=>'REGION'];
+} elseif ($tx_stg_aplicable && (($scope_activo && $scope_nivel === 'director_distrital') || (!$scope_activo && $rol === 'director_distrital'))) {
+    $tx_stg_scope_gerencial = [
+        'tipo'=>'DISTRITO',
+        'distrito'=>(string)($scope_activo ? ($distrito_scope ?? '') : $distrito_usuario),
+    ];
+}
+$tx_stg_gerencial = ($tx_stg_scope_gerencial !== null);
+$tx_stg_ambito_comercial_label = $tx_stg_gerencial
+    ? (($tx_stg_scope_gerencial['tipo'] === 'REGION') ? 'Todos los canales · Región SUR' : 'Todos los canales · Distrito')
+    : 'HC certificado Cambaceo/PDV';
+$tx_stg_hc_ok = false;
+$tx_stg_auditoria_arpu = ['validos'=>0,'catalogo_actual'=>0];
+
+if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol, ['admin','director_regional'], true))) {
     try {
         if (!($conexion instanceof mysqli)) {
             throw new RuntimeException('No hay conexion mysqli activa para motores TalIA');
@@ -1864,9 +1882,52 @@ if ($tx_stg_aplicable) {
     }
 }
 
+// Preservar resultado de MOTOR HC para la tarjeta jerárquica.
+// En perfiles gerenciales, ARPU y Mix se calculan con un universo independiente.
+$tx_stg_hc_ok = $tx_stg_ok;
+if ($tx_stg_aplicable && $tx_stg_gerencial) {
+    try {
+        require_once __DIR__ . '/includes/motor_comercial_STAGING.php';
+        $tx_stg_motor_gerencial = (isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial)
+            ? $tx_stg_motor_com : new MotorComercial($conexion);
+        $tx_stg_res_gerencial = $tx_stg_motor_gerencial->indicadoresInstalacionesPorCatalogo(
+            '2026-01-01', $fecha_fin_dashboard, $rango_mode,
+            (int)$dia_inicio_dashboard, (int)$dia_fin_dashboard, $tx_stg_scope_gerencial
+        );
+        $tx_stg_arpu_labels = [];
+        $tx_stg_arpu_data = [];
+        $tx_stg_mix_2p = $tx_stg_mix_3p = $tx_stg_mix_sin_clasificar = $tx_stg_universo_mes = 0;
+        $tx_stg_ym_vigente = sprintf('%04d-%02d',$anio_query,$mes_actual);
+        foreach ($tx_stg_res_gerencial['meses'] as $tx_stg_ym) {
+            $tx_stg_r = $tx_stg_res_gerencial['datos'][$tx_stg_ym];
+            $tx_stg_arpu_labels[] = (new DateTimeImmutable($tx_stg_ym.'-01'))->format('M Y');
+            $tx_stg_arpu_data[] = $tx_stg_r['arpu'];
+            if ($tx_stg_ym === $tx_stg_ym_vigente) {
+                $tx_stg_mix_2p = (int)$tx_stg_r['doble_play'];
+                $tx_stg_mix_3p = (int)$tx_stg_r['triple_play'];
+                $tx_stg_mix_sin_clasificar = (int)$tx_stg_r['play_sin_clasificar'];
+                $tx_stg_universo_mes = (int)$tx_stg_r['total'];
+                $tx_stg_auditoria_arpu = [
+                    'validos'=>(int)$tx_stg_r['arpu_cuentas'],
+                    'catalogo_actual'=>(int)$tx_stg_r['arpu_fuente_catalogo'],
+                ];
+            }
+        }
+        if ($tx_stg_universo_mes !== ($tx_stg_mix_2p + $tx_stg_mix_3p + $tx_stg_mix_sin_clasificar)) {
+            throw new LogicException('STAGING: Mix gerencial no concilia con total instalaciones');
+        }
+        $tx_stg_ok = true;
+        $tx_stg_error = null;
+    } catch (Throwable $tx_stg_gerencial_ex) {
+        $tx_stg_ok = false;
+        $tx_stg_error = $tx_stg_gerencial_ex->getMessage();
+        error_log('TalIA INDEX ARPU/MIX STAGING: '.$tx_stg_error);
+    }
+}
+
 // Reconstruir SOLO la tarjeta jerarquica de DIRECTOR/LIDER/COACH con universo HC.
 // Metrica real = cuentas certificadas Cambaceo/PDV del motor, sin atribucion textual.
-if ($tx_stg_aplicable && $tx_stg_ok && !(!$scope_activo && in_array($rol, ['admin','director_regional'], true))) {
+if ($tx_stg_aplicable && $tx_stg_hc_ok && !(!$scope_activo && in_array($rol, ['admin','director_regional'], true))) {
     $tmp = [];
     $tx_stg_nivel = $scope_activo ? $scope_nivel : $rol;
     $tx_stg_children = [];
@@ -2173,11 +2234,11 @@ if ($tx_stg_aplicable && $tx_stg_ok) {
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total
     FROM instalaciones
     WHERE fecha >= '$fecha_inicio_evolucion' AND fecha <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
+if (!in_array($rol_consulta, ['admin','director_regional'],true) && $scope_filtrar_por_distrito) {
     $query_inst .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
+} elseif (!in_array($rol_consulta, ['admin','director_regional'],true) && $por_distrito) {
     $query_inst .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
+} elseif (!in_array($rol_consulta, ['admin','director_regional'],true) && !empty($folio_ids)) {
     $ph = tx_sql_in_escaped($conexion, $folio_ids);
     $query_inst .= " AND folio_empleado IN ($ph)";
 }
@@ -2195,11 +2256,11 @@ while ($res_i && ($row=mysqli_fetch_assoc($res_i))) {
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total
     FROM ventas
     WHERE fecha_cierre >= '$fecha_inicio_evolucion' AND fecha_cierre <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha_cierre ";
-if ($rol_consulta !== 'admin' && $scope_filtrar_por_distrito) {
+if (!in_array($rol_consulta, ['admin','director_regional'],true) && $scope_filtrar_por_distrito) {
     $query_vent .= " AND distrito IN ($scope_distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && $por_distrito) {
+} elseif (!in_array($rol_consulta, ['admin','director_regional'],true) && $por_distrito) {
     $query_vent .= " AND distrito IN ($distritos_sql)";
-} elseif ($rol_consulta !== 'admin' && !empty($folio_ids)) {
+} elseif (!in_array($rol_consulta, ['admin','director_regional'],true) && !empty($folio_ids)) {
     $ph = tx_sql_in_escaped($conexion, $folio_ids);
     $query_vent .= " AND folio_empleado IN ($ph)";
 }
@@ -2224,10 +2285,8 @@ if ($tx_evo_desde_enero) {
         require_once __DIR__.'/includes/motor_comercial_STAGING.php';
         $tx_evo_motor = isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial ? $tx_stg_motor_com : new MotorComercial($conexion);
         // Visibilidad ADMIN/REGIONAL sin HC propio; filtro de distrito y línea para demás.
-        if (!$scope_activo && in_array($rol,['admin','director_regional'],true)) {
-            $tx_evo_scope=['tipo'=>'REGION'];
-        } elseif ($scope_filtrar_por_distrito || (!$scope_activo && $rol==='director_distrital')) {
-            $tx_evo_scope=['tipo'=>'DISTRITO','distrito'=>(string)($scope_filtrar_por_distrito ? ($distrito_scope ?? '') : $distrito_usuario)];
+        if ($tx_stg_gerencial) {
+            $tx_evo_scope=$tx_stg_scope_gerencial;
         } else {
             $tx_evo_scope=['tipo'=>'FOLIOS','folios'=>$folio_ids];
         }
@@ -2256,6 +2315,20 @@ if ($tx_evo_desde_enero) {
                 elseif ($dim==='play') $datos_vent_play_stacked=$matrix;
                 elseif ($source==='instalaciones') $datos_inst_bundle_stacked=$matrix;
                 else $datos_vent_bundle_stacked=$matrix;
+            }
+        }
+        // Validación ARPU/MIX vs evolución comercial: MISMO universo de instalaciones
+        // por mes (incluyendo «Sin clasificar»). Si no concilia, no mostrar cifras.
+        if ($tx_stg_gerencial && $tx_stg_ok) {
+            foreach (($tx_stg_res_gerencial['meses'] ?? []) as $ym_auditoria) {
+                $total_indicadores = (int)($tx_stg_res_gerencial['datos'][$ym_auditoria]['total'] ?? -1);
+                $total_evolucion = (int)($tx_evo_total_inst[$ym_auditoria] ?? -2);
+                if ($total_indicadores !== $total_evolucion) {
+                    $tx_stg_ok = false;
+                    $tx_stg_error = 'ARPU/Mix y Evolución no concilian para '.$ym_auditoria;
+                    error_log('TalIA STAGING: '.$tx_stg_error);
+                    break;
+                }
             }
         }
         $tx_evo_fuente_catalogo_ok=true;
@@ -5104,7 +5177,7 @@ include __DIR__ . '/includes/sidebar.php';
 
         <div class="chart-card arpu-card">
             <div class="chart-title"><?= ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses') ?></div>
-            <div class="hierarchy-performance-sub" style="margin-top:2px;"><?= $tx_stg_aplicable ? 'Motor Comercial · Precio lista sin IVA · HC certificado Cambaceo/PDV' : 'Mismo rango seleccionado · precio pronto pago' ?></div>
+            <div class="hierarchy-performance-sub" style="margin-top:2px;"><?= $tx_stg_aplicable ? 'Motor Comercial · Precio lista sin IVA · '.htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') : 'Mismo rango seleccionado · precio pronto pago' ?></div>
             <?php if ($tx_stg_aplicable && $tx_stg_ok && count($arpu_labels) > 0):
                 $tx_arpu_last = count($arpu_labels)-1;
                 $tx_arpu_last_value = $arpu_data[$tx_arpu_last] ?? null;
@@ -5112,11 +5185,14 @@ include __DIR__ . '/includes/sidebar.php';
             ?>
                 <div class="tx-arpu-ultimo" aria-label="ARPU del último mes seleccionado">
                     <span>Último mes · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
-                    <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin dato certificado' ?></strong>
+                    <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin precio válido' ?></strong>
                 </div>
             <?php endif; ?>
+            <?php if ($tx_stg_gerencial && $tx_stg_ok && ($tx_stg_auditoria_arpu['validos'] ?? 0) < $tx_stg_universo_mes): ?>
+                <div style="font-size:10px;color:#64748b;padding:3px 0;">ARPU: <?= number_format((int)($tx_stg_auditoria_arpu['validos'] ?? 0)) ?> instalaciones con precio válido de <?= number_format((int)$tx_stg_universo_mes) ?>.</div>
+            <?php endif; ?>
             <?php if ($tx_stg_aplicable && $tx_stg_error !== null): ?>
-                <div style="font-size:12px;color:#b91c1c;padding:8px 0;">Indicador no disponible: revisar el registro de errores de STAGING. No se muestran valores no certificados.</div>
+                <div style="font-size:12px;color:#b91c1c;padding:8px 0;">Indicador no disponible: revisar el registro de errores de STAGING. No se muestran valores incompletos.</div>
             <?php endif; ?>
             <div class="chart-wrap"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cArpuHist"></canvas></div>
         </div>
@@ -5124,11 +5200,11 @@ include __DIR__ . '/includes/sidebar.php';
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Instalaciones</div>
             <?php if ($tx_stg_aplicable): ?>
-                <div class="hierarchy-performance-sub" style="margin-top:2px;">Motor Comercial · HC certificado Cambaceo/PDV · <?= number_format((int)$tx_stg_universo_mes) ?> cuentas</div>
+                <div class="hierarchy-performance-sub" style="margin-top:2px;">Motor Comercial · <?= htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') ?> · <?= number_format((int)$tx_stg_universo_mes) ?> instalaciones</div>
                 <?php if ($tx_stg_error !== null): ?>
                     <div style="font-size:12px;color:#b91c1c;padding:8px 0;">Indicador no disponible: revisar errores STAGING.</div>
                 <?php elseif ($tx_stg_mix_sin_clasificar > 0): ?>
-                    <div style="font-size:11px;color:#64748b;padding:4px 0;">Sin clasificar: <?= number_format((int)$tx_stg_mix_sin_clasificar) ?> cuenta(s); se muestran separadas.</div>
+                    <div style="font-size:11px;color:#64748b;padding:4px 0;">Sin clasificar: <?= number_format((int)$tx_stg_mix_sin_clasificar) ?> instalación(es); se muestran separadas.</div>
                 <?php endif; ?>
             <?php endif; ?>
             <div class="chart-wrap"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cInstMix"></canvas></div>
@@ -5158,7 +5234,7 @@ include __DIR__ . '/includes/sidebar.php';
                 <?php endif; ?>
             </div>
         </div>
-        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Universo gerencial por registros, diferente del HC certificado Cambaceo/PDV.</div>
+        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Totales por registro según el alcance autorizado; todos los canales en vistas gerenciales y folios autorizados en las demás.</div>
         <div id="txEvoError" class="tx-evo-error" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal' && !$tx_evo_fuente_catalogo_ok) ? '' : 'display:none;' ?>">No se pudo verificar la clasificación comercial. Consulta el log STAGING; no se muestran resultados estimados.</div>
         <div class="evo-grid">
             <div>
@@ -5710,13 +5786,13 @@ new Chart(document.getElementById('cArpuHist'), {
     options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 24, right: 32, left: 4 } },
+        layout: { padding: { top: 32, right: 32, left: 4 } },
         plugins: {
             legend: { display: false },
             datalabels: {
                 anchor: 'end',
-                align: ctx => ctx.dataIndex === arpuLabels.length - 1 ? 'left' : 'top',
-                offset: ctx => ctx.dataIndex === arpuLabels.length - 1 ? 7 : 4,
+                align: 'top',
+                offset: ctx => ctx.dataIndex === arpuLabels.length - 1 ? 9 : 5,
                 clip: false,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
