@@ -506,6 +506,12 @@ if ($periodo === 'semanal') {
     $dias_rango_dashboard = (int)(new DateTimeImmutable($fecha_inicio_dashboard))->diff(new DateTimeImmutable($fecha_fin_dashboard))->days + 1;
 }
 $tx_dashboard_cruza_mes = substr($fecha_inicio_dashboard,0,7) !== substr($fecha_fin_dashboard,0,7);
+// Meses históricos completos ANTES del primer mes elegido; primer mes parcial
+// y último mes parcial. El Mix circular usa solo las fechas seleccionadas.
+$tx_evo_inicio_rango_cruzado = ($periodo === 'mensual' && $tx_dashboard_cruza_mes)
+    ? $fecha_inicio_dashboard : null;
+$tx_evo_filtro_mes_inicio = $tx_evo_inicio_rango_cruzado !== null
+    ? substr($fecha_inicio_dashboard,0,7).'-01' : null;
 $dia_inicio_dashboard = (int)date('j',strtotime($fecha_inicio_dashboard));
 $dia_fin_dashboard = (int)date('j',strtotime($fecha_fin_dashboard));
 $fecha_corte_timestamp = strtotime($fecha_fin_dashboard);
@@ -1911,6 +1917,9 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
             }
             $tx_stg_desde = sprintf('%s-%02d', $tx_stg_ym, $tx_stg_dia_ini);
             $tx_stg_hasta = sprintf('%s-%02d', $tx_stg_ym, $tx_stg_dia_fin);
+            if ($tx_evo_inicio_rango_cruzado !== null && $tx_stg_ym === substr($tx_evo_inicio_rango_cruzado,0,7)) {
+                $tx_stg_desde = max($tx_stg_desde,$tx_evo_inicio_rango_cruzado);
+            }
             // Nunca consultar dias posteriores al corte elegido del mes actual.
             if ($tx_stg_ym === substr($fecha_fin_dashboard, 0, 7) && $tx_stg_hasta > $fecha_fin_dashboard) {
                 $tx_stg_hasta = $fecha_fin_dashboard;
@@ -2004,9 +2013,13 @@ if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal') {
         require_once __DIR__ . '/includes/motor_comercial_STAGING.php';
         $tx_stg_motor_gerencial = (isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial)
             ? $tx_stg_motor_com : new MotorComercial($conexion);
+        $tx_stg_indicador_modo = ($tx_dashboard_cruza_mes ? 'completo' : $rango_mode);
+        $tx_stg_indicador_dia_ini = ($tx_stg_indicador_modo === 'completo') ? 1 : (int)$dia_inicio_dashboard;
+        $tx_stg_indicador_dia_fin = ($tx_stg_indicador_modo === 'completo') ? 31 : (int)$dia_fin_dashboard;
         $tx_stg_res_gerencial = $tx_stg_motor_gerencial->indicadoresInstalacionesPorCatalogo(
-            '2026-01-01', $fecha_fin_dashboard, (($periodo === 'semanal' || $tx_dashboard_cruza_mes) ? 'completo' : $rango_mode),
-            (int)$dia_inicio_dashboard, (int)$dia_fin_dashboard, $tx_stg_scope_gerencial
+            '2026-01-01', $fecha_fin_dashboard, $tx_stg_indicador_modo,
+            $tx_stg_indicador_dia_ini, $tx_stg_indicador_dia_fin,
+            $tx_stg_scope_gerencial, $tx_evo_inicio_rango_cruzado
         );
         $tx_stg_arpu_labels = [];
         $tx_stg_arpu_data = [];
@@ -2031,7 +2044,8 @@ if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal') {
             throw new LogicException('STAGING: Mix gerencial no concilia con total instalaciones');
         }
         if ($periodo === 'semanal' || $tx_dashboard_cruza_mes) {
-            // El Mix es del rango exacto. El gráfico de tendencia de ARPU es mensual.
+            // El Mix es de las fechas reales elegidas, no solo del último mes.
+            // La tendencia histórica mensual conserva sus propias series parciales.
             $gruposFechas = [];
             if ($periodo === 'semanal') {
                 $fechas = $tx_fechas_seleccionadas;
@@ -2044,7 +2058,7 @@ if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal') {
                 }
                 if ($iniBloque !== null) $gruposFechas[]=[$iniBloque,$finBloque];
             } else $gruposFechas=[[$fecha_inicio_dashboard,$fecha_fin_dashboard]];
-            $suma=['total'=>0,'doble_play'=>0,'triple_play'=>0,'play_sin_clasificar'=>0];
+            $suma=['total'=>0,'doble_play'=>0,'triple_play'=>0,'play_sin_clasificar'=>0,'arpu_cuentas'=>0,'arpu_fuente_catalogo'=>0];
             foreach ($gruposFechas as [$inicioGrupo,$finGrupo]) {
                 $rangoRes=$tx_stg_motor_gerencial->indicadoresInstalacionesPorCatalogo(
                     $inicioGrupo,$finGrupo,'completo',1,31,$tx_stg_scope_gerencial);
@@ -2056,6 +2070,10 @@ if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal') {
             $tx_stg_mix_2p=$suma['doble_play'];
             $tx_stg_mix_3p=$suma['triple_play'];
             $tx_stg_mix_sin_clasificar=$suma['play_sin_clasificar'];
+            $tx_stg_auditoria_arpu = [
+                'validos'=>$suma['arpu_cuentas'],
+                'catalogo_actual'=>$suma['arpu_fuente_catalogo'],
+            ];
             if ($tx_stg_universo_mes !== ($tx_stg_mix_2p+$tx_stg_mix_3p+$tx_stg_mix_sin_clasificar)) {
                 throw new LogicException('Mix seleccionado Motor Comercial no concilia');
             }
@@ -2390,7 +2408,7 @@ if ($periodo === 'semanal' && $tx_evo_week_keys) {
 }
 // ARPU anterior del STAGING conserva íntegra su lógica.
 if ($periodo === 'semanal' && $tx_evo_week_keys) {
-    $arpu_labels = $meses_labels;
+    $arpu_labels = array_map(static fn($k) => 'S'.(int)substr((string)$k,4),$tx_evo_week_keys);
     $arpu_data = array_fill(0,count($meses_labels),null);
 } elseif ($tx_stg_aplicable && $tx_stg_ok) {
     $arpu_labels = $tx_stg_arpu_labels;
@@ -2414,9 +2432,13 @@ if ($periodo === 'semanal' && $tx_evo_week_keys) {
 // CANAL DE VENTA: mismos SELECT, filtros, clasificaciones y participaciones del producto.
 // Sólo se amplía el período inicial; se limita al cierre seleccionado.
 if ($periodo !== 'semanal' || !$tx_evo_week_keys) {
+$tx_evo_where_cruce_inst = $tx_evo_inicio_rango_cruzado !== null
+    ? " AND (fecha < '$tx_evo_filtro_mes_inicio' OR fecha >= '$tx_esc_ini')" : '';
+$tx_evo_where_cruce_vent = $tx_evo_inicio_rango_cruzado !== null
+    ? " AND (fecha_cierre < '$tx_evo_filtro_mes_inicio' OR fecha_cierre >= '$tx_esc_ini')" : '';
 $query_inst = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, origen_prospecto, COUNT(*) as total
     FROM instalaciones
-    WHERE fecha >= '$fecha_inicio_evolucion' AND fecha <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
+    WHERE fecha >= '$fecha_inicio_evolucion' AND fecha <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha $tx_evo_where_cruce_inst AND origen_prospecto <> '-' ";
 if (!in_array($rol_consulta, ['admin','director_regional'],true) && $scope_filtrar_por_distrito) {
     $query_inst .= " AND distrito IN ($scope_distritos_sql)";
 } elseif (!in_array($rol_consulta, ['admin','director_regional'],true) && $por_distrito) {
@@ -2438,7 +2460,7 @@ while ($res_i && ($row=mysqli_fetch_assoc($res_i))) {
 }
 $query_vent = "SELECT MONTH(fecha_cierre) as mes, YEAR(fecha_cierre) as anio, canal_venta, COUNT(*) as total
     FROM ventas
-    WHERE fecha_cierre >= '$fecha_inicio_evolucion' AND fecha_cierre <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha_cierre ";
+    WHERE fecha_cierre >= '$fecha_inicio_evolucion' AND fecha_cierre <= '$fecha_fin_dashboard' $cond_dia_evolucion_fecha_cierre $tx_evo_where_cruce_vent ";
 if (!in_array($rol_consulta, ['admin','director_regional'],true) && $scope_filtrar_por_distrito) {
     $query_vent .= " AND distrito IN ($scope_distritos_sql)";
 } elseif (!in_array($rol_consulta, ['admin','director_regional'],true) && $por_distrito) {
@@ -2474,7 +2496,13 @@ if ($tx_evo_desde_enero && $periodo !== 'semanal') {
         } else {
             $tx_evo_scope=['tipo'=>'FOLIOS','folios'=>$folio_ids];
         }
-        $tx_evo_res=$tx_evo_motor->evolucionPorCatalogo($fecha_inicio_evolucion,$fecha_fin_dashboard,(($periodo === 'semanal' || $tx_dashboard_cruza_mes) ? 'completo' : $rango_mode),(int)$dia_inicio_dashboard,(int)$dia_fin_dashboard,$tx_evo_scope);
+        $tx_evo_modo = $tx_dashboard_cruza_mes ? 'completo' : $rango_mode;
+        $tx_evo_res=$tx_evo_motor->evolucionPorCatalogo(
+            $fecha_inicio_evolucion,$fecha_fin_dashboard,$tx_evo_modo,
+            $tx_evo_modo === 'completo' ? 1 : (int)$dia_inicio_dashboard,
+            $tx_evo_modo === 'completo' ? 31 : (int)$dia_fin_dashboard,
+            $tx_evo_scope,$tx_evo_inicio_rango_cruzado
+        );
         $tx_evo_total_inst=$tx_evo_res['totales']['instalaciones'];
         $tx_evo_total_vent=$tx_evo_res['totales']['ventas'];
         // Conciliación cruzada contra el Canal de Venta que el ADMIN ya validó.
@@ -2503,7 +2531,7 @@ if ($tx_evo_desde_enero && $periodo !== 'semanal') {
         }
         // Validación ARPU/MIX vs evolución comercial: MISMO universo de instalaciones
         // por mes (incluyendo «Sin clasificar»). Si no concilia, no mostrar cifras.
-        if ($tx_stg_gerencial && $tx_stg_ok && $periodo !== 'semanal' && !$tx_dashboard_cruza_mes) {
+        if ($tx_stg_gerencial && $tx_stg_ok && $periodo !== 'semanal') {
             foreach (($tx_stg_res_gerencial['meses'] ?? []) as $ym_auditoria) {
                 $total_indicadores = (int)($tx_stg_res_gerencial['datos'][$ym_auditoria]['total'] ?? -1);
                 $total_evolucion = (int)($tx_evo_total_inst[$ym_auditoria] ?? -2);
@@ -2626,7 +2654,7 @@ if ($periodo === 'semanal' && $tx_evo_week_keys) {
             // Vendedor: se conserva alcance limitado exclusivamente a sus folios.
             $arpu_data=array_values($tx_evo_result_sem['arpu']);
         }
-        $arpu_labels=$meses_labels;
+        $arpu_labels=array_map(static fn($k) => 'S'.(int)substr((string)$k,4),$tx_evo_week_keys);
         $tx_evo_semana_last=end($tx_evo_week_keys);
         $tx_evo_semana_resumen=(string)($tx_evo_result_sem['rangos'][$tx_evo_semana_last]['desde']??'');
         // El total semanal por dimensión debe coincidir EXACTAMENTE con el KPI de corte
@@ -4627,13 +4655,14 @@ if ($tx_geo_sum_count > 0) {
             box-sizing:border-box;
             overflow:hidden;
         }
-        /* Semanal: las 41+ semanas NO se comprimen: scroll horizontal por gráfica. */
+        /* Semanal: todas las semanas caben en el ancho nativo de cada tarjeta.
+           Únicamente la matriz de Participación conserva desplazamiento horizontal. */
         .tx-historical-scroll {max-width:100%;min-width:0;}
-        .tx-weekly-scroll {width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;}
-        .tx-weekly-scroll .tx-weekly-evo-inner {width:max(100%, var(--tx-weekly-evo-width, 2100px));max-width:none;min-width:0;}
-        .tx-weekly-scroll .tx-weekly-arpu-inner {width:max(100%, var(--tx-weekly-arpu-width, 1900px));max-width:none;min-width:0;}
+        .tx-weekly-scroll {width:100%;overflow:hidden;}
+        .tx-weekly-scroll .tx-weekly-evo-inner,
+        .tx-weekly-scroll .tx-weekly-arpu-inner {width:100%;max-width:100%;min-width:0;}
         .tx-weekly-scroll .tx-weekly-arpu-inner canvas,
-        .tx-weekly-scroll .tx-weekly-evo-inner canvas {max-width:none !important;}
+        .tx-weekly-scroll .tx-weekly-evo-inner canvas {max-width:100% !important;}
         .chart-wrap,
         .evo-wrap{
             position:relative;
@@ -5539,7 +5568,9 @@ include __DIR__ . '/includes/sidebar.php';
             <?php if ($tx_stg_aplicable && $tx_stg_ok && count($arpu_labels) > 0):
                 $tx_arpu_last = count($arpu_labels)-1;
                 $tx_arpu_last_value = $arpu_data[$tx_arpu_last] ?? null;
-                $tx_arpu_last_label = $arpu_labels[$tx_arpu_last] ?? '';
+                $tx_arpu_last_label = ($periodo === 'semanal' && $tx_evo_week_keys)
+                    ? (($meses_labels[$tx_arpu_last] ?? '') ?: ($arpu_labels[$tx_arpu_last] ?? ''))
+                    : ($arpu_labels[$tx_arpu_last] ?? '');
             ?>
                 <div class="tx-arpu-ultimo" aria-label="ARPU del último período seleccionado">
                     <span><?= $periodo === 'semanal' ? 'Última semana' : 'Último mes' ?> · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
@@ -6116,6 +6147,8 @@ new Chart(document.getElementById('cInstMix'), {
     options: donutOpts(),
     plugins: [ChartDataLabels]
 });
+const txWeeklyMode = <?= ($periodo === 'semanal' && (bool)$tx_evo_week_keys) ? 'true' : 'false' ?>;
+const txArpuFullWeekLabels = <?= json_encode($meses_labels, JSON_UNESCAPED_UNICODE) ?>;
 const arpuLabels = <?= json_encode($arpu_labels) ?>;
 const arpuData = <?= json_encode($arpu_data) ?>;
 
@@ -6140,8 +6173,9 @@ new Chart(document.getElementById('cArpuHist'), {
             pointBackgroundColor: txBrandColors.magenta,
             pointBorderColor: '#ffffff',
             pointBorderWidth: 2,
-            pointRadius: arpuLabels.length > 8 ? 3 : 4,
+            pointRadius: ctx => txWeeklyMode ? (ctx.dataIndex === arpuLabels.length-1 ? 3 : 1.4) : (arpuLabels.length > 8 ? 3 : 4),
             pointHoverRadius: 6,
+            pointHitRadius: txWeeklyMode ? 12 : 6,
             borderWidth: 3,
             tension: 0.35,
             fill: true
@@ -6160,12 +6194,21 @@ new Chart(document.getElementById('cArpuHist'), {
                 clip: false,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
-                display: ctx => ((arpuLabels.length - 1 - ctx.dataIndex) % 2 === 0) && Number(arpuData[ctx.dataIndex] || 0) > 0,
+                display: ctx => (txWeeklyMode
+                    ? ctx.dataIndex === arpuLabels.length - 1
+                    : ((arpuLabels.length - 1 - ctx.dataIndex) % 2 === 0))
+                    && Number(arpuData[ctx.dataIndex] || 0) > 0,
                 formatter: value => value > 0 ? '$' + Math.round(value).toLocaleString('es-MX') : ''
             },
             tooltip: {
+                mode: 'index', intersect: false,
                 callbacks: {
-                    label: ctx => ' ARPU: $' + Number(ctx.parsed.y || 0).toLocaleString('es-MX', {maximumFractionDigits: 0})
+                    title: contexts => {
+                        const i = contexts?.[0]?.dataIndex ?? -1;
+                        return txWeeklyMode ? (txArpuFullWeekLabels[i] || arpuLabels[i] || '') : (arpuLabels[i] || '');
+                    },
+                    label: ctx => ctx.parsed.y === null ? ' ARPU: sin precio válido'
+                        : ' ARPU: $' + Number(ctx.parsed.y).toLocaleString('es-MX', {maximumFractionDigits: 0})
                 }
             }
         },
@@ -6181,7 +6224,9 @@ new Chart(document.getElementById('cArpuHist'), {
             },
             x: {
                 grid: { display: false },
-                ticks: { font: { size: 10, weight: 'bold' }, maxRotation: 50, autoSkip: true, maxTicksLimit: 7 }
+                ticks: { font: { size: txWeeklyMode ? 9 : 10, weight: 'bold' },
+                    minRotation: 0, maxRotation: txWeeklyMode ? 0 : 50,
+                    autoSkip: true, maxTicksLimit: txWeeklyMode ? 6 : 7 }
             }
         }
     },
@@ -6237,6 +6282,7 @@ const pluginTotalesArriba = {
         if (!chart.data.datasets || !chart.data.datasets.length) return;
         const ctx = chart.ctx;
         chart.data.datasets[0].data.forEach((_, index) => {
+            if (txWeeklyMode && index !== chart.data.labels.length-1) return;
             let total = 0;
             let topY = chart.scales.y.bottom;
             let metaX = 0;
@@ -6299,10 +6345,12 @@ function makeStackOpts(matrix){
         layout: {
             padding: { top: 26 }
         },
+        datasets: { bar: { categoryPercentage: txWeeklyMode ? 0.92 : 0.8,
+            barPercentage: txWeeklyMode ? 0.9 : 0.9, maxBarThickness: txWeeklyMode ? 16 : 42 } },
         plugins: { 
             legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
             datalabels: { 
-                display: (context) => context.dataset.data[context.dataIndex] > 0, 
+                display: (context) => !txWeeklyMode && context.dataset.data[context.dataIndex] > 0, 
                 color: '#ffffff',
                 font: { weight: 'bold', size: 11 },
                 textShadowColor: 'rgba(0, 0, 0, 0.5)',
@@ -6322,7 +6370,8 @@ function makeStackOpts(matrix){
             x: { 
                 stacked: true, 
                 grid: { display: false },
-                ticks: { font: { size: 10, weight: 'bold' }, autoSkip: true, maxTicksLimit: 10, maxRotation: 40 } 
+                ticks: { font: { size: txWeeklyMode ? 9 : 10, weight: 'bold' }, autoSkip: true,
+                    maxTicksLimit: txWeeklyMode ? 8 : 10, maxRotation: txWeeklyMode ? 0 : 40 } 
             }
         }
     };
@@ -6533,20 +6582,8 @@ document.querySelectorAll('.tx-participacion-arrow').forEach(btn => {
         el.scrollBy({left:delta * dir,behavior:'smooth'});
     });
 });
-// En semanal, desplazar también ARPU y gráficas apiladas a las semanas recientes.
-const txWeeklyVisible = <?= ($periodo === 'semanal' && (bool)$tx_evo_week_keys) ? 'true' : 'false' ?>;
-if (txWeeklyVisible) {
-    const anchoEvo = Math.max(650, labels6.length * 72);
-    const anchoArpu = Math.max(300, arpuLabels.length * 58);
-    document.documentElement.style.setProperty('--tx-weekly-evo-width', anchoEvo + 'px');
-    document.documentElement.style.setProperty('--tx-weekly-arpu-width', anchoArpu + 'px');
-    requestAnimationFrame(() => {
-        ['txVentEvoScroll','txInstEvoScroll','txArpuScroll'].forEach(id => {
-            const el=document.getElementById(id);
-            if(el) el.scrollLeft=Math.max(0,el.scrollWidth-el.clientWidth);
-        });
-    });
-}
+// En Semanal, no ampliar artificialmente las gráficas: todas las semanas
+// quedan visibles; conservar scroll sólo en la tabla de Participación.
 // Re-render inicial para que tablas y controles queden bajo el mismo motor JS.
 txApplyEvoView(txEvoInitialView, false);
 requestAnimationFrame(txResetParticipationToLatest);
