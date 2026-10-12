@@ -692,6 +692,145 @@ final class MotorComercial
     }
 
 
+    /**
+     * Series diarias de un rango personalizado, por REGISTRO y todos los canales
+     * del scope AUTORIZADO. Sin período histórico añadido. La agrupación se hace
+     * en SQL por fecha/plan/canal/precio y mantiene 2P/3P, RES/NEG y Bundle del catálogo.
+     */
+    public function seriesDiariasPorCatalogo(string $desde, string $hasta, array $scope): array
+    {
+        $inicio = DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
+        $fin = DateTimeImmutable::createFromFormat('!Y-m-d',$hasta);
+        if (!$inicio || !$fin || $inicio->format('Y-m-d')!==$desde || $fin->format('Y-m-d')!==$hasta || $inicio>$fin) {
+            throw new InvalidArgumentException('Serie diaria: fechas inválidas');
+        }
+        $dias=[];
+        for ($d=$inicio; $d<=$fin; $d=$d->modify('+1 day')) $dias[]=$d->format('Y-m-d');
+        $dimensiones=[
+            'oferta'=>['Residencial','Negocios','Sin clasificar'],
+            'play'=>['2P','3P','Sin clasificar'],
+            'bundle'=>['Bundle','No Bundle','Sin clasificar'],
+        ];
+        $datos=[];
+        foreach (['ventas','instalaciones'] as $origen) {
+            foreach ($dimensiones as $dim=>$categorias) {
+                foreach ($categorias as $cat) $datos[$dim][$origen][$cat]=array_fill_keys($dias,0);
+            }
+            $datos['canal'][$origen]=[];
+        }
+        $out=[
+            'dias'=>$dias, 'datos'=>$datos,
+            'totales'=>['ventas'=>array_fill_keys($dias,0),'instalaciones'=>array_fill_keys($dias,0)],
+            'arpu'=>array_fill_keys($dias,null),'arpu_cuentas'=>array_fill_keys($dias,0),
+        ];
+        $ingresos=array_fill_keys($dias,0.0);
+        foreach (['ventas','instalaciones'] as $origen) {
+            $tabla=$origen==='ventas'?'ventas':'instalaciones';
+            $fecha=$origen==='ventas'?'fecha_cierre':'fecha';
+            $plan=$origen==='ventas'?'nombre_plan':'plan';
+            $canal=$origen==='ventas'?'canal_venta':'origen_prospecto';
+            $precio=($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) ? '`precio_lista`' : 'NULL';
+            $sql="SELECT `{$fecha}` AS dia, `{$plan}` AS plan, `{$canal}` AS canal, {$precio} AS precio, COUNT(*) AS n
+                  FROM `{$tabla}` WHERE `{$fecha}` >= ? AND `{$fecha}` <= ?";
+            $args=[$desde,$hasta];
+            if($origen==='instalaciones') $sql.=" AND `origen_prospecto` <> '-'";
+            $sql.=$this->filtrosGerenciales($origen,$scope,$args);
+            $sql.=" GROUP BY `{$fecha}`, `{$plan}`, `{$canal}`";
+            if($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) $sql.=', `precio_lista`';
+            $st=$this->db->prepare($sql);
+            if (!$st) throw new RuntimeException('Serie diaria: no se pudo preparar '.$tabla);
+            $st->bind_param(str_repeat('s',count($args)),...$args);
+            if (!$st->execute()) throw new RuntimeException('Serie diaria: consulta falló para '.$tabla);
+            $rs=$st->get_result();
+            if (!$rs) throw new RuntimeException('Serie diaria: sin resultados '.$tabla);
+            while($r=$rs->fetch_assoc()) {
+                $dia=substr((string)($r['dia']??''),0,10);
+                if (!array_key_exists($dia,$out['totales'][$origen])) continue;
+                $n=(int)($r['n']??0);
+                if($n<=0) continue;
+                $out['totales'][$origen][$dia]+=$n;
+                $nombreCanal=trim((string)($r['canal']??''));
+                if($nombreCanal==='') $nombreCanal='OTROS';
+                if(!isset($out['datos']['canal'][$origen][$nombreCanal])) {
+                    $out['datos']['canal'][$origen][$nombreCanal]=array_fill_keys($dias,0);
+                }
+                $out['datos']['canal'][$origen][$nombreCanal][$dia]+=$n;
+                $c=self::clasificarCuenta([['plan'=>$r['plan']??'','precio_lista'=>$r['precio']??null]],$this->catalogo);
+                $oferta=match($c['oferta']) {'residencial'=>'Residencial','negocios'=>'Negocios',default=>'Sin clasificar'};
+                $play=match($c['play']) {'doble_play'=>'2P','triple_play'=>'3P',default=>'Sin clasificar'};
+                $bundle=match($c['bundle']) {'bundle'=>'Bundle','no_bundle'=>'No Bundle',default=>'Sin clasificar'};
+                $out['datos']['oferta'][$origen][$oferta][$dia]+=$n;
+                $out['datos']['play'][$origen][$play][$dia]+=$n;
+                $out['datos']['bundle'][$origen][$bundle][$dia]+=$n;
+                if($origen==='instalaciones' && $c['precio_neto']!==null) {
+                    $ingresos[$dia]+=(float)$c['precio_neto']*$n;
+                    $out['arpu_cuentas'][$dia]+=$n;
+                }
+            }
+            $rs->free();$st->close();
+        }
+        foreach($dias as $dia) {
+            $n=(int)$out['arpu_cuentas'][$dia];
+            if($n>0) $out['arpu'][$dia]=round($ingresos[$dia]/$n,2);
+            foreach(['ventas','instalaciones'] as $origen) foreach(['canal','oferta','play','bundle'] as $dim) {
+                $total=0;
+                foreach($out['datos'][$dim][$origen] as $serie) $total+=(int)($serie[$dia]??0);
+                if($total!==(int)$out['totales'][$origen][$dia]) {
+                    throw new LogicException('Serie diaria: no concilia '.$origen.' '.$dim.' '.$dia);
+                }
+            }
+        }
+        return $out;
+    }
+
+    /** Para ARPU diario de Líder/Coach se limita a eventos certificados por Motor HC. */
+    public function indicadoresDiariosHc(array $eventos,string $desde,string $hasta): array
+    {
+        $ini=DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
+        $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$hasta);
+        if(!$ini || !$fin || $ini->format('Y-m-d')!==$desde || $fin->format('Y-m-d')!==$hasta || $ini>$fin) {
+            throw new InvalidArgumentException('ARPU diario HC: rango inválido');
+        }
+        $dias=[];
+        for($d=$ini;$d<=$fin;$d=$d->modify('+1 day')) $dias[$d->format('Y-m-d')]=self::resumenVacio();
+        $cuentas=[];$fechaCuenta=[];
+        foreach($eventos as $e) {
+            $cuenta=trim((string)($e['cuenta']??''));
+            $fecha=substr((string)($e['fecha']??''),0,10);
+            if($cuenta===''||$fecha<$desde||$fecha>$hasta) continue;
+            if(isset($cuentas[$cuenta])) throw new LogicException('ARPU diario HC: cuenta duplicada '.$cuenta);
+            $cuentas[$cuenta]=true;$fechaCuenta[$cuenta]=$fecha;
+        }
+        $filas=[];
+        if($cuentas) {
+            $columnas='`cuenta`,`fecha`,`plan`'.(isset($this->columnasInst['precio_lista'])?',`precio_lista`':'');
+            foreach(array_chunk(array_keys($cuentas),300) as $lote) {
+                $ph=implode(',',array_fill(0,count($lote),'?'));
+                $sql="SELECT {$columnas} FROM `instalaciones` WHERE `cuenta` IN ({$ph})
+                    AND `fecha` >= ? AND `fecha` <= ? AND UPPER(TRIM(`origen_prospecto`)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
+                $st=$this->db->prepare($sql);
+                if(!$st) throw new RuntimeException('ARPU diario HC: lectura no preparada');
+                $args=array_merge($lote,[$desde,$hasta]);
+                $st->bind_param(str_repeat('s',count($args)),...$args);
+                if(!$st->execute()) throw new RuntimeException('ARPU diario HC: consulta fallida');
+                $rs=$st->get_result();
+                if(!$rs) throw new RuntimeException('ARPU diario HC: lectura fallida');
+                while($r=$rs->fetch_assoc()) {
+                    $id=trim((string)($r['cuenta']??''));
+                    if(isset($cuentas[$id])) $filas[$id][]=$r;
+                }
+                $rs->free();$st->close();
+            }
+        }
+        foreach($fechaCuenta as $cuenta=>$fecha) {
+            if(!isset($dias[$fecha])) throw new LogicException('ARPU diario HC: evento fuera de rango');
+            self::acumular($dias[$fecha], self::clasificarCuenta($filas[$cuenta]??[], $this->catalogo));
+        }
+        foreach($dias as &$row) self::finalizar($row);
+        unset($row);
+        return $dias;
+    }
+
     /** Series HC certificadas, una lectura por lotes de instalaciones para toda la ventana ISO.
      * Recibe exclusivamente cuentas previamente autorizadas por Motor HC.
      */

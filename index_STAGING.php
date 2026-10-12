@@ -1786,6 +1786,10 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
 // Motor Comercial v0.2.0: resumen comercial de LAS MISMAS cuentas HC.
 // Vista gerencial: ARPU/Mix universales por registros; Lider/Coach mantienen HC.
 // ============================================================================
+// Vista diaria SOLO para un rango mensual personalizado elegido por calendario.
+// No modifica los KPI del corte ni la vista VENDEDOR.
+$tx_evo_daily_custom = !$tx_stg_es_vendedor && $periodo === 'mensual'
+    && $rango_mode === 'custom' && $fecha_inicio_dashboard >= '2026-01-01';
 $tx_stg_aplicable = !$tx_stg_es_vendedor && (int)$anio_query >= 2026;
 $tx_stg_ok = false;
 $tx_stg_error = null;
@@ -1860,7 +1864,7 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
 
         // UNA sola certificacion HC para toda la tendencia Ene-2026..periodo elegido.
         // Cada mes se recorta al rango seleccionado (MTD, custom o completo).
-        $tx_stg_inicio_tendencia = ($periodo === 'semanal') ? min('2025-12-29', $fecha_inicio_dashboard) : min('2026-01-01', $fecha_inicio_dashboard);
+        $tx_stg_inicio_tendencia = $tx_evo_daily_custom ? $fecha_inicio_dashboard : (($periodo === 'semanal') ? min('2025-12-29', $fecha_inicio_dashboard) : min('2026-01-01', $fecha_inicio_dashboard));
         $tx_stg_hasta_tendencia = $fecha_fin_dashboard;
         if ($tx_stg_hasta_tendencia < $tx_stg_inicio_tendencia) {
             throw new RuntimeException('Periodo anterior a enero de 2026');
@@ -2008,7 +2012,7 @@ if ($tx_stg_aplicable && !($tx_stg_gerencial && !$scope_activo && in_array($rol,
 // Preservar resultado de MOTOR HC para la tarjeta jerárquica.
 // En perfiles gerenciales, ARPU y Mix se calculan con un universo independiente.
 $tx_stg_hc_ok = $tx_stg_ok;
-if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal') {
+if ($tx_stg_aplicable && $tx_stg_gerencial && $periodo !== 'semanal' && !$tx_evo_daily_custom) {
     try {
         require_once __DIR__ . '/includes/motor_comercial_STAGING.php';
         $tx_stg_motor_gerencial = (isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial)
@@ -2334,7 +2338,16 @@ $tx_evo_desde_enero = ((int)$anio_query >= 2026 && !$tx_stg_es_vendedor);
 $meses_labels = [];
 $tx_evo_week_keys = [];
 $tx_evo_week_ranges = [];
-if ($periodo === 'semanal' && (int)$tx_nav_anio_semana >= 2026) {
+$tx_evo_daily_dates = [];
+if ($tx_evo_daily_custom) {
+    $cursorDia = new DateTimeImmutable($fecha_inicio_dashboard);
+    $finDia = new DateTimeImmutable($fecha_fin_dashboard);
+    for ($d=$cursorDia; $d<=$finDia; $d=$d->modify('+1 day')) {
+        $tx_evo_daily_dates[] = $d->format('Y-m-d');
+        $meses_labels[] = $d->format('d/m');
+    }
+    $fecha_inicio_evolucion = $fecha_inicio_dashboard;
+} elseif ($periodo === 'semanal' && (int)$tx_nav_anio_semana >= 2026) {
     // ISO 2026-S01: LUN 29/12/2025 a DOM 04/01/2026. No iniciar el 01-ene.
     $tx_evo_primer_lunes = (new DateTimeImmutable('2026-01-04'))->setISODate(2026,1,1);
     $tx_evo_ultimo_lunes = $tx_semana_lunes;
@@ -2389,6 +2402,13 @@ $evo_participacion_titulo = match($evo_view) {
 $evo_vent_sub=match($evo_view) { 'oferta'=>'Ventas por oferta RES-NEG', 'play'=>'Ventas por Plays', 'bundle'=>'Ventas por Bundle', default=>'Ventas por canal' };
 $evo_inst_sub=match($evo_view) { 'oferta'=>'Instalaciones por oferta RES-NEG', 'play'=>'Instalaciones por Plays', 'bundle'=>'Instalaciones por Bundle', default=>'Instalaciones por origen' };
 $evo_col_label=match($evo_view) { 'oferta'=>'Oferta', 'play'=>'Play', 'bundle'=>'Bundle', default=>'Canal' };
+if ($tx_evo_daily_custom) {
+    $tx_nombre_evo=match($evo_view) {'oferta'=>'Oferta RES-NEG','play'=>'Plays','bundle'=>'Bundle',default=>'Canal de venta'};
+    $tx_etiqueta_diaria=date('d/m/Y',strtotime($fecha_inicio_dashboard)).' – '.date('d/m/Y',strtotime($fecha_fin_dashboard));
+    $evo_titulo='Evolución diaria · '.$tx_nombre_evo.' · '.$tx_etiqueta_diaria;
+    $evo_participacion_titulo='Participación diaria por '.$tx_nombre_evo.' (%) · '.$tx_etiqueta_diaria;
+}
+
 
 // En modo semanal los encabezados y las tablas representan SEMANAS ISO.
 if ($periodo === 'semanal' && $tx_evo_week_keys) {
@@ -2407,7 +2427,10 @@ if ($periodo === 'semanal' && $tx_evo_week_keys) {
     };
 }
 // ARPU anterior del STAGING conserva íntegra su lógica.
-if ($periodo === 'semanal' && $tx_evo_week_keys) {
+if ($tx_evo_daily_custom) {
+    $arpu_labels = $meses_labels;
+    $arpu_data = array_fill(0, $tx_evo_nmeses, null);
+} elseif ($periodo === 'semanal' && $tx_evo_week_keys) {
     $arpu_labels = array_map(static fn($k) => 'S'.(int)substr((string)$k,4),$tx_evo_week_keys);
     $arpu_data = array_fill(0,count($meses_labels),null);
 } elseif ($tx_stg_aplicable && $tx_stg_ok) {
@@ -2431,7 +2454,7 @@ if ($periodo === 'semanal' && $tx_evo_week_keys) {
 
 // CANAL DE VENTA: mismos SELECT, filtros, clasificaciones y participaciones del producto.
 // Sólo se amplía el período inicial; se limita al cierre seleccionado.
-if ($periodo !== 'semanal' || !$tx_evo_week_keys) {
+if (!$tx_evo_daily_custom && ($periodo !== 'semanal' || !$tx_evo_week_keys)) {
 $tx_evo_where_cruce_inst = $tx_evo_inicio_rango_cruzado !== null
     ? " AND (fecha < '$tx_evo_filtro_mes_inicio' OR fecha >= '$tx_esc_ini')" : '';
 $tx_evo_where_cruce_vent = $tx_evo_inicio_rango_cruzado !== null
@@ -2485,7 +2508,7 @@ while ($res_v && ($row=mysqli_fetch_assoc($res_v))) {
 $tx_evo_fuente_catalogo_ok=false;
 $tx_evo_catalogo_error=null;
 $tx_evo_total_inst=[];$tx_evo_total_vent=[];
-if ($tx_evo_desde_enero && $periodo !== 'semanal') {
+if ($tx_evo_desde_enero && $periodo !== 'semanal' && !$tx_evo_daily_custom) {
     try {
         if (!($conexion instanceof mysqli)) throw new RuntimeException('Conexión comercial no disponible');
         require_once __DIR__.'/includes/motor_comercial_STAGING.php';
@@ -2548,7 +2571,7 @@ if ($tx_evo_desde_enero && $periodo !== 'semanal') {
         $tx_evo_catalogo_error=$tx_evo_exc->getMessage();
         error_log('TalIA Index Evolution STAGING: '.$tx_evo_catalogo_error);
     }
-} elseif ($periodo !== 'semanal') {
+} elseif ($periodo !== 'semanal' && !$tx_evo_daily_custom) {
     // Perfil vendedor intacto: rama legado de RES/NEG de evolución, sin botón Bundle.
     $segmento_inst_expr_evo=tx_segmento_instalacion_expr_dashboard($conexion);
     $query_inst_oferta = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, ($segmento_inst_expr_evo) as oferta, COUNT(*) as total FROM instalaciones
@@ -2684,16 +2707,116 @@ if ($periodo === 'semanal' && $tx_evo_week_keys) {
         }
     }
 }
+// ── RANGO PERSONALIZADO: EVOLUCIÓN DIARIA DEL INTERVALO EXACTO ────────────────
+// 28-sep a 10-oct = 13 columnas. Nunca se incluyen enero-agosto ni septiembre 1–27.
+// Las 4 dimensiones y el ARPU usan un único resultado comercial clasificado.
+if ($tx_evo_daily_custom && $tx_evo_daily_dates) {
+    try {
+        require_once __DIR__.'/includes/motor_comercial_STAGING.php';
+        $motorDiario = isset($tx_stg_motor_com) && $tx_stg_motor_com instanceof MotorComercial
+            ? $tx_stg_motor_com : new MotorComercial($conexion);
+        if (!method_exists($motorDiario, 'seriesDiariasPorCatalogo')) {
+            throw new RuntimeException('Actualizar motor_comercial_STAGING.php: faltan series diarias');
+        }
+        $scopeDiario = $tx_stg_gerencial ? $tx_stg_scope_gerencial : ['tipo'=>'FOLIOS','folios'=>$folio_ids];
+        $resultadoDiario = $motorDiario->seriesDiariasPorCatalogo(
+            $fecha_inicio_dashboard, $fecha_fin_dashboard, $scopeDiario
+        );
+        if ($resultadoDiario['dias'] !== $tx_evo_daily_dates) {
+            throw new LogicException('El calendario diario del Motor Comercial no concilia con el INDEX');
+        }
+        $tx_evo_fuente_catalogo_ok = true;
+        $tx_evo_total_inst = $resultadoDiario['totales']['instalaciones'];
+        $tx_evo_total_vent = $resultadoDiario['totales']['ventas'];
+        $matricesDiarias = [];
+        foreach (['canal','oferta','play','bundle'] as $dimension) {
+            foreach (['ventas','instalaciones'] as $origen) {
+                $matricesDiarias[$dimension][$origen] = [];
+                foreach ($resultadoDiario['datos'][$dimension][$origen] as $categoria=>$serie) {
+                    $matricesDiarias[$dimension][$origen][$categoria] = array_values($serie);
+                }
+            }
+        }
+        $datos_inst_stacked = $matricesDiarias['canal']['instalaciones'];
+        $datos_vent_stacked = $matricesDiarias['canal']['ventas'];
+        $datos_inst_oferta_stacked = $matricesDiarias['oferta']['instalaciones'];
+        $datos_vent_oferta_stacked = $matricesDiarias['oferta']['ventas'];
+        $datos_inst_play_stacked = $matricesDiarias['play']['instalaciones'];
+        $datos_vent_play_stacked = $matricesDiarias['play']['ventas'];
+        $datos_inst_bundle_stacked = $matricesDiarias['bundle']['instalaciones'];
+        $datos_vent_bundle_stacked = $matricesDiarias['bundle']['ventas'];
+        if ($tx_stg_gerencial) {
+            $arpu_labels = $meses_labels;
+            $arpu_data = array_values($resultadoDiario['arpu']);
+            $tx_stg_universo_mes = array_sum($resultadoDiario['totales']['instalaciones']);
+            $tx_stg_mix_2p = array_sum($resultadoDiario['datos']['play']['instalaciones']['2P']);
+            $tx_stg_mix_3p = array_sum($resultadoDiario['datos']['play']['instalaciones']['3P']);
+            $tx_stg_mix_sin_clasificar = array_sum($resultadoDiario['datos']['play']['instalaciones']['Sin clasificar']);
+            $tx_stg_auditoria_arpu = [
+                'validos'=>array_sum($resultadoDiario['arpu_cuentas']),
+                'catalogo_actual'=>0
+            ];
+            if ($tx_stg_universo_mes !== ($tx_stg_mix_2p + $tx_stg_mix_3p + $tx_stg_mix_sin_clasificar)) {
+                throw new LogicException('El Mix diario no concilia con instalaciones del intervalo');
+            }
+            if (!$scope_activo && $rol === 'admin') {
+                $totalDiasInst = array_sum($resultadoDiario['totales']['instalaciones']);
+                $totalDiasVent = array_sum($resultadoDiario['totales']['ventas']);
+                if ($totalDiasInst !== (int)$kpi_inst || $totalDiasVent !== (int)$kpi_vent) {
+                    throw new LogicException('El rango diario no concilia con KPI: instalaciones o ventas');
+                }
+            }
+            $tx_stg_ok = true;
+            $tx_stg_error = null;
+        } elseif ($tx_stg_aplicable && $tx_stg_hc_ok) {
+            // ARPU de la línea: usar SOLO cuentas certificadas por HC, no todos los folios.
+            if (!method_exists($motorDiario,'indicadoresDiariosHc')) {
+                throw new RuntimeException('Actualizar Motor Comercial STAGING: falta ARPU diario HC');
+            }
+            $eventosDiariosHC=[];
+            foreach (($tx_stg_por_mes??[]) as $eventosMes) foreach ($eventosMes as $evento) {
+                $f=substr((string)($evento['fecha']??''),0,10);
+                if ($f>=$fecha_inicio_dashboard && $f<=$fecha_fin_dashboard) $eventosDiariosHC[]=$evento;
+            }
+            $indicadoresHC=$motorDiario->indicadoresDiariosHc($eventosDiariosHC,$fecha_inicio_dashboard,$fecha_fin_dashboard);
+            $arpu_labels=$meses_labels;
+            $arpu_data=[];
+            foreach ($tx_evo_daily_dates as $dia) $arpu_data[]=$indicadoresHC[$dia]['arpu']??null;
+            $tx_stg_ok=true; $tx_stg_error=null;
+        }
+        foreach (['ventas','instalaciones'] as $fuente) foreach (['canal','oferta','play','bundle'] as $dim) {
+            foreach ($tx_evo_daily_dates as $dia) {
+                $sum=0;
+                foreach ($resultadoDiario['datos'][$dim][$fuente] as $series) $sum+=(int)($series[$dia]??0);
+                if ($sum !== (int)$resultadoDiario['totales'][$fuente][$dia]) {
+                    throw new LogicException('Evolución diaria no concilia: '.$dim.' '.$fuente.' '.$dia);
+                }
+            }
+        }
+    } catch (Throwable $errorDiario) {
+        $tx_evo_fuente_catalogo_ok=false;
+        $tx_evo_catalogo_error=$errorDiario->getMessage();
+        error_log('TalIA INDEX STAGING diaria: '.$tx_evo_catalogo_error);
+        $datos_inst_stacked=$datos_vent_stacked=[];
+        $datos_inst_oferta_stacked=$datos_vent_oferta_stacked=[];
+        $datos_inst_play_stacked=$datos_vent_play_stacked=[];
+        $datos_inst_bundle_stacked=$datos_vent_bundle_stacked=[];
+        $arpu_labels=$meses_labels;
+        $arpu_data=array_fill(0,count($meses_labels),null);
+        if ($tx_stg_aplicable) { $tx_stg_ok=false; $tx_stg_error=$tx_evo_catalogo_error; }
+    }
+}
+
 // El MIX circular se inicializó antes de cargar las series semanales. Sincronizar
 // sus variables finales con el Motor Comercial para evitar un donut en cero.
-if ($periodo === 'semanal' && $tx_evo_week_keys && $tx_stg_aplicable && $tx_stg_ok && $tx_stg_gerencial) {
+if ((($periodo === 'semanal' && $tx_evo_week_keys) || $tx_evo_daily_custom) && $tx_stg_aplicable && $tx_stg_ok && $tx_stg_gerencial) {
     $inst_2p = (int)$tx_stg_mix_2p;
     $inst_3p = (int)$tx_stg_mix_3p;
 }
 // La vista vendedor conserva acceso limitado; las 4 dimensiones siguen el motor único.
 // Los títulos se ajustan para que la caché JS no restituya textos mensuales.
-$tx_evo_periodo_descripcion = ($periodo === 'semanal' && $tx_evo_week_keys)
-    ? 'Semanal ISO · desde S01 de 2026' : 'Desde enero 2026';
+$tx_evo_periodo_descripcion = $tx_evo_daily_custom ? 'Rango diario personalizado' : (($periodo === 'semanal' && $tx_evo_week_keys)
+    ? 'Semanal ISO · desde S01 de 2026' : 'Desde enero 2026');
 
 // Guardar las cuatro vistas completas para navegación instantánea en cliente.
 // Canal conserva su fuente original; Oferta/Plays/Bundle provienen del Motor Comercial.
@@ -2740,7 +2863,16 @@ $tx_evo_cache_views = [
     ],
 ];
 
-if ($periodo === 'semanal' && $tx_evo_week_keys) {
+if ($tx_evo_daily_custom) {
+    $desdeTitulo = (new DateTimeImmutable($fecha_inicio_dashboard))->format('d/m/Y');
+    $hastaTitulo = (new DateTimeImmutable($fecha_fin_dashboard))->format('d/m/Y');
+    foreach ($tx_evo_cache_views as $key=>&$cfg) {
+        $dimension = match($key) {'oferta'=>'Oferta RES-NEG','play'=>'Plays','bundle'=>'Bundle',default=>'Canal de venta'};
+        $cfg['titulo'] = 'Evolución diaria · '.$dimension.' · '.$desdeTitulo.' – '.$hastaTitulo;
+        $cfg['participacion_titulo'] = 'Participación diaria por '.$dimension.' (%) · '.$desdeTitulo.' – '.$hastaTitulo;
+    }
+    unset($cfg);
+} elseif ($periodo === 'semanal' && $tx_evo_week_keys) {
     foreach ($tx_evo_cache_views as $key => &$cfg) {
         $label = match($key) {
             'oferta'=>'Oferta RES-NEG', 'play'=>'Plays', 'bundle'=>'Bundle', default=>'Canal de venta'
@@ -5563,17 +5695,17 @@ include __DIR__ . '/includes/sidebar.php';
 
 
         <div class="chart-card arpu-card">
-            <div class="chart-title"><?= ($periodo === 'semanal' && $tx_evo_week_keys ? 'ARPU — Tendencia semanal ISO desde S01 de 2026' : ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses')) ?></div>
+            <div class="chart-title"><?= ($tx_evo_daily_custom ? 'ARPU — Evolución diaria del rango seleccionado' : ($periodo === 'semanal' && $tx_evo_week_keys ? 'ARPU — Tendencia semanal ISO desde S01 de 2026' : ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses'))) ?></div>
             <div class="hierarchy-performance-sub" style="margin-top:2px;"><?= $tx_stg_aplicable ? 'Motor Comercial · Precio lista sin IVA · '.htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') : ($periodo === 'semanal' && $tx_evo_week_keys ? 'Motor Comercial · Precio lista sin IVA · Folios autorizados' : 'Mismo rango seleccionado · precio pronto pago') ?></div>
             <?php if ($tx_stg_aplicable && $tx_stg_ok && count($arpu_labels) > 0):
                 $tx_arpu_last = count($arpu_labels)-1;
                 $tx_arpu_last_value = $arpu_data[$tx_arpu_last] ?? null;
-                $tx_arpu_last_label = ($periodo === 'semanal' && $tx_evo_week_keys)
+                $tx_arpu_last_label = $tx_evo_daily_custom ? (new DateTimeImmutable($fecha_fin_dashboard))->format('d/m/Y') : (($periodo === 'semanal' && $tx_evo_week_keys)
                     ? (($meses_labels[$tx_arpu_last] ?? '') ?: ($arpu_labels[$tx_arpu_last] ?? ''))
-                    : ($arpu_labels[$tx_arpu_last] ?? '');
+                    : ($arpu_labels[$tx_arpu_last] ?? ''));
             ?>
                 <div class="tx-arpu-ultimo" aria-label="ARPU del último período seleccionado">
-                    <span><?= $periodo === 'semanal' ? 'Última semana' : 'Último mes' ?> · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
+                    <span><?= $tx_evo_daily_custom ? 'Último día' : ($periodo === 'semanal' ? 'Última semana' : 'Último mes') ?> · <?= htmlspecialchars((string)$tx_arpu_last_label,ENT_QUOTES,'UTF-8') ?></span>
                     <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin precio válido' ?></strong>
                 </div>
             <?php endif; ?>
@@ -5587,7 +5719,7 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
 
         <div class="chart-card">
-            <div class="chart-title">Mix 2P y 3P — Instalaciones<?= ($periodo === 'semanal' ? ' · Semana seleccionada' : ($tx_dashboard_cruza_mes ? ' · Rango seleccionado' : '')) ?></div>
+            <div class="chart-title">Mix 2P y 3P — Instalaciones<?= ($periodo === 'semanal' ? ' · Semana seleccionada' : (($tx_dashboard_cruza_mes || $tx_evo_daily_custom) ? ' · Rango seleccionado' : '')) ?></div>
             <?php if ($tx_stg_aplicable): ?>
                 <div class="hierarchy-performance-sub" style="margin-top:2px;">Motor Comercial · <?= htmlspecialchars($tx_stg_ambito_comercial_label,ENT_QUOTES,'UTF-8') ?> · <?= number_format((int)$tx_stg_universo_mes) ?> instalaciones</div>
                 <?php if ($tx_stg_error !== null): ?>
@@ -5623,7 +5755,7 @@ include __DIR__ . '/includes/sidebar.php';
                 <?php endif; ?>
             </div>
         </div>
-        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Totales por registro según alcance autorizado; en vista SEMANAL, semana ISO 01 incluye los días de diciembre del año natural anterior.</div>
+        <div id="txEvoSourceNote" class="tx-evo-source-note" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal') ? '' : 'display:none;' ?>">Motor Comercial STAGING · Clasificación exacta de <code>catalogo_paquetes</code> · Todos los canales dentro del alcance autorizado · Incluye «Sin clasificar» cuando corresponde. Totales por registro según alcance autorizado; en vista SEMANAL, semana ISO 01 incluye los días de diciembre del año natural anterior. En rango personalizado se muestran únicamente los días seleccionados.</div>
         <div id="txEvoError" class="tx-evo-error" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal' && !$tx_evo_fuente_catalogo_ok) ? '' : 'display:none;' ?>">No se pudo verificar la clasificación comercial. Consulta el log STAGING; no se muestran resultados estimados.</div>
         <div class="evo-grid">
             <div>
@@ -5649,7 +5781,7 @@ include __DIR__ . '/includes/sidebar.php';
                     <div class="evo-sub" id="txEvoParticipationVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
                     <div class="tx-participacion-nav-controls" aria-label="Navegar los períodos de ventas">
                         <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="-1" aria-label="Ver períodos anteriores en Ventas" title="Meses anteriores">&#8592;</button>
-                        <span class="tx-participacion-nav-label">Desplazar <?= $periodo === 'semanal' ? 'semanas' : 'meses' ?></span>
+                        <span class="tx-participacion-nav-label">Desplazar <?= $tx_evo_daily_custom ? 'días' : ($periodo === 'semanal' ? 'semanas' : 'meses') ?></span>
                         <button type="button" class="tx-participacion-arrow" data-scroll-table="vent" data-scroll-dir="1" aria-label="Ver períodos siguientes en Ventas" title="Meses siguientes">&#8594;</button>
                     </div>
                 </div>
@@ -5698,7 +5830,7 @@ include __DIR__ . '/includes/sidebar.php';
                     <div class="evo-sub" id="txEvoParticipationInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
                     <div class="tx-participacion-nav-controls" aria-label="Navegar los períodos de instalaciones">
                         <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="-1" aria-label="Ver períodos anteriores en Instalaciones" title="Meses anteriores">&#8592;</button>
-                        <span class="tx-participacion-nav-label">Desplazar <?= $periodo === 'semanal' ? 'semanas' : 'meses' ?></span>
+                        <span class="tx-participacion-nav-label">Desplazar <?= $tx_evo_daily_custom ? 'días' : ($periodo === 'semanal' ? 'semanas' : 'meses') ?></span>
                         <button type="button" class="tx-participacion-arrow" data-scroll-table="inst" data-scroll-dir="1" aria-label="Ver períodos siguientes en Instalaciones" title="Meses siguientes">&#8594;</button>
                     </div>
                 </div>
@@ -6148,6 +6280,9 @@ new Chart(document.getElementById('cInstMix'), {
     plugins: [ChartDataLabels]
 });
 const txWeeklyMode = <?= ($periodo === 'semanal' && (bool)$tx_evo_week_keys) ? 'true' : 'false' ?>;
+const txDailyMode = <?= $tx_evo_daily_custom ? 'true' : 'false' ?>;
+const txCompactMode = txWeeklyMode || txDailyMode;
+const txDailyFullLabels = <?= json_encode($tx_evo_daily_dates, JSON_UNESCAPED_UNICODE) ?>;
 const txArpuFullWeekLabels = <?= json_encode($meses_labels, JSON_UNESCAPED_UNICODE) ?>;
 const arpuLabels = <?= json_encode($arpu_labels) ?>;
 const arpuData = <?= json_encode($arpu_data) ?>;
@@ -6173,9 +6308,9 @@ new Chart(document.getElementById('cArpuHist'), {
             pointBackgroundColor: txBrandColors.magenta,
             pointBorderColor: '#ffffff',
             pointBorderWidth: 2,
-            pointRadius: ctx => txWeeklyMode ? (ctx.dataIndex === arpuLabels.length-1 ? 3 : 1.4) : (arpuLabels.length > 8 ? 3 : 4),
+            pointRadius: ctx => txCompactMode ? (ctx.dataIndex === arpuLabels.length-1 ? 3 : 1.4) : (arpuLabels.length > 8 ? 3 : 4),
             pointHoverRadius: 6,
-            pointHitRadius: txWeeklyMode ? 12 : 6,
+            pointHitRadius: txCompactMode ? 12 : 6,
             borderWidth: 3,
             tension: 0.35,
             fill: true
@@ -6194,7 +6329,7 @@ new Chart(document.getElementById('cArpuHist'), {
                 clip: false,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
-                display: ctx => (txWeeklyMode
+                display: ctx => (txCompactMode
                     ? ctx.dataIndex === arpuLabels.length - 1
                     : ((arpuLabels.length - 1 - ctx.dataIndex) % 2 === 0))
                     && Number(arpuData[ctx.dataIndex] || 0) > 0,
@@ -6205,7 +6340,7 @@ new Chart(document.getElementById('cArpuHist'), {
                 callbacks: {
                     title: contexts => {
                         const i = contexts?.[0]?.dataIndex ?? -1;
-                        return txWeeklyMode ? (txArpuFullWeekLabels[i] || arpuLabels[i] || '') : (arpuLabels[i] || '');
+                        return txDailyMode ? (txDailyFullLabels[i] ? txDailyFullLabels[i].split('-').reverse().join('/') : (arpuLabels[i] || '')) : (txWeeklyMode ? (txArpuFullWeekLabels[i] || arpuLabels[i] || '') : (arpuLabels[i] || ''));
                     },
                     label: ctx => ctx.parsed.y === null ? ' ARPU: sin precio válido'
                         : ' ARPU: $' + Number(ctx.parsed.y).toLocaleString('es-MX', {maximumFractionDigits: 0})
@@ -6224,9 +6359,9 @@ new Chart(document.getElementById('cArpuHist'), {
             },
             x: {
                 grid: { display: false },
-                ticks: { font: { size: txWeeklyMode ? 9 : 10, weight: 'bold' },
-                    minRotation: 0, maxRotation: txWeeklyMode ? 0 : 50,
-                    autoSkip: true, maxTicksLimit: txWeeklyMode ? 6 : 7 }
+                ticks: { font: { size: txCompactMode ? 9 : 10, weight: 'bold' },
+                    minRotation: 0, maxRotation: txCompactMode ? 0 : 50,
+                    autoSkip: true, maxTicksLimit: txDailyMode ? 12 : (txWeeklyMode ? 6 : 7) }
             }
         }
     },
@@ -6302,7 +6437,7 @@ const pluginTotalesArriba = {
             if (hasData && total > 0) {
                 ctx.save();
                 ctx.fillStyle = '#1a2540'; 
-                ctx.font = 'bold 13px "Segoe UI", sans-serif'; 
+                ctx.font = (txDailyMode ? 'bold 10px' : 'bold 13px') + ' "Segoe UI", sans-serif'; 
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'bottom';
                 ctx.fillText(total, metaX, topY - 8); 
@@ -6345,12 +6480,16 @@ function makeStackOpts(matrix){
         layout: {
             padding: { top: 26 }
         },
-        datasets: { bar: { categoryPercentage: txWeeklyMode ? 0.92 : 0.8,
-            barPercentage: txWeeklyMode ? 0.9 : 0.9, maxBarThickness: txWeeklyMode ? 16 : 42 } },
+        datasets: { bar: { categoryPercentage: txCompactMode ? 0.92 : 0.8,
+            barPercentage: txCompactMode ? 0.9 : 0.9, maxBarThickness: txWeeklyMode ? 16 : (txDailyMode ? 32 : 42) } },
         plugins: { 
             legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+            tooltip: { callbacks: { title: contexts => {
+                const i = contexts?.[0]?.dataIndex ?? -1;
+                return txDailyMode ? (txDailyFullLabels[i] ? txDailyFullLabels[i].split('-').reverse().join('/') : (labels6[i] || '')) : (labels6[i] || '');
+            } } },
             datalabels: { 
-                display: (context) => !txWeeklyMode && context.dataset.data[context.dataIndex] > 0, 
+                display: (context) => !txCompactMode && context.dataset.data[context.dataIndex] > 0, 
                 color: '#ffffff',
                 font: { weight: 'bold', size: 11 },
                 textShadowColor: 'rgba(0, 0, 0, 0.5)',
@@ -6370,8 +6509,8 @@ function makeStackOpts(matrix){
             x: { 
                 stacked: true, 
                 grid: { display: false },
-                ticks: { font: { size: txWeeklyMode ? 9 : 10, weight: 'bold' }, autoSkip: true,
-                    maxTicksLimit: txWeeklyMode ? 8 : 10, maxRotation: txWeeklyMode ? 0 : 40 } 
+                ticks: { font: { size: txCompactMode ? 9 : 10, weight: 'bold' }, autoSkip: true,
+                    maxTicksLimit: txDailyMode ? 13 : (txWeeklyMode ? 8 : 10), maxRotation: txCompactMode ? 0 : 40 } 
             }
         }
     };
