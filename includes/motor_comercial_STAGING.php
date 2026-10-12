@@ -386,7 +386,7 @@ final class MotorComercial
      * Devuelve valores mensuales junto con auditoría de precios/clasificación.
      */
     public function indicadoresInstalacionesPorCatalogo(
-        string $desde, string $hasta, string $modo, int $diaInicio, int $diaFin, array $scope
+        string $desde, string $hasta, string $modo, int $diaInicio, int $diaFin, array $scope, ?string $fechaInicioRango = null
     ): array {
         $inicio = DateTimeImmutable::createFromFormat('!Y-m-d', $desde);
         $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $hasta);
@@ -395,6 +395,15 @@ final class MotorComercial
         }
         if (!in_array($modo,['completo','mtd','custom'],true) || $diaInicio<1 || $diaInicio>31 || $diaFin<$diaInicio || $diaFin>31) {
             throw new InvalidArgumentException('Indicadores Comerciales: rango diario inválido');
+        }
+        // Selección mensual cruzada: períodos históricos anteriores completos;
+        // desde el mes inicial del rango, usar solamente fechas reales seleccionadas.
+        if ($fechaInicioRango !== null) {
+            $recorte = DateTimeImmutable::createFromFormat('!Y-m-d', $fechaInicioRango);
+            if (!$recorte || $recorte->format('Y-m-d') !== $fechaInicioRango || $recorte < $inicio || $recorte > $fin) {
+                throw new InvalidArgumentException('Indicadores Comerciales: fecha inicial cruzada inválida');
+            }
+            if ($modo !== 'completo') throw new InvalidArgumentException('Indicadores Comerciales: recorte requiere modo completo');
         }
         $out = ['meses'=>[], 'datos'=>[]];
         $cursor = $inicio->modify('first day of this month');
@@ -413,6 +422,11 @@ final class MotorComercial
         if ($modo !== 'completo') {
             $sql .= ' AND DAY(`fecha`) BETWEEN ? AND ?';
             $args[] = $diaInicio; $args[] = $diaFin;
+        }
+        if ($fechaInicioRango !== null) {
+            $inicioMesRango = substr($fechaInicioRango,0,7).'-01';
+            $sql .= ' AND (`fecha` < ? OR `fecha` >= ?)';
+            $args[] = $inicioMesRango; $args[] = $fechaInicioRango;
         }
         $sql .= $this->filtrosGerenciales('instalaciones',$scope,$args);
         $sql .= " GROUP BY DATE_FORMAT(`fecha`,'%Y-%m'), `plan`".($tienePrecio?', `precio_lista`':'');
@@ -469,7 +483,8 @@ final class MotorComercial
         string $modo,
         int $diaInicio,
         int $diaFin,
-        array $scope
+        array $scope,
+        ?string $fechaInicioRango = null
     ): array {
         $inicio = DateTimeImmutable::createFromFormat('!Y-m-d', $desde);
         $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $hasta);
@@ -478,6 +493,13 @@ final class MotorComercial
         }
         if (!in_array($modo, ['completo','mtd','custom'], true) || $diaInicio < 1 || $diaInicio > 31 || $diaFin < $diaInicio || $diaFin > 31) {
             throw new InvalidArgumentException('Evolución Comercial: selección de días inválida');
+        }
+        if ($fechaInicioRango !== null) {
+            $recorte = DateTimeImmutable::createFromFormat('!Y-m-d', $fechaInicioRango);
+            if (!$recorte || $recorte->format('Y-m-d') !== $fechaInicioRango || $recorte < $inicio || $recorte > $fin) {
+                throw new InvalidArgumentException('Evolución Comercial: fecha inicial cruzada inválida');
+            }
+            if ($modo !== 'completo') throw new InvalidArgumentException('Evolución Comercial: recorte requiere modo completo');
         }
         $labels = [];
         $d = $inicio->modify('first day of this month');
@@ -509,6 +531,11 @@ final class MotorComercial
                 $sql .= " AND DAY(`{$fecha}`) BETWEEN ? AND ?";
                 $args[] = $diaInicio;
                 $args[] = $diaFin;
+            }
+            if ($fechaInicioRango !== null) {
+                $inicioMesRango = substr($fechaInicioRango,0,7).'-01';
+                $sql .= " AND (`{$fecha}` < ? OR `{$fecha}` >= ?)";
+                $args[] = $inicioMesRango; $args[] = $fechaInicioRango;
             }
             $sql .= $this->filtrosGerenciales($origen,$scope,$args);
             $sql .= " GROUP BY DATE_FORMAT(`{$fecha}`, '%Y-%m'), `{$plan}`";
