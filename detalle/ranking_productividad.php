@@ -25,6 +25,10 @@
  * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
  * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
  * reemplaza por el nombre de un colaborador escrito a mano.
+ * FIX 12-OCT-2026: navegar por identificador unico DISTRITO|ID_POSICION.
+ * Nombres repetidos (VACANTE Cancun / Villahermosa) no cruzan distritos.
+ * Las URLs historicas sin lider_id se validan por distrito y unicidad.
+ * Motor HC y fuente de instalaciones conservan exactamente su contrato.
  * FIX 09-OCT-2026 (v0.6.2): consume el contrato del motor que resuelve
  * unicamente autorreferencias HC verificables por nombre del superior
  * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
@@ -773,6 +777,8 @@ $cond_iactual_coach = str_replace('iactual.', 'iactual_coach.', $cond_iactual);
 
 $distrito_param  = $_GET['distrito'] ?? '';
 $lider_param     = $_GET['lider'] ?? '';
+// FIX 12-OCT-2026: plaza canonica DISTRITO|ID_POSICION; el nombre VACANTE no es una identidad.
+$lider_id_param  = trim((string)($_GET['lider_id'] ?? ''));
 $coach_param     = $_GET['coach'] ?? '';
 $coach_pos_param = $_GET['coach_pos'] ?? '';
 $vendedor_param  = $_GET['vendedor'] ?? '';
@@ -964,7 +970,7 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
     $sinBase=max(0,$hcActivoBase-$hb['con_ins']);$sinActual=max(0,$hcActivoActual-$ha['con_ins']);
     $dif=$insActual-$insBase;
     return [
-        'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],
+        'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],'lider_id'=>$lider,
         'coach'=>$coachId!==''?$nombre:'','coach_pos'=>$coachId,'folio_empleado'=>'',
         'ins_sem_base'=>$insBase,'ins_sem_actual'=>$insActual,'dif'=>$dif,
         'pct_dif'=>$insBase>0?round(100*$dif/$insBase):null,
@@ -979,14 +985,39 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
         'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
     ];
 }
-function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual): array {
+function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual, string $distritoParam='', string $liderIdParam=''): array {
     $ids=array_keys($catalogo);
     $seleccion=null;
     if (in_array($view,['coaches','vendedores'],true)) {
-        foreach ($catalogo as $lid=>$l) {
-            if (rank05_name_key($liderParam)===rank05_name_key($l['nombre'])) { $seleccion=$lid; break; }
+        $distrito=RankingAtribucionServiceV06::normalizarDistrito($distritoParam);
+        if ($distrito===null) throw new RuntimeException('Distrito no identificado al navegar por jerarquía');
+
+        if ($liderIdParam!=='') {
+            // La plaza, NO el nombre visible, identifica al líder incluso cuando está VACANTE.
+            if (!isset($catalogo[$liderIdParam]) || (string)$catalogo[$liderIdParam]['distrito']!==$distrito) {
+                throw new RuntimeException('La plaza del líder no corresponde al distrito seleccionado');
+            }
+            $seleccion=$liderIdParam;
+        } else {
+            // Compatibilidad con URLs anteriores. Exigir coincidencia UNÍVOCA por distrito.
+            $candidatos=[];
+            $nombreBuscado=rank05_name_key($liderParam);
+            foreach ($catalogo as $lid=>$l) {
+                if ((string)$l['distrito']!==$distrito) continue;
+                foreach (array_merge([(string)$l['nombre']],$l['aliases']??[]) as $alias) {
+                    if ($nombreBuscado!=='' && $nombreBuscado===rank05_name_key((string)$alias)) {
+                        $candidatos[$lid]=true;
+                        break;
+                    }
+                }
+            }
+            if (count($candidatos)!==1) {
+                throw new RuntimeException(count($candidatos)>1
+                    ? 'Nombre de líder ambiguo: regresa al Ranking y selecciona la plaza específica'
+                    : 'Líder no identificado en el distrito seleccionado');
+            }
+            $seleccion=(string)array_key_first($candidatos);
         }
-        if ($seleccion===null) throw new RuntimeException('Líder no identificado en el catálogo canónico');
         $ids=[$seleccion];
     }
     $rows=[];$matrix=[];
@@ -2217,7 +2248,7 @@ if ($view !== 'ventas') {
         $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
         $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
         $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
-        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual);
+        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual,(string)$distrito_param,(string)$lider_id_param);
         $rows=$datos05['rows'];
         $coach_matrix=$datos05['matrix'];
         $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
@@ -2395,8 +2426,8 @@ if ($periodo === 'mensual') {
 
 $base_link = '?' . qs(array_merge($nav_estado, ['view'=>'lideres']));
 $ranking_coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'ranking_coach']));
-$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]));
-$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
+$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'lider_id'=>$lider_id_param]));
+$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'lider_id'=>$lider_id_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
 
 $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
 if ($periodo === 'semanal') $subtitle .= " · Días: {$dias_semana_label}";
@@ -2751,11 +2782,11 @@ include __DIR__ . '/../includes/sidebar.php';
                 <?php $rank=1; foreach($rows as $r):
                     $href = '';
                     if ($view === 'lideres') {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]));
+                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id']]));
                     } elseif (in_array($view, ['coaches','ranking_coach'], true)) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
+                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
                     } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]));
+                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$lider_id_param,'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]));
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
