@@ -2339,6 +2339,23 @@ if (!$res) {
 
 } // FIN ruta heredada solo para vista ventas. Ranking L/C/V proviene exclusivamente del motor.
 
+// Orden inicial canónico: productividad DIARIA del período ACTUAL (SEM/mes seleccionado), descendente.
+// Solo ordena la presentación; no modifica datos, jerarquías ni indicadores del Motor HC.
+if (in_array($view, ['lideres', 'ranking_coach', 'coaches'], true)) {
+    usort($rows, static function (array $a, array $b): int {
+        $pa = ($a['prod_actual'] ?? null);
+        $pb = ($b['prod_actual'] ?? null);
+        // Productividad no disponible siempre después de las productividades calculadas.
+        $aNull = ($pa === null || $pa === '');
+        $bNull = ($pb === null || $pb === '');
+        if ($aNull !== $bNull) return $aNull ? 1 : -1;
+        $cmp = (float)$pb <=> (float)$pa;
+        if ($cmp !== 0) return $cmp;
+        $cmp = (int)($b['ins_sem_actual'] ?? 0) <=> (int)($a['ins_sem_actual'] ?? 0);
+        return $cmp !== 0 ? $cmp : strcmp((string)($a['entidad'] ?? ''), (string)($b['entidad'] ?? ''));
+    });
+}
+
 $tot = base_metrics_totals($rows, $dias_habiles_base, $dias_habiles_actual);
 $districts = [];
 if (in_array($view, ['lideres','ranking_coach'], true)) {
@@ -3041,6 +3058,10 @@ const totalRow=document.getElementById('totalRow');
 const dataRows=()=>[...tbody.querySelectorAll('tr.data-row')];
 let activeDistrict='ALL';
 let sortState={key:'prod_actual',dir:'desc'};
+// El servidor entrega las filas ya ordenadas por PROD. DIARIA ACTUAL.
+// Mostrar la dirección activa desde la primera carga (sin requerir clic).
+const initialSortHeader=table.querySelector('th.sortable[data-key="prod_actual"]');
+if(initialSortHeader){const arrow=initialSortHeader.querySelector('.sort-icon');if(arrow)arrow.textContent='↓';}
 function num(v){const n=parseFloat(v);return isNaN(n)?0:n}
 function fmt0(n){return Math.round(n).toLocaleString('en-US')}
 function fmt2(n){return (Math.round(n*100)/100).toFixed(2)}
