@@ -1,63 +1,44 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / MOTOR COMERCIAL v0.2.0 · Ampliación gerencial, ISO y diaria — complemento del MOTOR HC v0.6.2
- * ==================================================================
- * UBICACIÓN: /public_html/plataforma/includes/motor_comercial.php
- * CONSUMIDORES: /plataforma/index.php y módulos que emplean el contrato existente.
- * ESCRITURA EN BD: ninguna; únicamente SELECT y SHOW COLUMNS.
+ * TalIA / TotalXpedient · MOTOR COMERCIAL v0.2.1 · PRODUCCIÓN
+ * ============================================================================
+ * Ubicación: /plataforma/includes/motor_comercial.php
+ * Contrato: MotorComercial(mysqli $conexion).
+ * Fuentes: instalaciones y catalogo_paquetes.
+ * Escritura en BD: ninguna. Solo SELECT y SHOW COLUMNS.
  *
- * AUTORIDAD:
- * - Motor HC establece el universo certificado, una cuenta por período, el
- *   vendedor, el coach y el líder. Este motor NO resuelve identidades ni HC.
- * - resumirVendedores() añade características comerciales a esas MISMAS cuentas
- *   certificadas por HC (solo Cambaceo/PDV), sin ampliar el universo.
- * - indicadoresInstalacionesPorCatalogo() y evolucionPorCatalogo() son consultas
- *   gerenciales por REGISTRO: abarcan todos los canales del alcance autorizado
- *   y pueden filtrar distritos, folios de colaboradores y canales seleccionados.
+ * RESPONSABILIDADES
+ * - El Motor HC es la única autoridad de cuenta, identidad, coach y líder.
+ *   Este motor NO amplía ni modifica el universo de cuentas certificadas.
+ * - resumirVendedores() clasifica todas las cuentas HC certificadas, sin
+ *   filtrar por origen: Play (2P/3P), oferta (Residencial/Negocios), Bundle y
+ *   ARPU precio lista neto de IVA; los paquetes PYME permanecen incluidos.
+ * - Las clasificaciones proceden exclusivamente de catalogo_paquetes mediante
+ *   coincidencia exacta normalizada; ausencias/conflictos se auditan sin
+ *   inventar atributos. Se conserva 'Sin clasificar' cuando corresponde.
+ * - Precio: primero instalaciones.precio_lista positivo; si falta, respaldo
+ *   auditado de catálogo ACTUAL; ARPU = SUM(precio_lista/1.16)/N con precio.
+ * - Registros duplicados de una cuenta se revisan en el período consultado;
+ *   divergencias de plan o precio no se resuelven de forma arbitraria.
+ * - Indicadores gerenciales por REGISTRO preservan su propia semántica,
+ *   filtros y series mensuales, semanales y diarias.
  *
- * FUENTES:
- * - instalaciones(cuenta,fecha,plan,precio_lista,origen_prospecto)
- * - catalogo_paquetes(nombre_plan,play,tipo,bundle_app,precio_lista)
- *   El precio_lista es opcional en cada fuente; la clasificación no lo es.
+ * CAMBIO v0.2.1 (13-OCT-2026)
+ * - Se retiró el filtro Cambaceo/PDV en los tres lectores comerciales de
+ *   cuentas ya certificadas por Motor HC (vendedores, diario y semanal).
+ * - Se conservan deduplicación, clasificaciones, ARPU y controles de auditoría.
  *
- * REGLAS:
- * - Match EXACTO tras mayúsculas, trim y normalización de espacios.
- * - play: DOBLE PLAY/2P -> 2P; TRIPLE PLAY/3P -> 3P.
- * - tipo: RESIDENCIAL o NEGOCIOS (PYME se conserva).
- * - bundle_app: NO -> NO BUNDLE; SI -> BUNDLE.
- * - Indefinido o ambiguo -> SIN CLASIFICAR. No usar heurísticas por texto.
- * - En resumirVendedores() los porcentajes son de cuentas HC certificadas.
- *   En los métodos gerenciales, cada registro se clasifica sin inventar valores
- *   cuando no existe catálogo: "Sin clasificar" se conserva por separado.
- * - ARPU = SUM(precio_lista / 1.16) / N cuentas con precio válido > 0.
- *   Prioridad de precio: instalaciones; respaldo: catálogo ACTUAL, auditado.
- *   No representa un precio histórico si solo existe respaldo de catálogo.
- * - Duplicados por cuenta: se contrastan SOLO dentro del período/días/canal
- *   consultados; planes contrapuestos no se seleccionan arbitrariamente.
- * - Si existen varios precios positivos contrapuestos en la misma cuenta,
- *   no se promedian ni se elige uno: esa cuenta queda sin ARPU.
- *
- * CONTRATO PÚBLICO:
- *   $m = new MotorComercial($conexion); // mysqli
- *   $resumen = $m->resumirVendedores($cuentasCertificadas,$desde,$hasta,$diasIso);
- *   $gerencial = $m->indicadoresInstalacionesPorCatalogo($desde,$hasta,$modo,$diaIni,$diaFin,$scope);
- *   $evolucion = $m->evolucionPorCatalogo($desde,$hasta,$modo,$diaIni,$diaFin,$scope);
- *   // Clave: lider_id|coach_id|vendedor_id, idéntica al Ranking HC.
- *   // Resumen: total,doble_play,triple_play,residencial,negocios,
- *   //          no_bundle,bundle,arpu,arpu_ingreso_neto,arpu_cuentas,
- *   //          faltantes y contadores de auditoría.
- *
- * PRUEBAS DE ACEPTACIÓN:
- *   1) Por vendedor: total == ins_base o ins_actual del Motor HC.
- *   2) Por dimensión: total == suma(categorías) + sin_clasificar.
- *   3) BASE y ACTUAL se consultan INDEPENDIENTEMENTE con sus fechas/días.
- *   4) La vista Líder/Coach, los filtros y el Motor HC no se modifican.
- *   5) Contrastar ARPU con la metodología corporativa antes de producción.
+ * Contrato público:
+ *   resumirVendedores($cuentasCertificadas,$desde,$hasta,$diasIso=[]);
+ *   indicadoresDiariosHc($eventos,$desde,$hasta);
+ *   indicadoresSemanalesHc($eventos,$desde,$hasta,$diasIso=[]);
+ *   indicadoresInstalacionesPorCatalogo(...), evolucionPorCatalogo(...),
+ *   seriesSemanalesPorCatalogo(...), seriesDiariasPorCatalogo(...).
  */
 final class MotorComercial
 {
-    public const VERSION = '0.2.0';
+    public const VERSION = '0.2.1-all-channels';
     private mysqli $db;
     private array $columnasInst;
     private array $columnasCatalogo;
@@ -289,7 +270,7 @@ final class MotorComercial
         $hastaExclusivo = $ff->modify('+1 day')->format('Y-m-d');
         foreach (array_chunk(array_values($unicos), 300) as $chunk) {
             $ph = implode(',', array_fill(0,count($chunk),'?'));
-            $sql = "SELECT {$cols} FROM instalaciones WHERE cuenta IN ({$ph}) AND fecha >= ? AND fecha < ? AND UPPER(TRIM(origen_prospecto)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
+            $sql = "SELECT {$cols} FROM instalaciones WHERE cuenta IN ({$ph}) AND fecha >= ? AND fecha < ?";
             $stmt = $this->db->prepare($sql);
             if ($stmt === false) throw new RuntimeException('Motor Comercial: error consultando instalaciones');
             $args = array_merge(array_map('strval',$chunk),[$desde,$hastaExclusivo]);
@@ -465,7 +446,7 @@ final class MotorComercial
     }
 
     /**
-     * TalIA v0.2.0+evolucion: agrupa por mes y clasificación del catálogo.
+     * TalIA v0.2.1+evolucion: agrupa por mes y clasificación del catálogo.
      * A diferencia de resumirVendedores(), aquí NO se asegura pertenencia al universo
      * certificado HC. Es un reporte gerencial de TODOS LOS CANALES que conserva las
      * mismas filas que la evolución del índice (ventas e instalaciones).
@@ -807,7 +788,7 @@ final class MotorComercial
             foreach(array_chunk(array_keys($cuentas),300) as $lote) {
                 $ph=implode(',',array_fill(0,count($lote),'?'));
                 $sql="SELECT {$columnas} FROM `instalaciones` WHERE `cuenta` IN ({$ph})
-                    AND `fecha` >= ? AND `fecha` <= ? AND UPPER(TRIM(`origen_prospecto`)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
+                    AND `fecha` >= ? AND `fecha` <= ?";
                 $st=$this->db->prepare($sql);
                 if(!$st) throw new RuntimeException('ARPU diario HC: lectura no preparada');
                 $args=array_merge($lote,[$desde,$hasta]);
@@ -860,7 +841,7 @@ final class MotorComercial
             $finExc=$fin->modify('+1 day')->format('Y-m-d');
             foreach(array_chunk(array_keys($ids),300) as $chunk) {
                 $ph=implode(',',array_fill(0,count($chunk),'?'));
-                $sql="SELECT {$cols} FROM `instalaciones` WHERE `cuenta` IN ({$ph}) AND `fecha` >= ? AND `fecha` < ? AND UPPER(TRIM(`origen_prospecto`)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
+                $sql="SELECT {$cols} FROM `instalaciones` WHERE `cuenta` IN ({$ph}) AND `fecha` >= ? AND `fecha` < ?";
                 $st=$this->db->prepare($sql);
                 if(!$st) throw new RuntimeException('Serie HC: no pudo preparar lectura');
                 $args=array_merge($chunk,[$desde,$finExc]);

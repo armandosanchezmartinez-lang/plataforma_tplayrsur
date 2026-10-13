@@ -1,22 +1,17 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / MOTOR COMERCIAL STAGING v0.2.1 · TODOS LOS ORIGENES — complemento del Motor HC STAGING
+ * TalIA / MOTOR COMERCIAL v0.2.0 · Ampliación gerencial, ISO y diaria — complemento del MOTOR HC v0.6.2
  * ==================================================================
- * UBICACIÓN: /public_html/plataforma/includes/motor_comercial_STAGING.php
+ * UBICACIÓN: /public_html/plataforma/includes/motor_comercial.php
  * CONSUMIDORES: /plataforma/index.php y módulos que emplean el contrato existente.
  * ESCRITURA EN BD: ninguna; únicamente SELECT y SHOW COLUMNS.
- *
- * CAMBIO AISLADO STAGING (13-OCT-2026): retirar restricciones de origen
- * en 3 lectores de cuentas YA certificadas por HC. No cambia clasificacion
- * de paquetes, ARPU, precio, deduplicacion, indices ni metodos gerenciales.
- * Clase distinta para convivir con la productiva. SOLO SELECT.
  *
  * AUTORIDAD:
  * - Motor HC establece el universo certificado, una cuenta por período, el
  *   vendedor, el coach y el líder. Este motor NO resuelve identidades ni HC.
  * - resumirVendedores() añade características comerciales a esas MISMAS cuentas
- *   certificadas por HC (todos los canales), sin ampliar el universo.
+ *   certificadas por HC (solo Cambaceo/PDV), sin ampliar el universo.
  * - indicadoresInstalacionesPorCatalogo() y evolucionPorCatalogo() son consultas
  *   gerenciales por REGISTRO: abarcan todos los canales del alcance autorizado
  *   y pueden filtrar distritos, folios de colaboradores y canales seleccionados.
@@ -60,9 +55,9 @@ declare(strict_types=1);
  *   4) La vista Líder/Coach, los filtros y el Motor HC no se modifican.
  *   5) Contrastar ARPU con la metodología corporativa antes de producción.
  */
-final class MotorComercialStaging
+final class MotorComercial
 {
-    public const VERSION = '0.2.1-all-channels-staging';
+    public const VERSION = '0.2.0';
     private mysqli $db;
     private array $columnasInst;
     private array $columnasCatalogo;
@@ -294,7 +289,7 @@ final class MotorComercialStaging
         $hastaExclusivo = $ff->modify('+1 day')->format('Y-m-d');
         foreach (array_chunk(array_values($unicos), 300) as $chunk) {
             $ph = implode(',', array_fill(0,count($chunk),'?'));
-            $sql = "SELECT {$cols} FROM instalaciones WHERE cuenta IN ({$ph}) AND fecha >= ? AND fecha < ?";
+            $sql = "SELECT {$cols} FROM instalaciones WHERE cuenta IN ({$ph}) AND fecha >= ? AND fecha < ? AND UPPER(TRIM(origen_prospecto)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
             $stmt = $this->db->prepare($sql);
             if ($stmt === false) throw new RuntimeException('Motor Comercial: error consultando instalaciones');
             $args = array_merge(array_map('strval',$chunk),[$desde,$hastaExclusivo]);
@@ -812,7 +807,7 @@ final class MotorComercialStaging
             foreach(array_chunk(array_keys($cuentas),300) as $lote) {
                 $ph=implode(',',array_fill(0,count($lote),'?'));
                 $sql="SELECT {$columnas} FROM `instalaciones` WHERE `cuenta` IN ({$ph})
-                    AND `fecha` >= ? AND `fecha` <= ?";
+                    AND `fecha` >= ? AND `fecha` <= ? AND UPPER(TRIM(`origen_prospecto`)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
                 $st=$this->db->prepare($sql);
                 if(!$st) throw new RuntimeException('ARPU diario HC: lectura no preparada');
                 $args=array_merge($lote,[$desde,$hasta]);
@@ -865,7 +860,7 @@ final class MotorComercialStaging
             $finExc=$fin->modify('+1 day')->format('Y-m-d');
             foreach(array_chunk(array_keys($ids),300) as $chunk) {
                 $ph=implode(',',array_fill(0,count($chunk),'?'));
-                $sql="SELECT {$cols} FROM `instalaciones` WHERE `cuenta` IN ({$ph}) AND `fecha` >= ? AND `fecha` < ?";
+                $sql="SELECT {$cols} FROM `instalaciones` WHERE `cuenta` IN ({$ph}) AND `fecha` >= ? AND `fecha` < ? AND UPPER(TRIM(`origen_prospecto`)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')";
                 $st=$this->db->prepare($sql);
                 if(!$st) throw new RuntimeException('Serie HC: no pudo preparar lectura');
                 $args=array_merge($chunk,[$desde,$finExc]);
