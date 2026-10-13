@@ -33,8 +33,9 @@ function tx_an_user() {
 function tx_an_can($mode='view') {
     $user = tx_an_user();
     if ($user === null) { return false; }
-    // Restringido a la Dirección Regional y Staff, tal como módulo original.
-    return in_array($user['role'], array('admin','director_regional','staff','director_sac'), true);
+    // Política TotalExpedient: tres perfiles regionales y un perfil distrital.
+    // La autorización al distrito se verifica adicionalmente contra HC en servidor.
+    return in_array($user['role'], array('admin','gerente_regional','director_regional','director_distrital'), true);
 }
 function tx_an_require_access($mode='view') {
     if (!tx_an_can($mode)) {
@@ -157,6 +158,76 @@ class TxAnDB {
 class wpdb extends TxAnDB {}
 $GLOBALS['wpdb']=new TxAnDB($tx_mysql_link);
 function tx_an_db($channel='source') { return $GLOBALS['wpdb']; }
+
+/** Normalización de distritos. Nunca se admite un distrito arbitrario del navegador. */
+function tx_an_normalize_district($raw) {
+    $s = strtr(trim((string)$raw), ['Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ü'=>'U','Ñ'=>'N',
+         'á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u','ü'=>'u','ñ'=>'n']);
+    $s = strtoupper($s);
+    $key = preg_replace('/[^A-Z0-9]/', '', $s);
+    if ($key === 'CANCUN') return 'CANCÚN';
+    if ($key === 'MERIDA') return 'MÉRIDA';
+    if ($key === 'TUXTLA' || $key === 'TUXTLAGUTIERREZ') return 'TUXTLA';
+    if ($key === 'VILLAHERMOSA') return 'VILLAHERMOSA';
+    if (in_array($key, ['COATZAMINA','COATZACOLCOSMINATITLAN','COATZACOLCOSMINATITLÁN','COATZACOALCOSMINATITLAN','COATZACOALCOSMINATITLANVERACRUZ'], true)) return 'COATZA / MINA';
+    return '';
+}
+
+/**
+ * Resuelve adscripción distrital desde el HC vigente de la persona/posición autenticada.
+ * Un distrito ausente o ambiguo DENIEGA acceso, nunca amplía a nivel regional.
+ */
+function tx_an_scope_district() {
+    static $evaluated=false, $resolved='';
+    if ($evaluated) return $resolved;
+    $evaluated=true;
+    if (strtolower(trim((string)($_SESSION['rol'] ?? ''))) !== 'director_distrital') return $resolved;
+    $db = tx_an_db();
+    $talent = trim((string)($_SESSION['numero_talento_gs'] ?? ''));
+    $position = trim((string)($_SESSION['id_posicion'] ?? ''));
+    // Prioridad al empleado autenticado; respaldo por posición vigente.
+    foreach ([['numero_talento_gs',$talent], ['id_posicion',$position]] as $candidate) {
+        [$col,$value]=$candidate;
+        if ($value === '') continue;
+        $sql = $db->prepare("SELECT distrito, anio, semana FROM `hc` WHERE `{$col}`=%s AND distrito IS NOT NULL AND TRIM(distrito)<>'' ORDER BY anio DESC, semana DESC LIMIT 30", $value);
+        $results = $db->get_results($sql, ARRAY_A);
+        $latestPeriod=null; $found=[];
+        foreach ($results as $rec) {
+            $period=sprintf('%04d-%02d', (int)($rec['anio']??0), (int)($rec['semana']??0));
+            if ($latestPeriod !== null && $period !== $latestPeriod) break;
+            if ($latestPeriod === null) $latestPeriod=$period;
+            $d=tx_an_normalize_district($rec['distrito']??'');
+            if ($d !== '') $found[$d]=true;
+        }
+        if (count($found) === 1) return $resolved=(string)array_key_first($found);
+        if (count($found) > 1) return '';
+    }
+    // Compatibilidad con sesiones legadas que ya contienen distrito confiable.
+    foreach (['distrito','distrito_usuario','nombre_distrito'] as $key) {
+        $d=tx_an_normalize_district($_SESSION[$key]??'');
+        if ($d !== '') return $resolved=$d;
+    }
+    return '';
+}
+function tx_an_allowed_districts() {
+    $all=['CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA'];
+    if (strtolower(trim((string)($_SESSION['rol']??''))) !== 'director_distrital') return $all;
+    $d=tx_an_scope_district();
+    return $d !== '' ? [$d] : [];
+}
+function tx_an_scope_label() {
+    return strtolower(trim((string)($_SESSION['rol']??''))) === 'director_distrital' ? tx_an_scope_district() : 'REGIÓN SUR';
+}
+function tx_an_total_label() {
+    return strtolower(trim((string)($_SESSION['rol']??''))) === 'director_distrital' ? 'TOTAL '.tx_an_scope_district() : 'REGIÓN SUR';
+}
+function tx_an_require_scope() {
+    if (strtolower(trim((string)($_SESSION['rol']??''))) === 'director_distrital' && tx_an_scope_district() === '') {
+        http_response_code(403);
+        exit('No fue posible confirmar tu distrito en HC. Solicita validación de tu posición y sesión.');
+    }
+}
+tx_an_require_scope();
 
 /** Tabla aislada del FCST: no modifica instalaciones, cancelaciones, ventas ni HC. */
 function tx_an_ensure_fcst_table() {
@@ -1396,6 +1467,8 @@ final class KRN_Add_Netas_Standalone {
         $revision = (int)get_option(self::CACHE_REVISION_OPTION, 1);
         $identity = array(
             'version'=>self::VERSION,
+            'scope_role'=>strtolower(trim((string)($_SESSION['rol']??''))),
+            'scope_district'=>tx_an_scope_district(),
             'forecast_algorithm'=>self::FORECAST_ALGORITHM_VERSION,
             'cutoff'=>self::cutoff_date(),
             'mode'=>$ctx['mode'],
@@ -1586,7 +1659,7 @@ final class KRN_Add_Netas_Standalone {
      */
     private static function weekly_history($db, array $spec, array $ctx, $weeks = 10) {
         if (($ctx['mode'] ?? '') !== 'semanal') { return array(); }
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $weeks = max(2, min(16, (int)$weeks));
         $tz = wp_timezone();
         $selected_start = new DateTime($ctx['start'], $tz);
@@ -1668,7 +1741,7 @@ final class KRN_Add_Netas_Standalone {
     }
 
     private static function forecast_week_profile($db, array $forecast, array $cancel_source, array $ctx, $latest_c, array $real_involuntary) {
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $out = array('available'=>false,'rows'=>array(),'warning'=>'');
         foreach ($districts as $d) {
             $out['rows'][$d] = array(
@@ -1839,7 +1912,7 @@ final class KRN_Add_Netas_Standalone {
     }
 
     private static function director_installation_fcst($db, array $ctx) {
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $out = array_fill_keys($districts, null);
         if (($ctx['mode'] ?? '') !== 'semanal') { return $out; }
         $table = tx_an_config('director_forecast_table', '');
@@ -1908,7 +1981,7 @@ final class KRN_Add_Netas_Standalone {
         $cache_key = self::cache_key($ctx);
         $cached = self::cache_get($cache_key);
         if (is_array($cached)) { $cached['cache']='hit'; return $cached; }
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $defaults = self::default_objectives();
         $rows = array();
         foreach ($districts as $d) $rows[$d] = array(
@@ -2066,6 +2139,7 @@ final class KRN_Add_Netas_Standalone {
         check_ajax_referer('krn_addnetas_save','nonce');
         $year=max(2020,(int)($_POST['year']??0)); $week=max(1,min(53,(int)($_POST['week']??0)));
         $district=self::normalize_district(sanitize_text_field(wp_unslash($_POST['district']??''))); if($district==='')wp_send_json_error(array('message'=>'Distrito inválido.'),400);
+        if (!in_array($district, tx_an_allowed_districts(), true)) wp_send_json_error(array('message'=>'No tienes permiso para modificar otro distrito.'),403);
         $field=sanitize_key($_POST['field']??''); $allowed=array('installations','voluntary','involuntary','transfer_p','transfer_f','objective'); if(!in_array($field,$allowed,true))wp_send_json_error(array('message'=>'Campo inválido.'),400);
         $value=max(0,(int)($_POST['value']??0)); list($start,$end)=self::iso_week_bounds($year,$week); $user=wp_get_current_user(); global $wpdb; $table=self::table_name(); $now=current_time('mysql');
         $existing=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE year=%d AND week=%d AND district=%s",$year,$week,$district),ARRAY_A);
@@ -2095,7 +2169,7 @@ final class KRN_Add_Netas_Standalone {
         $is_real = $view === 'real';
         $rows = $data['rows'];
         if ($is_real) { $rows = self::real_rows($rows); }
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $totals = array('instalaciones'=>0,'cancelaciones'=>0,'voluntarias'=>0,'involuntarias'=>0,'organicas'=>0,'traslado_p'=>0,'traslado_f'=>0,'objetivo'=>0,'add_netas'=>0);
         foreach ($districts as $d) {
             $rows[$d]['involuntarias'] = max(0, (int)($rows[$d]['involuntarias'] ?? 0));
@@ -2204,11 +2278,11 @@ final class KRN_Add_Netas_Standalone {
 
 </style></head><body>
 <div class="toolbar"><button class="secondary" type="button" onclick="window.close()">Cerrar</button><button type="button" onclick="window.print()">Guardar / imprimir PDF</button></div>
-<main class="report"><div class="top"><div><div class="eyebrow">TALIA · REGIÓN SUR</div><h1><?php echo $is_real?'Real Add Netas':'FCST Add Netas'; ?> · Reporte ejecutivo</h1><p><?php echo esc_html($ctx['label']); ?> · <?php echo esc_html($ctx['start'].' — '.$ctx['end']); ?></p></div><div class="meta"><strong>Corte de información: <?php echo esc_html($cutoff); ?></strong>Generado: <?php echo esc_html($generated); ?><br><?php echo esc_html($is_real?($data['real_days'].' días con corte real'):($data['projected_days'].' días proyectados')); ?></div></div>
-<section class="kpis"><div class="kpi"><span><?php echo $is_real?'Instalaciones reales':'Instalaciones esperadas'; ?></span><strong><?php echo number_format_i18n($totals['instalaciones']); ?></strong></div><div class="kpi"><span><?php echo $is_real?'Cancelaciones reales':'Cancelaciones esperadas'; ?></span><strong><?php echo number_format_i18n($totals['cancelaciones']); ?></strong></div><div class="kpi"><span><?php echo $is_real?'ADD Netas real':'ADD Netas esperado'; ?></span><strong><?php echo number_format_i18n($totals['add_netas']); ?></strong></div><div class="kpi reach <?php echo $reach>=100?'good':($reach>=80?'mid':'low'); ?>"><span>Alcance regional</span><strong><?php echo esc_html(number_format_i18n($reach,1).'%'); ?></strong></div></section>
+<main class="report"><div class="top"><div><div class="eyebrow">TALIA · <?php echo esc_html(tx_an_scope_label()); ?></div><h1><?php echo $is_real?'Real Add Netas':'FCST Add Netas'; ?> · Reporte ejecutivo</h1><p><?php echo esc_html($ctx['label']); ?> · <?php echo esc_html($ctx['start'].' — '.$ctx['end']); ?></p></div><div class="meta"><strong>Corte de información: <?php echo esc_html($cutoff); ?></strong>Generado: <?php echo esc_html($generated); ?><br><?php echo esc_html($is_real?($data['real_days'].' días con corte real'):($data['projected_days'].' días proyectados')); ?></div></div>
+<section class="kpis"><div class="kpi"><span><?php echo $is_real?'Instalaciones reales':'Instalaciones esperadas'; ?></span><strong><?php echo number_format_i18n($totals['instalaciones']); ?></strong></div><div class="kpi"><span><?php echo $is_real?'Cancelaciones reales':'Cancelaciones esperadas'; ?></span><strong><?php echo number_format_i18n($totals['cancelaciones']); ?></strong></div><div class="kpi"><span><?php echo $is_real?'ADD Netas real':'ADD Netas esperado'; ?></span><strong><?php echo number_format_i18n($totals['add_netas']); ?></strong></div><div class="kpi reach <?php echo $reach>=100?'good':($reach>=80?'mid':'low'); ?>"><span>Alcance <?php echo tx_an_scope_label()==="REGIÓN SUR"?"regional":"distrital"; ?></span><strong><?php echo esc_html(number_format_i18n($reach,1).'%'); ?></strong></div></section>
 <h2 class="section-title">Resultado por distrito</h2><table><thead><tr><th>Distrito</th><th>Instalaciones</th><th>Voluntarias</th><th class="inv-group inv-total">Involuntarias</th><th class="inv-group">Orgánicas</th><th class="inv-group">Traslado P</th><th class="inv-group">Traslado F</th><th>Cancelaciones</th><th>ADD Netas</th><th>Objetivo</th><th>Alcance</th></tr></thead><tbody>
 <?php foreach($districts as $d): $pct=$rows[$d]['objetivo']>0?round(($rows[$d]['add_netas']/$rows[$d]['objetivo'])*100,1):0; ?><tr><td><strong><?php echo esc_html($d); ?></strong></td><td><?php echo number_format_i18n($rows[$d]['instalaciones']); ?></td><td><?php echo number_format_i18n($rows[$d]['voluntarias']); ?></td><td class="inv-group inv-total"><strong><?php echo number_format_i18n($rows[$d]['involuntarias']); ?></strong></td><td class="inv-group"><strong><?php echo number_format_i18n($rows[$d]['organicas']); ?></strong></td><td class="inv-group"><strong><?php echo number_format_i18n($rows[$d]['traslado_p']); ?></strong></td><td class="inv-group"><?php echo number_format_i18n($rows[$d]['traslado_f']); ?></td><td><?php echo number_format_i18n($rows[$d]['cancelaciones']); ?></td><td><strong><?php echo number_format_i18n($rows[$d]['add_netas']); ?></strong></td><td><?php echo number_format_i18n($rows[$d]['objetivo']); ?></td><td class="<?php echo $pct>=100?'good':($pct>=80?'mid':'low'); ?>"><strong><?php echo number_format_i18n($pct,1); ?>%</strong></td></tr><?php endforeach; ?>
-<tr class="net"><td>REGIÓN SUR</td><td><?php echo number_format_i18n($totals['instalaciones']); ?></td><td><?php echo number_format_i18n($totals['voluntarias']); ?></td><td class="inv-group inv-total"><strong><?php echo number_format_i18n($totals['involuntarias']); ?></strong></td><td class="inv-group"><strong><?php echo number_format_i18n($totals['organicas']); ?></strong></td><td class="inv-group"><strong><?php echo number_format_i18n($totals['traslado_p']); ?></strong></td><td class="inv-group"><?php echo number_format_i18n($totals['traslado_f']); ?></td><td><?php echo number_format_i18n($totals['cancelaciones']); ?></td><td><?php echo number_format_i18n($totals['add_netas']); ?></td><td><?php echo number_format_i18n($totals['objetivo']); ?></td><td class="<?php echo $reach>=100?'good':($reach>=80?'mid':'low'); ?>"><?php echo number_format_i18n($reach,1); ?>%</td></tr></tbody></table>
+<tr class="net"><td><?php echo esc_html(tx_an_total_label()); ?></td><td><?php echo number_format_i18n($totals['instalaciones']); ?></td><td><?php echo number_format_i18n($totals['voluntarias']); ?></td><td class="inv-group inv-total"><strong><?php echo number_format_i18n($totals['involuntarias']); ?></strong></td><td class="inv-group"><strong><?php echo number_format_i18n($totals['organicas']); ?></strong></td><td class="inv-group"><strong><?php echo number_format_i18n($totals['traslado_p']); ?></strong></td><td class="inv-group"><?php echo number_format_i18n($totals['traslado_f']); ?></td><td><?php echo number_format_i18n($totals['cancelaciones']); ?></td><td><?php echo number_format_i18n($totals['add_netas']); ?></td><td><?php echo number_format_i18n($totals['objetivo']); ?></td><td class="<?php echo $reach>=100?'good':($reach>=80?'mid':'low'); ?>"><?php echo number_format_i18n($reach,1); ?>%</td></tr></tbody></table>
 
 <div class="footer"><span>ADD Netas <?php echo esc_html(self::VERSION); ?> · Forecast <?php echo esc_html(self::FORECAST_ALGORITHM_VERSION); ?></span><span>Reporte para uso ejecutivo · Fuente de lectura: Xpedient / captura local ADD Netas</span></div></main>
 <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},250);});</script></body></html><?php
@@ -2299,7 +2373,7 @@ final class KRN_Add_Netas_Standalone {
     }
 
     private static function dashboard_objectives(array $ctx) {
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $defaults = self::default_objectives();
         $local = self::local_values($ctx);
         $out = array();
@@ -2324,7 +2398,7 @@ final class KRN_Add_Netas_Standalone {
     }
 
     private static function dashboard_period_metrics(array $ctx) {
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $rows = array();
         foreach ($districts as $d) $rows[$d] = array('sales'=>0,'installations'=>0,'cancellations'=>0,'voluntary'=>0,'involuntary'=>0,'gain'=>0,'objective'=>0);
         $result = array('rows'=>$rows,'totals'=>array('sales'=>0,'installations'=>0,'cancellations'=>0,'voluntary'=>0,'involuntary'=>0,'gain'=>0,'objective'=>0),'warnings'=>array(),'cutoff'=>self::cutoff_date());
@@ -2359,7 +2433,7 @@ final class KRN_Add_Netas_Standalone {
     }
 
     private static function dashboard_history(array $ctx, $count = 10) {
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $db = self::legacy_connection();
         if (is_wp_error($db)) { return array(); }
         $spec = self::source_spec($db); $sales_source = self::dashboard_sales_source($db);
@@ -2406,7 +2480,7 @@ final class KRN_Add_Netas_Standalone {
      * Consolida todas las fuentes en una sola ventana para evitar consultas por semana.
      */
     private static function dashboard_weekly_history(array $ctx) {
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $db = self::legacy_connection();
         if (is_wp_error($db)) { return array(); }
 
@@ -2568,7 +2642,7 @@ final class KRN_Add_Netas_Standalone {
         $is_real = $view === 'real';
         $rows = $data['rows'];
         if ($is_real) { $rows = self::real_rows($rows); }
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
         $prepared = array();
         $totals = array('instalaciones'=>0,'cancelaciones'=>0,'voluntarias'=>0,'involuntarias'=>0,'organicas'=>0,'traslado_p'=>0,'traslado_f'=>0,'objetivo'=>0,'add_netas'=>0);
         foreach ($districts as $d) {
@@ -2698,12 +2772,12 @@ final class KRN_Add_Netas_Standalone {
       <div class="andb-exec-kpi"><span><?php echo $is_real ? 'Instalaciones reales' : 'Instalaciones esperadas'; ?></span><strong><?php echo number_format_i18n($totals['instalaciones']); ?></strong></div>
       <div class="andb-exec-kpi"><span><?php echo $is_real ? 'Cancelaciones reales' : 'Cancelaciones esperadas'; ?></span><strong><?php echo number_format_i18n($totals['cancelaciones']); ?></strong></div>
       <div class="andb-exec-kpi"><span><?php echo $is_real ? 'ADD Netas real' : 'ADD Netas esperado'; ?></span><strong><?php echo number_format_i18n($totals['add_netas']); ?></strong></div>
-      <div class="andb-exec-kpi reach <?php echo $reach>=100?'good':($reach>=80?'mid':'low'); ?>"><span>Alcance regional</span><strong><?php echo esc_html(number_format_i18n($reach,1).'%'); ?></strong></div>
+      <div class="andb-exec-kpi reach <?php echo $reach>=100?'good':($reach>=80?'mid':'low'); ?>"><span>Alcance <?php echo tx_an_scope_label()==="REGIÓN SUR"?"regional":"distrital"; ?></span><strong><?php echo esc_html(number_format_i18n($reach,1).'%'); ?></strong></div>
     </div>
     <div class="andb-exec-table-head">Resultado por distrito</div>
     <div class="andb-table-wrap andb-exec-table-wrap"><table><thead><tr><th>Distrito</th><th>Instalaciones</th><th>Voluntarias</th><th class="andb-inv-group andb-inv-total">Involuntarias</th><th class="andb-inv-group">Orgánicas</th><th class="andb-inv-group">Traslado P</th><th class="andb-inv-group">Traslado F</th><th>Cancelaciones</th><th>ADD Netas</th><th>Objetivo</th><th>Alcance</th></tr></thead><tbody>
     <?php foreach($districts as $d): $pct = (int)($rows[$d]['objetivo'] ?? 0) > 0 ? round(((int)$rows[$d]['add_netas'] / (int)$rows[$d]['objetivo']) * 100, 1) : 0; ?><tr><th><?php echo esc_html($d); ?></th><td><?php echo number_format_i18n($rows[$d]['instalaciones']); ?></td><td><?php echo number_format_i18n($rows[$d]['voluntarias']); ?></td><td class="andb-inv-group andb-inv-total"><strong><?php echo number_format_i18n($rows[$d]['involuntarias']); ?></strong></td><td class="andb-inv-group"><strong><?php echo number_format_i18n($rows[$d]['organicas']); ?></strong></td><td class="andb-inv-group"><strong><?php echo number_format_i18n($rows[$d]['traslado_p']); ?></strong></td><td class="andb-inv-group"><?php echo number_format_i18n($rows[$d]['traslado_f']); ?></td><td><?php echo number_format_i18n($rows[$d]['cancelaciones']); ?></td><td><strong><?php echo number_format_i18n($rows[$d]['add_netas']); ?></strong></td><td><?php echo number_format_i18n($rows[$d]['objetivo']); ?></td><td><strong class="<?php echo $pct>=100?'good':($pct>=80?'mid':'bad'); ?>"><?php echo number_format_i18n($pct,1); ?>%</strong></td></tr><?php endforeach; ?>
-    <tr class="andb-exec-total"><th>REGIÓN SUR</th><td><?php echo number_format_i18n($totals['instalaciones']); ?></td><td><?php echo number_format_i18n($totals['voluntarias']); ?></td><td class="andb-inv-group andb-inv-total"><strong><?php echo number_format_i18n($totals['involuntarias']); ?></strong></td><td class="andb-inv-group"><strong><?php echo number_format_i18n($totals['organicas']); ?></strong></td><td class="andb-inv-group"><strong><?php echo number_format_i18n($totals['traslado_p']); ?></strong></td><td class="andb-inv-group"><?php echo number_format_i18n($totals['traslado_f']); ?></td><td><?php echo number_format_i18n($totals['cancelaciones']); ?></td><td><?php echo number_format_i18n($totals['add_netas']); ?></td><td><?php echo number_format_i18n($totals['objetivo']); ?></td><td><strong class="<?php echo $reach>=100?'good':($reach>=80?'mid':'bad'); ?>"><?php echo number_format_i18n($reach,1); ?>%</strong></td></tr>
+    <tr class="andb-exec-total"><th><?php echo esc_html(tx_an_total_label()); ?></th><td><?php echo number_format_i18n($totals['instalaciones']); ?></td><td><?php echo number_format_i18n($totals['voluntarias']); ?></td><td class="andb-inv-group andb-inv-total"><strong><?php echo number_format_i18n($totals['involuntarias']); ?></strong></td><td class="andb-inv-group"><strong><?php echo number_format_i18n($totals['organicas']); ?></strong></td><td class="andb-inv-group"><strong><?php echo number_format_i18n($totals['traslado_p']); ?></strong></td><td class="andb-inv-group"><?php echo number_format_i18n($totals['traslado_f']); ?></td><td><?php echo number_format_i18n($totals['cancelaciones']); ?></td><td><?php echo number_format_i18n($totals['add_netas']); ?></td><td><?php echo number_format_i18n($totals['objetivo']); ?></td><td><strong class="<?php echo $reach>=100?'good':($reach>=80?'mid':'bad'); ?>"><?php echo number_format_i18n($reach,1); ?>%</strong></td></tr>
     </tbody></table></div>
 <div class="andb-exec-footer"><span>ADD Netas <?php echo esc_html(self::VERSION); ?> · Forecast <?php echo esc_html(self::FORECAST_ALGORITHM_VERSION); ?></span><span>Fuente de lectura: Xpedient / captura local ADD Netas</span></div>
   </article>
@@ -2721,10 +2795,16 @@ final class KRN_Add_Netas_Standalone {
         $metric_prev_ctx = self::dashboard_previous_context_to_same_day($ctx, $prev_ctx, $selected_day);
         $current = self::dashboard_period_metrics($metric_ctx);
         $previous = self::dashboard_period_metrics($metric_prev_ctx);
-        $districts = array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts = tx_an_allowed_districts();
 
         $requested_district = sanitize_text_field(wp_unslash((string)($_GET['add_district'] ?? '')));
         $selected_district = self::normalize_district($requested_district);
+        if (strtolower(trim((string)($_SESSION['rol']??''))) === 'director_distrital') {
+            // GET no puede cambiar la adscripción autenticada.
+            $selected_district = tx_an_scope_district();
+        } elseif ($selected_district !== '' && !in_array($selected_district, $districts, true)) {
+            $selected_district = '';
+        }
         $is_region = $selected_district === '';
         $scope_label = $is_region ? 'Región SUR' : $selected_district;
         $cur = $is_region ? $current['totals'] : $current['rows'][$selected_district];
@@ -2830,7 +2910,7 @@ final class KRN_Add_Netas_Standalone {
         ob_start(); ?>
 <section class="andb-shell" data-dashboard-addnetas>
   <header class="andb-header">
-    <div><span class="andb-eyebrow">REGIÓN SUR · ADD NETAS</span><h1>Dashboard Add Netas</h1><p>Comparativo por semana o por mes · vista regional y por distrito</p></div>
+    <div><span class="andb-eyebrow"><?php echo esc_html(tx_an_scope_label()); ?> · ADD NETAS</span><h1>Dashboard Add Netas</h1><p>Comparativo por semana o por mes · vista regional y por distrito</p></div>
     <div class="andb-cut"><strong><?php echo esc_html($ctx['label']); ?></strong><small><?php if($selected_day): ?>Corte seleccionado: <?php echo esc_html($selected_day); ?> · <?php endif; ?>Corte real: <?php echo esc_html(min($ctx['end'],self::cutoff_date())); ?></small></div>
   </header>
 
@@ -2848,7 +2928,7 @@ final class KRN_Add_Netas_Standalone {
     <?php if($ctx['mode']==='semanal'): $day_max=min($ctx['end'],self::cutoff_date()); ?>
     <div class="andb-day-filter"><span>Día</span><input type="date" data-dashboard-day min="<?php echo esc_attr($ctx['start']); ?>" max="<?php echo esc_attr($day_max); ?>" value="<?php echo esc_attr($selected_day); ?>" aria-label="Seleccionar día de la semana"><?php if($selected_day): ?><button type="button" data-dashboard-day-clear aria-label="Volver a semana completa">×</button><?php endif; ?></div>
     <?php endif; ?>
-    <label class="andb-filter"><span>Distrito</span><select data-dashboard-district><option value="">Región SUR</option><?php foreach($districts as $d):?><option value="<?php echo esc_attr($d); ?>" <?php selected($selected_district,$d); ?>><?php echo esc_html($d); ?></option><?php endforeach;?></select></label>
+    <label class="andb-filter"><span>Distrito</span><select data-dashboard-district><?php if(tx_an_scope_label()==='REGIÓN SUR'):?><option value="">Región SUR</option><?php endif;?><?php foreach($districts as $d):?><option value="<?php echo esc_attr($d); ?>" <?php selected($selected_district,$d); ?>><?php echo esc_html($d); ?></option><?php endforeach;?></select></label>
     <a class="andb-export" href="<?php echo esc_url($report_url); ?>" target="_blank" rel="noopener">Exportar</a>
   </div>
 
@@ -3065,7 +3145,7 @@ syncMainChartScroll();
 
         $ctx=self::context($ctx_args); $data=self::data($ctx); $rows=$data['rows'];
         if ($is_real) { $rows = self::real_rows($rows); }
-        $districts=array('CANCÚN','COATZA / MINA','MÉRIDA','TUXTLA','VILLAHERMOSA');
+        $districts=tx_an_allowed_districts();
         $totals=array('instalaciones'=>0,'cancelaciones'=>0,'voluntarias'=>0,'involuntarias'=>0,'organicas'=>0,'organicas_vencidas'=>0,'traslado_p'=>0,'traslado_p_vencidos'=>0,'traslado_p_programado'=>0,'traslado_f'=>0,'objetivo'=>0,'add_netas'=>0);
         foreach($districts as $d){
             // Regla v1.8.16: Involuntarias es el total rector; Orgánicas ya llegó deducida desde data()/real_rows().
@@ -3111,10 +3191,10 @@ syncMainChartScroll();
         $history=is_array($data['history']??null)?$data['history']:array();
         ob_start(); ?>
 <section id="<?php echo esc_attr($instance); ?>" class="addnetas-shell" data-addnetas-module><span id="<?php echo esc_attr($instance); ?>-top" class="addnetas-anchor" aria-hidden="true"></span>
-<header class="addnetas-hero"><div><span>REGIÓN SUR · <?php echo $is_real?'REAL ADD NETAS':'FCST ADD NETAS'; ?></span><h1><?php echo esc_html($ctx['label']); ?></h1><p><?php echo $is_real?'Lectura real acumulada del periodo. Los lunes inicia automáticamente en la última semana cerrada (Semana Actual − 1); el resto de la navegación histórica permanece disponible.':'Pantalla de proyección basada en datos reales y sugerencias SAC/Cobranza. Los componentes pueden ajustarse antes de guardar.'; ?></p></div><div class="addnetas-period"><strong><?php echo esc_html($is_real?($data['real_days'].' días con corte real'):($data['projected_days'].' días proyectados')); ?></strong><small><?php echo esc_html($ctx['start'].' — '.$ctx['end']); ?></small></div></header>
+<header class="addnetas-hero"><div><span><?php echo esc_html(tx_an_scope_label()); ?> · <?php echo $is_real?'REAL ADD NETAS':'FCST ADD NETAS'; ?></span><h1><?php echo esc_html($ctx['label']); ?></h1><p><?php echo $is_real?'Lectura real acumulada del periodo. Los lunes inicia automáticamente en la última semana cerrada (Semana Actual − 1); el resto de la navegación histórica permanece disponible.':'Pantalla de proyección basada en datos reales y sugerencias SAC/Cobranza. Los componentes pueden ajustarse antes de guardar.'; ?></p></div><div class="addnetas-period"><strong><?php echo esc_html($is_real?($data['real_days'].' días con corte real'):($data['projected_days'].' días proyectados')); ?></strong><small><?php echo esc_html($ctx['start'].' — '.$ctx['end']); ?></small></div></header>
 <nav class="addnetas-nav"><a class="<?php echo $ctx['mode']==='semanal'?'is-active':''; ?>" href="<?php echo esc_url($urls['weekly']); ?>">Semanal</a><a class="<?php echo $ctx['mode']==='mensual'?'is-active':''; ?>" href="<?php echo esc_url($urls['monthly']); ?>">Mensual</a><a href="<?php echo esc_url($urls['previous']); ?>">← Anterior</a><a class="is-current" href="<?php echo esc_url($urls['active']); ?>">Periodo actual</a><a class="addnetas-pdf" href="<?php echo esc_url($report_url); ?>" target="_blank" rel="noopener" data-role="executive-pdf">Generar PDF ejecutivo</a></nav>
 <div class="addnetas-mobile-jump" aria-label="Navegación móvil"><a href="#<?php echo esc_attr($instance); ?>-matrix">Matriz</a><a href="#<?php echo esc_attr($instance); ?>-charts">Gráficas</a><a href="#<?php echo esc_attr($instance); ?>-top">Inicio</a></div>
-<div class="addnetas-kpis"><article><span><?php echo $is_real?'Instalaciones reales':'Instalaciones esperadas'; ?></span><strong data-kpi="instalaciones"><?php echo number_format_i18n($totals['instalaciones']); ?></strong><small><?php echo $is_real?'Acumulado real':'Real + FCST'; ?></small></article><article><span><?php echo $is_real?'Cancelaciones reales':'Cancelaciones esperadas'; ?></span><strong data-kpi="cancelaciones"><?php echo number_format_i18n($totals['cancelaciones']); ?></strong><small>Voluntarias + Involuntarias</small></article><article><span><?php echo $is_real?'ADD Netas real':'ADD Netas esperado'; ?></span><strong data-kpi="add_netas"><?php echo number_format_i18n($totals['add_netas']); ?></strong><small>Instalaciones − Cancelaciones</small></article><article class="reach <?php echo $reach>=100?'green':($reach>=80?'yellow':'red'); ?>"><span>% Alcance regional</span><strong data-kpi="alcance"><?php echo esc_html(number_format_i18n($reach,1).'%'); ?></strong><small><?php echo $is_real?'ADD Netas real / Objetivo':'ADD Netas / Objetivo'; ?></small></article></div>
+<div class="addnetas-kpis"><article><span><?php echo $is_real?'Instalaciones reales':'Instalaciones esperadas'; ?></span><strong data-kpi="instalaciones"><?php echo number_format_i18n($totals['instalaciones']); ?></strong><small><?php echo $is_real?'Acumulado real':'Real + FCST'; ?></small></article><article><span><?php echo $is_real?'Cancelaciones reales':'Cancelaciones esperadas'; ?></span><strong data-kpi="cancelaciones"><?php echo number_format_i18n($totals['cancelaciones']); ?></strong><small>Voluntarias + Involuntarias</small></article><article><span><?php echo $is_real?'ADD Netas real':'ADD Netas esperado'; ?></span><strong data-kpi="add_netas"><?php echo number_format_i18n($totals['add_netas']); ?></strong><small>Instalaciones − Cancelaciones</small></article><article class="reach <?php echo $reach>=100?'green':($reach>=80?'yellow':'red'); ?>"><span>% Alcance <?php echo tx_an_scope_label()==="REGIÓN SUR"?"regional":"distrital"; ?></span><strong data-kpi="alcance"><?php echo esc_html(number_format_i18n($reach,1).'%'); ?></strong><small><?php echo $is_real?'ADD Netas real / Objetivo':'ADD Netas / Objetivo'; ?></small></article></div>
 <?php if(!empty($data['error'])):?><div class="addnetas-alert"><?php echo esc_html($data['error']); ?></div><?php endif; ?>
 <?php if(!empty($data['warnings'])):?><div class="addnetas-alert addnetas-warning"><?php echo esc_html(implode(' · ',array_unique($data['warnings']))); ?></div><?php endif; ?>
 <div class="addnetas-matrix-mobile-nav" aria-label="Navegación por distrito de la matriz">
@@ -3123,13 +3203,13 @@ syncMainChartScroll();
     <span>Distrito</span>
     <select data-matrix-select aria-label="Seleccionar distrito">
       <?php foreach($districts as $d):?><option value="<?php echo esc_attr($d); ?>"><?php echo esc_html($d); ?></option><?php endforeach; ?>
-      <option value="REGIÓN SUR">REGIÓN SUR</option>
+      <option value="REGIÓN SUR"><?php echo esc_html(tx_an_total_label()); ?></option>
     </select>
   </label>
   <button type="button" class="addnetas-matrix-nav-btn" data-matrix-next aria-label="Distrito siguiente">›</button>
   <small data-matrix-position aria-live="polite">1 / <?php echo esc_html(count($districts)+1); ?></small>
 </div>
-<div id="<?php echo esc_attr($instance); ?>-matrix" class="addnetas-table-wrap" tabindex="0" aria-label="<?php echo $is_real?'Matriz real por distrito':'Matriz de proyección por distrito'; ?>"><table><thead><tr><th>Indicador</th><?php foreach($districts as $d):?><th><?php echo esc_html($d); ?></th><?php endforeach;?><th>REGIÓN SUR</th></tr></thead><tbody>
+<div id="<?php echo esc_attr($instance); ?>-matrix" class="addnetas-table-wrap" tabindex="0" aria-label="<?php echo $is_real?'Matriz real por distrito':'Matriz de proyección por distrito'; ?>"><table><thead><tr><th>Indicador</th><?php foreach($districts as $d):?><th><?php echo esc_html($d); ?></th><?php endforeach;?><th><?php echo esc_html(tx_an_total_label()); ?></th></tr></thead><tbody>
 <?php
 $input_cell=function($d,$field,$value,$negative=false,$real=null,$fcst=null,$extra='',$director_fcst=null) use($editable,$is_real){
     $detail = ($real !== null && $fcst !== null)
@@ -3200,11 +3280,11 @@ $fixed_cell=function($value,$negative=false,$real=null,$fcst=null,$extra=''){
   </div>
   <div class="addnetas-chart-stack">
     <article class="addnetas-chart-card-wide is-mobile-active" data-chart-card="installations">
-      <div class="addnetas-chart-title"><div><h3>Instalaciones</h3><small>Barras apiladas por distrito · línea Región SUR</small></div><span><?php echo $is_real?'Real histórico':'Real histórico → FCST actual'; ?></span></div>
+      <div class="addnetas-chart-title"><div><h3>Instalaciones</h3><small>Barras por distrito · línea <?php echo esc_html(tx_an_scope_label()); ?></small></div><span><?php echo $is_real?'Real histórico':'Real histórico → FCST actual'; ?></span></div>
       <div class="addnetas-chart" data-chart="installations"></div>
     </article>
     <article class="addnetas-chart-card-wide" data-chart-card="cancellations">
-      <div class="addnetas-chart-title"><div><h3>Cancelaciones</h3><small>Barras apiladas por distrito · línea Región SUR</small></div><span>Voluntarias + Involuntarias</span></div>
+      <div class="addnetas-chart-title"><div><h3>Cancelaciones</h3><small>Barras por distrito · línea <?php echo esc_html(tx_an_scope_label()); ?></small></div><span>Voluntarias + Involuntarias</span></div>
       <div class="addnetas-chart" data-chart="cancellations"></div>
     </article>
     <article class="addnetas-chart-card-wide" data-chart-card="voluntary">
@@ -3216,7 +3296,7 @@ $fixed_cell=function($value,$negative=false,$real=null,$fcst=null,$extra=''){
       <div class="addnetas-chart" data-chart="involuntary"></div>
     </article>
     <article class="addnetas-chart-card-wide" data-chart-card="add_netas">
-      <div class="addnetas-chart-title"><div><h3>Adiciones Netas</h3><small>Barras apiladas por distrito · línea Región SUR</small></div><span>Instalaciones − Cancelaciones</span></div>
+      <div class="addnetas-chart-title"><div><h3>Adiciones Netas</h3><small>Barras por distrito · línea <?php echo esc_html(tx_an_scope_label()); ?></small></div><span>Instalaciones − Cancelaciones</span></div>
       <div class="addnetas-chart" data-chart="add_netas"></div>
     </article>
   </div>
@@ -3354,6 +3434,7 @@ $fixed_cell=function($value,$negative=false,$real=null,$fcst=null,$extra=''){
   };
   const shortLabels={'CANCÚN':'Cancún','COATZA / MINA':'Coatza / Mina','MÉRIDA':'Mérida','TUXTLA':'Tuxtla','VILLAHERMOSA':'Villahermosa'};
   const regionColor='#26324a';
+  const scopeLabel=<?php echo wp_json_encode(tx_an_scope_label()); ?>;
   const esc=(s)=>String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
   const n=(v)=>Number.isFinite(+v)?+v:0;
   const metricLabel={installations:'Instalaciones',cancellations:'Cancelaciones',voluntary:'Voluntarias',involuntary:'Involuntarias',add_netas:'Adiciones Netas'};
@@ -3434,7 +3515,7 @@ $fixed_cell=function($value,$negative=false,$real=null,$fcst=null,$extra=''){
   }
   function legendBar(){
     const parts=districts.map(d=>'<span class="an-legend-item"><i class="an-legend-swatch" style="background:'+palette[d]+'"></i>'+esc(shortLabels[d])+'</span>');
-    parts.push('<span class="an-legend-item"><i class="an-legend-line"></i>Región SUR</span>');
+    parts.push('<span class="an-legend-item"><i class="an-legend-line"></i>'+esc(scopeLabel)+'</span>');
     return '<div class="an-legend">'+parts.join('')+'</div>';
   }
   function legendLines(series,metric){
@@ -3511,14 +3592,14 @@ $fixed_cell=function($value,$negative=false,$real=null,$fcst=null,$extra=''){
         const v=n(p.rows?.[d]?.[type]);if(v===0)return;
         const from=v>=0?pos:neg,to=from+v; if(v>=0)pos=to;else neg=to;
         const y1=f.y(from),y2=f.y(to),ry=Math.min(y1,y2),rh=Math.max(1,Math.abs(y2-y1));
-        svg+='<rect class="an-bar-segment"'+tipAttr([pointLabel(p), shortLabels[d]+': '+fmt.format(v)+' '+metricLabel[type], 'Región SUR: '+fmt.format(region)])+' x="'+(xx-barW/2)+'" y="'+ry+'" width="'+barW+'" height="'+rh+'" fill="'+palette[d]+'"><title>'+esc((p.label||'')+' · '+shortLabels[d]+' · '+metricLabel[type]+': '+fmt.format(v))+'</title></rect>';
+        svg+='<rect class="an-bar-segment"'+tipAttr([pointLabel(p), shortLabels[d]+': '+fmt.format(v)+' '+metricLabel[type], scopeLabel+': '+fmt.format(region)])+' x="'+(xx-barW/2)+'" y="'+ry+'" width="'+barW+'" height="'+rh+'" fill="'+palette[d]+'"><title>'+esc((p.label||'')+' · '+shortLabels[d]+' · '+metricLabel[type]+': '+fmt.format(v))+'</title></rect>';
       });
       if(p.selected){svg+='<rect class="an-selected-bar" x="'+(xx-barW/2-6)+'" y="'+(f.top+6)+'" width="'+(barW+12)+'" height="'+(f.plotH-12)+'" rx="6"></rect>'; }
     });
     svg+='<path class="an-region-line" d="'+smoothPath(points,0.16)+'"></path>';
     series.forEach((p,i)=>{
       const xx=f.x(i),region=n(p.region?.[type]),yy=f.y(region);
-      svg+='<circle class="an-region-dot"'+tipAttr([pointLabel(p), 'Región SUR: '+fmt.format(region)+' '+metricLabel[type], 'Total semanal'])+' cx="'+xx+'" cy="'+yy+'" r="4"><title>'+esc((p.label||'')+' · Región SUR: '+fmt.format(region))+'</title></circle>';
+      svg+='<circle class="an-region-dot"'+tipAttr([pointLabel(p), scopeLabel+': '+fmt.format(region)+' '+metricLabel[type], 'Total semanal'])+' cx="'+xx+'" cy="'+yy+'" r="4"><title>'+esc((p.label||'')+' · '+scopeLabel+': '+fmt.format(region))+'</title></circle>';
       const dy=region>=0?-9:14;
       svg+='<text class="an-region-value" x="'+xx+'" y="'+(yy+dy)+'" text-anchor="middle">'+esc(fmt.format(region))+'</text>';
     });
