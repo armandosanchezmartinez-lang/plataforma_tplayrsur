@@ -3744,9 +3744,61 @@ $tx_title=$tx_is_fcst?'FCST Add Netas':'Add Netas';
 ?><!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?php echo esc_html($tx_title); ?> · TotalExpedient</title>
-<style>body{margin:0;background:#f7f5fb;font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif}main{max-width:1600px;margin:auto;padding:12px 16px 36px}.tx-alert{padding:12px 16px;margin:12px 0;background:#fff4e6;border:1px solid #eea854;color:#703500;border-radius:8px;font-weight:600}.tx-page-nav{display:flex;gap:8px;flex-wrap:wrap;margin:7px 0 13px}.tx-page-nav a{background:#fff;border:1px solid #d8dce7;padding:7px 12px;border-radius:10px;color:#334155;text-decoration:none;font-size:13px}.tx-page-nav a.active{background:#172554;color:#fff;border-color:#172554}</style>
-</head><body><main>
-<nav class="tx-page-nav"><a href="<?php echo esc_attr(tx_an_view_path('real')); ?>" class="<?php echo $tx_is_fcst?'':'active'; ?>">Add Netas</a><a href="<?php echo esc_attr(tx_an_view_path('fcst')); ?>" class="<?php echo $tx_is_fcst?'active':''; ?>">FCST Add Netas</a></nav>
+<!-- Reutiliza exactamente los estilos que el INDEX aplica al sidebar centralizado. -->
+<link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=160">
+<style>
+/* Solo se adapta el contenedor de la página; no se alteran motores ni componentes. */
+body.page-addnetas { min-width:0; }
+body.page-addnetas .main.txp-addnetas-main {
+    margin-left:var(--sidebar,220px);
+    width:calc(100% - var(--sidebar,220px));
+    max-width:calc(100% - var(--sidebar,220px));
+    min-width:0;
+    flex:1 1 auto;
+    padding:24px clamp(14px,2vw,32px) 40px;
+    box-sizing:border-box;
+    overflow-x:clip;
+}
+body.page-addnetas .txp-addnetas-content {width:100%;max-width:1600px;margin:0 auto;min-width:0;}
+body.page-addnetas .txp-addnetas-main .andb-shell,
+body.page-addnetas .txp-addnetas-main .addnetas-shell {min-width:0;max-width:100%;}
+body.page-addnetas .tx-page-nav {display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;padding:0;}
+body.page-addnetas .tx-page-nav a {display:inline-flex;align-items:center;background:#fff;border:1px solid #d8dce7;padding:8px 12px;border-radius:10px;color:#334155;text-decoration:none;font-size:13px;font-weight:600;}
+body.page-addnetas .tx-page-nav a.active {background:#172554;color:#fff;border-color:#172554;}
+body.page-addnetas .tx-alert {padding:12px 16px;margin:12px 0;background:#fff4e6;border:1px solid #eea854;color:#703500;border-radius:8px;font-weight:600;}
+@media(max-width:640px){
+    body.page-addnetas .main.txp-addnetas-main {padding:14px 10px 34px;}
+    body.page-addnetas .tx-page-nav {gap:6px;}
+    body.page-addnetas .tx-page-nav a {font-size:11px;padding:8px 10px;}
+    /* El sidebar original usa 72px en móvil: submenús como paneles flotantes. */
+    body.page-addnetas .sidebar {width:var(--sidebar,72px);}
+    body.page-addnetas .sidebar-logo {width:52px;height:52px;border-radius:14px;}
+    body.page-addnetas .sidebar .txp-ranking-group {position:relative;width:100%;}
+    body.page-addnetas .sidebar .txp-ranking-toggle {width:60px;margin:0 auto 8px;padding:12px 0;justify-content:center;gap:0;}
+    body.page-addnetas .sidebar .txp-ranking-label,
+    body.page-addnetas .sidebar .txp-ranking-chevron {display:none;}
+    body.page-addnetas .sidebar .txp-ranking-submenu {position:absolute;left:calc(var(--sidebar,72px) - 2px);top:0;z-index:110;width:165px;padding:8px;border:1px solid rgba(255,255,255,.13);border-radius:12px;background:#21173f;box-shadow:0 10px 26px rgba(0,0,0,.25);}
+    body.page-addnetas .sidebar .txp-ranking-subitem {font-size:12px;white-space:nowrap;}
+    body.page-addnetas .sidebar .txp-ranking-group:not([open]) .txp-ranking-submenu {display:none;}
+}
+</style>
+</head><body class="page-addnetas">
+<?php
+/* El sidebar determina el submenú activo usando el archivo ejecutado.
+ * No incluirlo en las rutas POST (AJAX) ni en exportaciones PDF.
+ * Es el mismo archivo centralizado que usa /plataforma/index.php.
+ */
+$current_page = $tx_is_fcst ? 'fcst_add_netas' : 'add_netas';
+include __DIR__ . '/../includes/sidebar.php';
+?>
+<script>
+// En móvil inicia contraído; tocar un grupo despliega sus dos opciones.
+if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+    document.querySelectorAll('.sidebar .txp-ranking-group[open]').forEach(function (el) { el.removeAttribute('open'); });
+}
+</script>
+<main class="main txp-addnetas-main"><div class="txp-addnetas-content">
+<nav class="tx-page-nav" aria-label="Cambiar vista Adiciones Netas"><a href="<?php echo esc_attr(tx_an_view_path('real')); ?>" class="<?php echo $tx_is_fcst?'':'active'; ?>">Add Netas</a><a href="<?php echo esc_attr(tx_an_view_path('fcst')); ?>" class="<?php echo $tx_is_fcst?'active':''; ?>">FCST Add Netas</a></nav>
 <?php
 if (!$tx_fcst_table_ok) echo '<div class="tx-alert">La tabla de capturas FCST no está disponible. Las cifras reales pueden consultarse; guardar proyecciones requiere permisos para crear la tabla tx_addnetas_transfers.</div>';
 try {
@@ -3756,4 +3808,4 @@ try {
     http_response_code(500);
     echo '<div class="tx-alert">No fue posible cargar Add Netas con la estructura de datos actual. Revisa el registro de errores PHP.</div>';
 }
-?></main></body></html>
+?></div></main></body></html>
