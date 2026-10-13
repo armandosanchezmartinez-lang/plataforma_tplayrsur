@@ -3,9 +3,10 @@ declare(strict_types=1);
 /**
  * TALIA / MOTOR HC v0.6.3 - STAGING TODOS LOS ORIGENES (NO PRODUCTIVO)
  * =====================================================
- * CAMBIO AISLADO STAGING (13-OCT-2026): eliminar UNICAMENTE el filtro de
- * origen_prospecto de cargarEventos(). Cuenta unica, HC semanal/HIC, plazas,
- * ambiguedad y reglas de certificacion permanecen identicas. No alterar BD.
+ * CAMBIO AISLADO STAGING (13-OCT-2026): eliminar filtro de origen de
+ * cargarEventos(); ignorar solo folios marcadores vacios/"-"/"VACANTE"
+ * al resolver identidad (sin desestimar folios reales). HC semanal/HIC, plazas
+ * y reglas de certificacion permanecen identicas. No alterar BD.
  * Clase distinta para convivir con produccion en el mismo proceso PHP.
  *
  * OBJETIVO: asociar una instalacion unica (cuenta) al vendedor, coach y
@@ -414,7 +415,10 @@ final class RankingAtribucionServiceV06Staging
                 if (($e['lider_id']??null)!==null) $eventLeaders[(string)$e['lider_id']]=true;
                 if (self::isValidName($e['coach']??null)) $eventCoaches[self::nameKey((string)$e['coach'])]=self::norm($e['coach']);
                 $f=trim((string)($e['folio_empleado']??''));
-                if ($f!=='' && $f!=='VACANTE') $folios[$f]=true;
+                // STAGING S40: '-' no es otro vendedor (p. ej. Call Center sin folio).
+                // Solo los folios reales participan en la identidad HC/HIC. Dos
+                // folios reales distintos siguen siendo ambiguos y no se certifican.
+                if (!in_array(self::norm($f), ['', '-', 'VACANTE'], true)) $folios[$f]=true;
             }
             $personas=[]; $hicAmbiguo=false;
             foreach (array_keys($folios) as $f) {
