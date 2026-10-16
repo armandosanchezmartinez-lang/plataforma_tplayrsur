@@ -8,11 +8,12 @@ function admin_generate_temp_password($length = 10) {
     return $password;
 }
 function admin_allowed_roles() {
-    return ['admin','director_regional','director_distrital','lider','coach','vendedor'];
+    return ['admin','gerente_regional','director_regional','director_distrital','lider','coach','vendedor'];
 }
 function admin_role_label($rol) {
     $labels = [
         'admin'=>'ADMIN',
+        'gerente_regional'=>'GERENTE REGIONAL',
         'director_regional'=>'DIRECTOR REGIONAL',
         'director_distrital'=>'DIRECTOR DISTRITAL',
         'lider'=>'LÍDER',
