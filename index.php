@@ -3556,12 +3556,15 @@ function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, st
         if (count($asientos) !== 1) continue;
         $fila = $asientos[0];
         $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
-        $talento = trim((string)($fila['numero_talento_gs'] ?? ''));
-        if ($nombre === '' || strtoupper($nombre) === 'VACANTE' || stripos($talento,'VACANTE') !== false) continue;
-        $lideres[(string)$id] = $nombre;
+        // La plaza de líder VACANTE continúa siendo válida por ID de posición.
+        // Motor HC ya certificó la plaza: no excluir a sus coaches.
+        $lideres[(string)$id] = ($nombre === '' ? 'VACANTE' : $nombre);
     }
     $lideresPorNombre = [];
     foreach ($lideres as $id => $nombre) {
+        // Solo un líder ocupado sirve para resolver autorreferencias por nombre.
+        // VACANTE no es una identidad personal ni un alias único.
+        if (strtoupper(trim($nombre)) === 'VACANTE') continue;
         $d = explode('|', $id, 2)[0];
         $lideresPorNombre[$d][tx_coach_nombre_clave_hc_staging($nombre)][] = $id;
     }
