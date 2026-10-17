@@ -297,8 +297,8 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
         foreach ($keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
     }
     $tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
-    $denBase = $tot['hc_operativo_base'] > 0 ? $tot['hc_operativo_base'] : $tot['hc_activo_base'];
-    $denActual = $tot['hc_operativo_actual'] > 0 ? $tot['hc_operativo_actual'] : $tot['hc_activo_actual'];
+    $denBase = (float)$tot['hc_operativo_base'];
+    $denActual = (float)$tot['hc_operativo_actual'];
     $tot['pct_hc_sin_ins_base'] = $denBase > 0 ? round(($tot['hc_sin_venta_base'] / $denBase) * 100, 0) : null;
     $tot['pct_hc_sin_ins_actual'] = $denActual > 0 ? round(($tot['hc_sin_venta_actual'] / $denActual) * 100, 0) : null;
     $tot['prod_base'] = ($denBase > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $denBase / $dias_habiles_base, 2) : null;
@@ -2879,6 +2879,8 @@ include __DIR__ . '/../includes/sidebar.php';
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
+                    data-op-base="<?= h($r['hc_operativo_base'] ?? 0) ?>"
+                    data-op-actual="<?= h($r['hc_operativo_actual'] ?? 0) ?>"
                     <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_operativo_base','hc_operativo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
                     data-<?= h($k) ?>="<?= h($r[$k] ?? 0) ?>"
                     <?php endforeach; ?>>
@@ -3211,8 +3213,8 @@ function recalc(){
  const t={};keys.forEach(k=>t[k]=0);
  rows.forEach(r=>keys.forEach(k=>t[k]+=num(r.dataset[k])));
  const pct=t.ins_sem_base>0?Math.round(((t.ins_sem_actual-t.ins_sem_base)/t.ins_sem_base)*100):null;
- const denBase=t.hc_operativo_base>0?t.hc_operativo_base:t.hc_activo_base;
- const denActual=t.hc_operativo_actual>0?t.hc_operativo_actual:t.hc_activo_actual;
+ const denBase=rows.reduce((acc,r)=>acc+num(r.dataset.opBase),0);
+ const denActual=rows.reduce((acc,r)=>acc+num(r.dataset.opActual),0);
  const pctHcSinBase=denBase>0?Math.round((t.hc_sin_venta_base/denBase)*100):null;
  const pctHcSinActual=denActual>0?Math.round((t.hc_sin_venta_actual/denActual)*100):null;
  const pb=(denBase>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/denBase/DIAS_HABILES_BASE:null;
