@@ -3,7 +3,7 @@
  * TalIA / TotalXpedient · RANKING COMERCIAL v0.1.4 · PRODUCCIÓN
  * ============================================================================
  * Ubicación: /plataforma/detalle/ranking_comercial.php
- * Dependencias: /plataforma/includes/motor_hc.php (v0.6.4)
+ * Dependencias: /plataforma/includes/motor_hc_v0.6.4_STATUS.php (STAGING v0.6.4)
  *               /plataforma/includes/motor_comercial.php (v0.2.1)
  * Escritura en BD: ninguna. Consume únicamente vistas y motores de lectura.
  *
@@ -2342,7 +2342,7 @@ $comercial05_error='';
 $comercial05_auditoria=[];
 if ($view !== 'ventas') {
     try {
-        require_once __DIR__.'/../includes/motor_hc.php';
+        require_once __DIR__.'/../includes/motor_hc_v0.6.4_STATUS.php';
         $motor05=new RankingAtribucionServiceV06($conexion);
         $catalogo05=rank05_catalogo($motor05,$fecha_inicio_base_calc,$fecha_fin_actual_calc);
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
