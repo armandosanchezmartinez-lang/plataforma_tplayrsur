@@ -962,19 +962,47 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
         if ($coach!==null && $idCoach!==$coach) continue;
         foreach ($seats as $pos=>$seat) $filas[$k.'|'.$pos]=$seat;
     }
+
     $identidadesConInst=[];
     foreach ($eventos as $ev) {
         if (($ev['lider_id']??null)!==$lider) continue;
         if ($coach!==null && (string)($ev['coach_id']??'SIN_COACH')!==$coach) continue;
         if (!empty($ev['vendedor_id'])) $identidadesConInst[(string)$ev['vendedor_id']]=true;
     }
-    $activo=0;$vacante=0;$con=0;
+
+    // v0.6.4 STATUS:
+    // - "activo" conserva la lectura de HC ocupado para no alterar HC Total ni la vista de plantilla.
+    // - "operativo" es el denominador elegible para productividad / HC sin INS.
+    // - INCAPACIDAD y VACACIONES siguen dentro del HC ocupado/total, pero NO del operativo.
+    // - VACANTE se valida a nivel vendedor mediante el contrato canónico del Motor HC.
+    $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
+
     foreach ($filas as $seat) {
-        if ($seat['vacante']) { $vacante++; continue; }
+        $esVacante=(bool)($seat['vacante']??false) || (bool)($seat['es_vacante_status']??false);
+        if ($esVacante) {
+            $vacante++;
+            continue;
+        }
+
+        // Toda plaza ocupada sigue contando para HC Activo/Total mostrado.
         $activo++;
-        if ($seat['persona']!==null && isset($identidadesConInst[$seat['persona']])) $con++;
+
+        // Sólo vendedores operativamente disponibles participan del denominador.
+        $esOperativo=(int)($seat['hc_operativo']??1)===1;
+        if (!$esOperativo) continue;
+
+        $operativo++;
+        if (($seat['persona']??null)!==null && isset($identidadesConInst[(string)$seat['persona']])) {
+            $conOperativo++;
+        }
     }
-    return ['activo'=>$activo,'vacante'=>$vacante,'con_ins'=>$con];
+
+    return [
+        'activo'=>$activo,
+        'operativo'=>$operativo,
+        'vacante'=>$vacante,
+        'con_ins'=>$conOperativo,
+    ];
 }
 function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?string $vendedor=null): int {
     $n=0;
@@ -989,7 +1017,9 @@ function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?s
 function rank05_row(string $lider, string $coachId, string $nombre, array $catalogo, int $insBase, int $insActual, array $hb, array $ha, int $diasBase, int $diasActual): array {
     $l=rank05_ficha($catalogo,$lider);
     $hcActivoBase=$hb['activo'];$hcActivoActual=$ha['activo'];
-    $sinBase=max(0,$hcActivoBase-$hb['con_ins']);$sinActual=max(0,$hcActivoActual-$ha['con_ins']);
+    $hcOperativoBase=(int)($hb['operativo']??$hcActivoBase);
+    $hcOperativoActual=(int)($ha['operativo']??$hcActivoActual);
+    $sinBase=max(0,$hcOperativoBase-$hb['con_ins']);$sinActual=max(0,$hcOperativoActual-$ha['con_ins']);
     $dif=$insActual-$insBase;
     return [
         'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],
@@ -1000,10 +1030,10 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
         'hc_activo_base'=>$hcActivoBase,'hc_activo_actual'=>$hcActivoActual,
         'hc_con_ins_base'=>$hb['con_ins'],'hc_con_ins_actual'=>$ha['con_ins'],
         'hc_sin_venta_base'=>$sinBase,'hc_sin_venta_actual'=>$sinActual,
-        'pct_hc_sin_ins_base'=>$hcActivoBase>0?round(100*$sinBase/$hcActivoBase):null,
-        'pct_hc_sin_ins_actual'=>$hcActivoActual>0?round(100*$sinActual/$hcActivoActual):null,
-        'prod_base'=>($hcActivoBase>0 && $diasBase>0)?round($insBase/$hcActivoBase/$diasBase,2):null,
-        'prod_actual'=>($hcActivoActual>0 && $diasActual>0)?round($insActual/$hcActivoActual/$diasActual,2):null,
+        'pct_hc_sin_ins_base'=>$hcOperativoBase>0?round(100*$sinBase/$hcOperativoBase):null,
+        'pct_hc_sin_ins_actual'=>$hcOperativoActual>0?round(100*$sinActual/$hcOperativoActual):null,
+        'prod_base'=>($hcOperativoBase>0 && $diasBase>0)?round($insBase/$hcOperativoBase/$diasBase,2):null,
+        'prod_actual'=>($hcOperativoActual>0 && $diasActual>0)?round($insActual/$hcOperativoActual/$diasActual,2):null,
         'activo_base'=>$hcActivoBase,'vacante_base'=>$hb['vacante'],'hc_total_base'=>$hcActivoBase+$hb['vacante'],
         'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
     ];
