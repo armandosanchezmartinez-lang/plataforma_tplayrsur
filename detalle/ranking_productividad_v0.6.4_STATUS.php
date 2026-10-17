@@ -2273,7 +2273,7 @@ if ($view !== 'ventas') {
         // CONTRATO v0.6.3: ambos periodos deben provenir de la versión exacta
         // desplegada de Motor HC. La verificación protege la comparación
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.3-hc-all-channels';
+        $versionMotorRequerida05 = '0.6.4-hc-status-vendedor-all-channels';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
