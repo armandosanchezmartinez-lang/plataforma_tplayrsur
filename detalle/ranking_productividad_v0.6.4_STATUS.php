@@ -289,6 +289,7 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
         'hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual',
+        'hc_operativo_base','hc_operativo_actual',
         'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'
     ];
     $tot = array_fill_keys($keys, 0);
@@ -296,10 +297,12 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
         foreach ($keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
     }
     $tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_base'] = $tot['hc_activo_base'] > 0 ? round(($tot['hc_sin_venta_base'] / $tot['hc_activo_base']) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_actual'] = $tot['hc_activo_actual'] > 0 ? round(($tot['hc_sin_venta_actual'] / $tot['hc_activo_actual']) * 100, 0) : null;
-    $tot['prod_base'] = ($tot['hc_activo_base'] > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $tot['hc_activo_base'] / $dias_habiles_base, 2) : null;
-    $tot['prod_actual'] = ($tot['hc_activo_actual'] > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'] / $dias_habiles_actual, 2) : null;
+    $denBase = $tot['hc_operativo_base'] > 0 ? $tot['hc_operativo_base'] : $tot['hc_activo_base'];
+    $denActual = $tot['hc_operativo_actual'] > 0 ? $tot['hc_operativo_actual'] : $tot['hc_activo_actual'];
+    $tot['pct_hc_sin_ins_base'] = $denBase > 0 ? round(($tot['hc_sin_venta_base'] / $denBase) * 100, 0) : null;
+    $tot['pct_hc_sin_ins_actual'] = $denActual > 0 ? round(($tot['hc_sin_venta_actual'] / $denActual) * 100, 0) : null;
+    $tot['prod_base'] = ($denBase > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $denBase / $dias_habiles_base, 2) : null;
+    $tot['prod_actual'] = ($denActual > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $denActual / $dias_habiles_actual, 2) : null;
     return $tot;
 }
 
@@ -1005,6 +1008,7 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
         'ins_sem_base'=>$insBase,'ins_sem_actual'=>$insActual,'dif'=>$dif,
         'pct_dif'=>$insBase>0?round(100*$dif/$insBase):null,
         'hc_activo_base'=>$hcActivoBase,'hc_activo_actual'=>$hcActivoActual,
+        'hc_operativo_base'=>$hcOperativoBase,'hc_operativo_actual'=>$hcOperativoActual,
         'hc_con_ins_base'=>$hb['con_ins'],'hc_con_ins_actual'=>$ha['con_ins'],
         'hc_sin_venta_base'=>$sinBase,'hc_sin_venta_actual'=>$sinActual,
         'pct_hc_sin_ins_base'=>$hcOperativoBase>0?round(100*$sinBase/$hcOperativoBase):null,
@@ -2875,7 +2879,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
-                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
+                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_operativo_base','hc_operativo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
                     data-<?= h($k) ?>="<?= h($r[$k] ?? 0) ?>"
                     <?php endforeach; ?>>
                     <td class="center"><span class="rank"><?= $rank++ ?></span></td>
@@ -3203,14 +3207,16 @@ function applyFilter(){
 function recalc(){
  const rows=visibleRows();
  rows.forEach((r,i)=>{const rk=r.querySelector('.rank');if(rk)rk.textContent=i+1});
- const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
+ const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_operativo_base','hc_operativo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
  const t={};keys.forEach(k=>t[k]=0);
  rows.forEach(r=>keys.forEach(k=>t[k]+=num(r.dataset[k])));
  const pct=t.ins_sem_base>0?Math.round(((t.ins_sem_actual-t.ins_sem_base)/t.ins_sem_base)*100):null;
- const pctHcSinBase=t.hc_activo_base>0?Math.round((t.hc_sin_venta_base/t.hc_activo_base)*100):null;
- const pctHcSinActual=t.hc_activo_actual>0?Math.round((t.hc_sin_venta_actual/t.hc_activo_actual)*100):null;
- const pb=(t.hc_activo_base>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/t.hc_activo_base/DIAS_HABILES_BASE:null;
- const pa=(t.hc_activo_actual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/t.hc_activo_actual/DIAS_HABILES_ACTUAL:null;
+ const denBase=t.hc_operativo_base>0?t.hc_operativo_base:t.hc_activo_base;
+ const denActual=t.hc_operativo_actual>0?t.hc_operativo_actual:t.hc_activo_actual;
+ const pctHcSinBase=denBase>0?Math.round((t.hc_sin_venta_base/denBase)*100):null;
+ const pctHcSinActual=denActual>0?Math.round((t.hc_sin_venta_actual/denActual)*100):null;
+ const pb=(denBase>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/denBase/DIAS_HABILES_BASE:null;
+ const pa=(denActual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/denActual/DIAS_HABILES_ACTUAL:null;
  document.querySelectorAll('[data-total-key]').forEach(td=>td.textContent=fmt0(t[td.dataset.totalKey]||0));
  const p=document.getElementById('total-pct');p.textContent=pct===null?'-':fmt0(pct)+'%';p.className=pct===null?'badge flat':pctClass(pct);
  const hb=document.getElementById('total-hc-sin-base');hb.textContent=fmt0(t.hc_sin_venta_base);
