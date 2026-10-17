@@ -52,6 +52,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                 return intval($val);
             };
 
+            $status_normalizado = function($val) {
+                if ($val === null || trim((string)$val) === '') return null;
+                return strtoupper(trim((string)$val));
+            };
+
+            $status_validos = ['ACTIVO','VACANTE','INCAPACIDAD','VACACIONES'];
+
             // Columnas esperadas del Excel:
             // 0  NUMERO SF
             // 1  NUMERO BASE DE COMISIONES
@@ -65,21 +72,36 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
             // 9  POSICION LR
             // 10 NOMBRE LINEA DE REPORTE
             // 11 PUESTO LR
-            // 12 ARCHIVO_ORIGEN
-            // 13 PESTAÑA_ORIGEN
-            // 14 SEMANA
-            // 15 AÑO
+            // 12 STATUS
+            // 13 ARCHIVO_ORIGEN
+            // 14 PESTAÑA_ORIGEN
+            // 15 SEMANA
+            // 16 AÑO
 
             // 1) Leer y validar primero todo el Excel antes de tocar la BD
             for ($i = 1; $i < count($filas); $i++) {
                 $f = $filas[$i];
                 if (empty(array_filter($f))) continue;
 
-                $v_semana = $entero($v($f[14] ?? null));
-                $v_anio   = $entero($v($f[15] ?? null));
+                $v_semana = $entero($v($f[15] ?? null));
+                $v_anio   = $entero($v($f[16] ?? null));
 
                 // Si no hay semana/año, no se puede sincronizar de forma segura
                 if (empty($v_semana) || empty($v_anio)) {
+                    $errores++;
+                    continue;
+                }
+
+                $v_status = $status_normalizado($v($f[12] ?? null));
+
+                // Desde SEM42-2026 el STATUS es obligatorio y debe pertenecer al catálogo acordado con CH.
+                // Semanas históricas anteriores pueden permanecer en NULL sin romper la recarga anual.
+                $requiere_status = ($v_anio > 2026 || ($v_anio == 2026 && $v_semana >= 42));
+                if ($requiere_status && ($v_status === null || !in_array($v_status, $status_validos, true))) {
+                    $errores++;
+                    continue;
+                }
+                if ($v_status !== null && !in_array($v_status, $status_validos, true)) {
                     $errores++;
                     continue;
                 }
@@ -103,8 +125,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                     'posicion_lr'          => $v($f[9] ?? null),
                     'nombre_linea_reporte' => $v($f[10] ?? null),
                     'puesto_lr'            => $v($f[11] ?? null),
-                    'archivo_origen_excel' => $v($f[12] ?? null),
-                    'pestana_origen'       => $v($f[13] ?? null),
+                    'status'               => $v_status,
+                    'archivo_origen_excel' => $v($f[13] ?? null),
+                    'pestana_origen'       => $v($f[14] ?? null),
                     'semana'               => $v_semana,
                     'anio'                 => $v_anio
                 ];
@@ -133,16 +156,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                     $stmt = mysqli_prepare($conexion, "INSERT INTO hc (
                         numero_sf, numero_base_comisiones, numero_talento_gs,
                         id_posicion, nombre_colaborador, posicion, fecha_alta,
-                        distrito, lr, posicion_lr, nombre_linea_reporte, puesto_lr,
+                        distrito, lr, posicion_lr, nombre_linea_reporte, puesto_lr, status,
                         archivo_origen_excel, pestana_origen, semana, anio,
                         importado_en
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())");
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())");
 
                     foreach ($datos as $d) {
-                        mysqli_stmt_bind_param($stmt, "ssssssssssssssii",
+                        mysqli_stmt_bind_param($stmt, "sssssssssssssssii",
                             $d['numero_sf'], $d['numero_base_comisiones'], $d['numero_talento_gs'],
                             $d['id_posicion'], $d['nombre_colaborador'], $d['posicion'], $d['fecha_alta'],
-                            $d['distrito'], $d['lr'], $d['posicion_lr'], $d['nombre_linea_reporte'], $d['puesto_lr'],
+                            $d['distrito'], $d['lr'], $d['posicion_lr'], $d['nombre_linea_reporte'], $d['puesto_lr'], $d['status'],
                             $d['archivo_origen_excel'], $d['pestana_origen'], $d['semana'], $d['anio']
                         );
 
