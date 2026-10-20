@@ -19,6 +19,19 @@
  *   productividad diaria, HC activo y HC sin instalaciones.
  * - Antigüedad promedio de equipo: promedio simple de meses de antigüedad de vendedores
  *   ocupados con fecha_alta válida al corte ACTUAL; excluye VACANTES y no usa antigüedad del Líder/Coach.
+ * - STATUS se clasifica exclusivamente a nivel de plaza VENDEDOR. INCAPACIDAD y
+ *   VACACIONES permanecen en HC ocupado/total, pero salen del HC operativo usado
+ *   como denominador de productividad y HC sin instalaciones; VACANTE no es operativo.
+ *
+ * CAMBIO FUNCIONAL DOCUMENTADO 19-OCT-2026
+ * - Motor requerido: 0.6.4-hc-status-vendedor-all-channels.
+ * - La clasificación de STATUS ocurre en vendedor; Líder y Coach NO reciben STATUS propio.
+ * - El efecto de STATUS sí se consolida hacia Líder/Coach mediante hc_operativo.
+ * - Se incorpora Antigüedad prom. equipo en niveles Líder y Coach.
+ * - TOTAL de antigüedad es ponderado por vendedores con fecha_alta válida; nunca
+ *   es promedio de promedios de Líderes/Coaches.
+ * - fecha_alta vacía, inválida o futura se excluye sólo del promedio de antigüedad.
+ * - No cambia atribución de instalaciones, jerarquía, ARPU, mix comercial ni HC Total.
  *
  * IMPLEMENTACIÓN 13-OCT-2026
  * - Publicación de reglas multicanal certificadas y folios marcadores inválidos.
@@ -846,8 +859,8 @@ lideres_activos AS (
 
 
 /**
- * Ranking v0.6.3 - Fuente única de instalaciones certificadas:
- * RankingAtribucionService v0.3 -> una fila por cuenta -> agrupaciones de vista.
+ * Ranking v0.6.4 - Fuente única de instalaciones certificadas:
+ * RankingAtribucionServiceV06 / Motor HC v0.6.4 -> una fila por cuenta -> agrupaciones de vista.
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
@@ -915,8 +928,10 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
 
-            // Contrato Motor HC v0.6.4: STATUS/fecha_alta sólo enriquecen nivel vendedor.
-            // No se usan para recalcular Líder/Coach.
+            // Contrato Motor HC v0.6.4: STATUS y fecha_alta nacen exclusivamente
+            // en la plaza VENDEDOR. STATUS no clasifica al Líder/Coach como persona,
+            // pero hc_operativo se consolida hacia arriba para productividad/HC sin INS.
+            // fecha_alta se consolida únicamente para antigüedad promedio del equipo.
             $estadoVendedor=RankingAtribucionServiceV06::clasificarEstadoVendedor(
                 $h['status']??null,
                 $h['nombre_colaborador']??null
@@ -2338,7 +2353,7 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.3: ambos periodos deben provenir de la versión exacta
+        // CONTRATO v0.6.4: ambos periodos deben provenir de la versión exacta
         // desplegada de Motor HC. La verificación protege la comparación
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
         $versionMotorRequerida05 = '0.6.4-hc-status-vendedor-all-channels';
@@ -2410,7 +2425,7 @@ if ($view !== 'ventas') {
                 $comercial05_auditoria = ['base_grupos'=>count($mixBase05), 'actual_grupos'=>count($mixActual05)];
             } catch (Throwable $comError05) {
                 $comercial05_error = $comError05->getMessage();
-                // NO se borra $coach_matrix: HC v0.6.3 sigue siendo autoridad.
+                // NO se borra $coach_matrix: HC v0.6.4 sigue siendo autoridad.
             }
         }
 
