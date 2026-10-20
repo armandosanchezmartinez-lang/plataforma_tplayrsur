@@ -311,7 +311,8 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
         'hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual',
-        'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'
+        'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual',
+        'antiguedad_suma_meses_actual','antiguedad_con_fecha_actual','antiguedad_ocupados_actual'
     ];
     $tot = array_fill_keys($keys, 0);
     foreach ($rows as $r) {
@@ -322,6 +323,10 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
     $tot['pct_hc_sin_ins_actual'] = $tot['hc_activo_actual'] > 0 ? round(($tot['hc_sin_venta_actual'] / $tot['hc_activo_actual']) * 100, 0) : null;
     $tot['prod_base'] = ($tot['hc_activo_base'] > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $tot['hc_activo_base'] / $dias_habiles_base, 2) : null;
     $tot['prod_actual'] = ($tot['hc_activo_actual'] > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'] / $dias_habiles_actual, 2) : null;
+    $tot['antiguedad_promedio_actual_meses'] = $tot['antiguedad_con_fecha_actual'] > 0
+        ? (int)round($tot['antiguedad_suma_meses_actual'] / $tot['antiguedad_con_fecha_actual'])
+        : null;
+    $tot['antiguedad_promedio_actual'] = rank05_antiguedad_texto_meses($tot['antiguedad_promedio_actual_meses']);
     return $tot;
 }
 
@@ -954,7 +959,34 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
     }
     return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
 }
-function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $eventos): array {
+/**
+ * Antigüedad promedio del EQUIPO (vendedores), no del Líder/Coach.
+ * - Excluye VACANTES.
+ * - Incluye plazas ocupadas aunque estén temporalmente en INCAPACIDAD/VACACIONES.
+ * - Excluye del promedio fechas de alta vacías/inválidas/futuras, sin eliminar a la persona del HC.
+ * - El corte siempre corresponde al fin del período consultado (ACTUAL o BASE).
+ */
+function rank05_antiguedad_texto_meses($meses): string {
+    if ($meses === null || $meses === '') return '-';
+    $m=max(0,(int)round((float)$meses));
+    if ($m < 12) return $m.' meses';
+    return intdiv($m,12).' años '.($m%12).' meses';
+}
+
+function rank05_antiguedad_corte(?string $fechaAlta, string $corte): array {
+    $fechaAlta=trim((string)$fechaAlta);
+    if ($fechaAlta==='' || $fechaAlta==='0000-00-00') return ['texto'=>'-','meses'=>0,'valido'=>false];
+
+    $alta=DateTimeImmutable::createFromFormat('!Y-m-d',$fechaAlta);
+    $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
+    if (!$alta || !$fin || $alta>$fin) return ['texto'=>'-','meses'=>0,'valido'=>false];
+
+    $diff=$alta->diff($fin);
+    $meses=((int)$diff->y*12)+(int)$diff->m;
+    return ['texto'=>rank05_antiguedad_texto_meses($meses),'meses'=>$meses,'valido'=>true];
+}
+
+function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $eventos, string $corte=''): array {
     $filas=[];
     foreach ($hc['vendedores'] as $k=>$seats) {
         if (!str_starts_with($k, $lider.'|')) continue;
@@ -976,6 +1008,8 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
     // - INCAPACIDAD y VACACIONES siguen dentro del HC ocupado/total, pero NO del operativo.
     // - VACANTE se valida a nivel vendedor mediante el contrato canónico del Motor HC.
     $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
+    $antiguedadSumaMeses=0; $antiguedadConFecha=0; $ocupadosEquipo=0;
+    if ($corte==='') $corte=date('Y-m-d');
 
     foreach ($filas as $seat) {
         $esVacante=(bool)($seat['vacante']??false) || (bool)($seat['es_vacante_status']??false);
@@ -984,8 +1018,14 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
             continue;
         }
 
-        // Toda plaza ocupada sigue contando para HC Activo/Total mostrado.
+        // Toda plaza ocupada sigue contando para HC Activo/Total mostrado y para antigüedad de equipo.
         $activo++;
+        $ocupadosEquipo++;
+        $antig=rank05_antiguedad_corte($seat['fecha_alta']??null,$corte);
+        if (($antig['valido']??false)===true) {
+            $antiguedadSumaMeses+=(int)$antig['meses'];
+            $antiguedadConFecha++;
+        }
 
         // Sólo vendedores operativamente disponibles participan del denominador.
         $esOperativo=(int)($seat['hc_operativo']??1)===1;
@@ -1002,6 +1042,10 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
         'operativo'=>$operativo,
         'vacante'=>$vacante,
         'con_ins'=>$conOperativo,
+        'antiguedad_suma_meses'=>$antiguedadSumaMeses,
+        'antiguedad_con_fecha'=>$antiguedadConFecha,
+        'antiguedad_ocupados'=>$ocupadosEquipo,
+        'antiguedad_promedio_meses'=>$antiguedadConFecha>0 ? (int)round($antiguedadSumaMeses/$antiguedadConFecha) : null,
     ];
 }
 function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?string $vendedor=null): int {
@@ -1036,25 +1080,13 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
         'prod_actual'=>($hcOperativoActual>0 && $diasActual>0)?round($insActual/$hcOperativoActual/$diasActual,2):null,
         'activo_base'=>$hcActivoBase,'vacante_base'=>$hb['vacante'],'hc_total_base'=>$hcActivoBase+$hb['vacante'],
         'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
+        'antiguedad_suma_meses_actual'=>(int)($ha['antiguedad_suma_meses']??0),
+        'antiguedad_con_fecha_actual'=>(int)($ha['antiguedad_con_fecha']??0),
+        'antiguedad_ocupados_actual'=>(int)($ha['antiguedad_ocupados']??0),
+        'antiguedad_promedio_actual_meses'=>$ha['antiguedad_promedio_meses']??null,
+        'antiguedad_promedio_actual'=>rank05_antiguedad_texto_meses($ha['antiguedad_promedio_meses']??null),
     ];
 }
-function rank05_antiguedad_corte(?string $fechaAlta, string $corte): array {
-    $fechaAlta=trim((string)$fechaAlta);
-    if ($fechaAlta==='' || $fechaAlta==='0000-00-00') return ['texto'=>'-','meses'=>0];
-
-    $alta=DateTimeImmutable::createFromFormat('!Y-m-d',$fechaAlta);
-    $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
-    if (!$alta || !$fin || $alta>$fin) return ['texto'=>'-','meses'=>0];
-
-    $diff=$alta->diff($fin);
-    $meses=((int)$diff->y*12)+(int)$diff->m;
-    $texto=$meses<12
-        ? $meses.' meses'
-        : ((int)$diff->y).' años '.((int)$diff->m).' meses';
-
-    return ['texto'=>$texto,'meses'=>$meses];
-}
-
 function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual, string $distritoParam='', string $liderIdParam='', string $corteBase='', string $corteActual=''): array {
     $ids=array_keys($catalogo);
     $seleccion=null;
@@ -1094,8 +1126,8 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
     if (in_array($view,['lideres','ranking_coach','coaches'],true)) {
         foreach ($ids as $lid) {
             if ($view==='lideres') {
-                $hb=rank05_resumen_hc($fotoBase,$lid,null,$base);
-                $ha=rank05_resumen_hc($fotoActual,$lid,null,$actual);
+                $hb=rank05_resumen_hc($fotoBase,$lid,null,$base,$corteBase);
+                $ha=rank05_resumen_hc($fotoActual,$lid,null,$actual,$corteActual);
                 $rows[]=rank05_row($lid,'',$catalogo[$lid]['nombre'],$catalogo,rank05_num_cuentas($base,$lid),rank05_num_cuentas($actual,$lid),$hb,$ha,$diasBase,$diasActual);
                 continue;
             }
@@ -1118,7 +1150,7 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
                 if (str_starts_with($co,'EVENT|')) $nombre.=' · IDENTIDAD PROVISIONAL';
                 $rows[]=rank05_row($lid,$co,$nombre,$catalogo,
                     rank05_num_cuentas($base,$lid,$co),rank05_num_cuentas($actual,$lid,$co),
-                    rank05_resumen_hc($fotoBase,$lid,$co,$base),rank05_resumen_hc($fotoActual,$lid,$co,$actual),$diasBase,$diasActual);
+                    rank05_resumen_hc($fotoBase,$lid,$co,$base,$corteBase),rank05_resumen_hc($fotoActual,$lid,$co,$actual,$corteActual),$diasBase,$diasActual);
             }
         }
         usort($rows,static fn($a,$b)=>(int)$b['ins_sem_actual']<=>(int)$a['ins_sem_actual'] ?: strcmp($a['entidad'],$b['entidad']));
@@ -2677,7 +2709,7 @@ body.page-ranking .rc-summary-table tbody tr.rc-row:hover { background:#f1efff; 
  * AJUSTE EXCLUSIVAMENTE VISUAL 10-OCT-2026 | VISTAS LÍDER / COACH.
  * Referencia de las tres primeras columnas: Ranking de Productividad.
  * La tabla se adapta al ancho disponible: sin width/min-width de 2450px.
- * Los 23 campos conservan su orden y sus valores; no se toca el Vendedor,
+ * Los campos comerciales conservan su orden y sus valores; se agrega Antigüedad prom. equipo; no se toca el Vendedor,
  * la atribución de Motor HC, Motor Comercial ni las rutinas de cálculo.
  */
 body.page-ranking #rcRankingTable {
@@ -3142,7 +3174,8 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
         <colgroup>
             <col style="width:2.87977%">
             <col style="width:6.83945%">
-            <col style="width:16.91865%">
+            <col style="width:11.41865%">
+            <col style="width:5.50000%">
             <col style="width:4.24766%">
             <col style="width:4.24766%">
             <col style="width:3.16775%">
@@ -3169,6 +3202,7 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                     <th rowspan="2" class="center">#</th>
                     <th rowspan="2">Distrito</th>
                     <th rowspan="2"><?= h($rcHead) ?></th>
+                    <th rowspan="2" class="center rc-sortable" data-sort="antiguedad_promedio_actual_meses">Antigüedad prom.<br>equipo <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num rc-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num rc-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num rc-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
@@ -3202,7 +3236,8 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                         ? '?' . qs(array_merge($nav_estado,['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id']]))
                         : '?' . qs(array_merge($nav_estado,['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
                     $rcData = [ 'ins_base'=>$nb, 'ins_actual'=>$na, 'base'=>$cb, 'actual'=>$ca ];
-                    $rcSort = ['ins_base'=>$nb,'ins_actual'=>$na,'dif'=>$nd,'pct_dif'=>$np,
+                    $rcSort = ['antiguedad_promedio_actual_meses'=>$r['antiguedad_promedio_actual_meses']??-1,
+                        'ins_base'=>$nb,'ins_actual'=>$na,'dif'=>$nd,'pct_dif'=>$np,
                         'arpu_base'=>$ab,'arpu_actual'=>$aa,'arpu_dif'=>$ad,'arpu_pct_dif'=>$ap];
                     foreach ($dimensionesRc as $dim) {
                         $f=$dim['campo'];
@@ -3212,10 +3247,13 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                 ?>
                 <tr class="rc-row" data-district="<?= h($r['distrito']) ?>" data-href="<?= h($rcUrl) ?>"
                     data-rc-metrics="<?= h(json_encode($rcData,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE)) ?>"
+                    data-antig-sum="<?= h($r['antiguedad_suma_meses_actual'] ?? 0) ?>"
+                    data-antig-count="<?= h($r['antiguedad_con_fecha_actual'] ?? 0) ?>"
                     <?php foreach ($rcSort as $k=>$v): ?>data-<?= h($k) ?>="<?= $v===null?'-999999':h($v) ?>" <?php endforeach; ?>>
                     <td class="center"><span class="rank"><?= $rcRank++ ?></span></td>
                     <td class="district"><?= h($r['distrito']) ?></td>
                     <td class="entity"><?= h($r['entidad']) ?></td>
+                    <td class="center" title="<?= h(($r['antiguedad_con_fecha_actual'] ?? 0).' de '.($r['antiguedad_ocupados_actual'] ?? 0).' vendedores con fecha de alta válida') ?>"><?= h($r['antiguedad_promedio_actual'] ?? '-') ?></td>
                     <td class="num"><?= fmt_num($nb) ?></td>
                     <td class="num"><?= fmt_num($na) ?></td>
                     <td class="num"><?= fmt_num($nd) ?></td>
@@ -3234,6 +3272,7 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                 <?php endforeach; ?>
                 <tr class="total-row" id="rcTotalRow">
                     <td></td><td></td><td>TOTAL</td>
+                    <td class="center" data-rc-total="antiguedad_promedio_actual"><?= h($tot['antiguedad_promedio_actual'] ?? '-') ?></td>
                     <td class="num" data-rc-total="ins_base"><?= fmt_num($tot['ins_sem_base']) ?></td>
                     <td class="num" data-rc-total="ins_actual"><?= fmt_num($tot['ins_sem_actual']) ?></td>
                     <td class="num" data-rc-total="dif"><?= fmt_num($tot['dif']) ?></td>
@@ -3524,6 +3563,7 @@ foreach ($ventas_hist as $vh) {
  function number(v){const n=Number(v);return Number.isFinite(n)?n:0;}
  function format0(n){return Math.round(n).toLocaleString('en-US');}
  function format2(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+ function formatAntig(m){if(m===null||!Number.isFinite(m))return '—';m=Math.max(0,Math.round(m));return m<12?m+' meses':Math.floor(m/12)+' años '+(m%12)+' meses';}
  function percent(n,d){return d>0?Math.round(100*n/d):null;}
  function arpu(o){return o.arpu_cuentas>0?o.arpu_ingreso_neto/o.arpu_cuentas:null;}
  function pctDiff(a,b){return a!==null&&b!==null&&a>0?100*(b-a)/a:null;}
@@ -3556,11 +3596,12 @@ foreach ($ventas_hist as $vh) {
  function calc(){
    const visible=allRows().filter(r=>r.style.display!=='none');
    const empty=()=>Object.fromEntries(fields.map(f=>[f,0]));
-   const base=empty(),actual=empty();let insBase=0,insActual=0;
+   const base=empty(),actual=empty();let insBase=0,insActual=0,antigSum=0,antigCount=0;
    visible.forEach((r,index)=>{
      const rn=r.querySelector('.rank');if(rn)rn.textContent=index+1;
      const m=JSON.parse(r.dataset.rcMetrics);
      insBase+=number(m.ins_base);insActual+=number(m.ins_actual);
+     antigSum+=number(r.dataset.antigSum);antigCount+=number(r.dataset.antigCount);
      if(validCommercial)for(const f of fields){base[f]+=number(m.base[f]);actual[f]+=number(m.actual[f]);}
    });
    const diff=insActual-insBase, pd=percent(diff,insBase);
@@ -3569,6 +3610,7 @@ foreach ($ventas_hist as $vh) {
    updateField('ins_base',format0(insBase));
    updateField('ins_actual',format0(insActual));
    updateField('dif',format0(diff));
+   updateField('antiguedad_promedio_actual',formatAntig(antigCount>0?antigSum/antigCount:null));
    setBadge('pct_dif',pd,pd===null?'—':format0(pd)+'%');
    updateField('arpu_base',a===null?'—':'$'+format2(a));
    updateField('arpu_actual',z===null?'—':'$'+format2(z));
