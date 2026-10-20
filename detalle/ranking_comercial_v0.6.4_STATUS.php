@@ -21,9 +21,24 @@
  *   nunca se promedian los ARPU individuales de los vendedores.
  * - Si el enriquecimiento comercial no concilia, preservar las instalaciones
  *   certificadas y comunicar la incidencia, sin corregir totales artificialmente.
+ * - Antigüedad promedio de equipo: promedio simple de meses de antigüedad de vendedores
+ *   ocupados con fecha_alta válida al corte ACTUAL; excluye VACANTES y no usa antigüedad del Líder/Coach.
+ * - STATUS se clasifica exclusivamente a nivel de plaza VENDEDOR. INCAPACIDAD y
+ *   VACACIONES permanecen en HC ocupado/total, pero salen del HC operativo usado
+ *   como denominador de productividad y HC sin instalaciones; VACANTE no es operativo.
  *
- * COMPATIBILIDAD 13-OCT-2026
- * - Motor HC v0.6.3: salida '0.6.3-hc-all-channels', en BASE y ACTUAL.
+ * CAMBIO FUNCIONAL DOCUMENTADO 19-OCT-2026
+ * - Motor requerido: 0.6.4-hc-status-vendedor-all-channels.
+ * - La clasificación de STATUS ocurre en vendedor; Líder y Coach NO reciben STATUS propio.
+ * - El efecto de STATUS sí se consolida hacia Líder/Coach mediante hc_operativo.
+ * - Se incorpora Antigüedad prom. equipo en niveles Líder y Coach.
+ * - TOTAL de antigüedad es ponderado por vendedores con fecha_alta válida; nunca
+ *   es promedio de promedios de Líderes/Coaches.
+ * - fecha_alta vacía, inválida o futura se excluye sólo del promedio de antigüedad.
+ * - No cambia atribución de instalaciones, jerarquía, ARPU, Plays, Oferta ni Bundles.
+ *
+ * COMPATIBILIDAD 19-OCT-2026
+ * - Motor HC v0.6.4: salida '0.6.4-hc-status-vendedor-all-channels', en BASE y ACTUAL.
  * - Motor Comercial v0.2.1: VERSION '0.2.1-all-channels'.
  * - Folios '-', vacíos y VACANTE no definen personas; HIC unifica migraciones
  *   verificadas de número de talento, sin usar una misma plaza como identidad.
@@ -33,7 +48,7 @@
  *   consume y presenta sus resultados sin duplicar reglas de certificación.
  */
 /*
- * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
+ * RANKING COMERCIAL — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
  * Este archivo concentra la navegación temporal y el drill-down Líder > Coach
  * > Vendedor. Los cambios recientes NO deben interpretarse como simples aliases
@@ -864,7 +879,7 @@ lideres_activos AS (
 
 /**
  * Ranking Comercial - ÚNICA fuente de instalaciones certificadas:
- * Motor HC v0.6.3 -> una fila por cuenta -> agregación jerárquica.
+ * Motor HC v0.6.4 -> una fila por cuenta -> agregación jerárquica.
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
@@ -932,8 +947,10 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
 
-            // Contrato Motor HC v0.6.4: STATUS/fecha_alta sólo enriquecen nivel vendedor.
-            // No se usan para recalcular Líder/Coach.
+            // Contrato Motor HC v0.6.4: STATUS y fecha_alta nacen exclusivamente
+            // en la plaza VENDEDOR. STATUS no clasifica al Líder/Coach como persona,
+            // pero hc_operativo se consolida hacia arriba para productividad/HC sin INS.
+            // fecha_alta se consolida únicamente para antigüedad promedio del equipo.
             $estadoVendedor=RankingAtribucionServiceV06::clasificarEstadoVendedor(
                 $h['status']??null,
                 $h['nombre_colaborador']??null
@@ -2410,7 +2427,7 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.3: ambos periodos deben provenir de la version exacta
+        // CONTRATO v0.6.4: ambos periodos deben provenir de la version exacta
         // desplegada de Motor HC en producción. La verificacion protege la comparacion
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
         $versionMotorRequerida05 = '0.6.4-hc-status-vendedor-all-channels';
