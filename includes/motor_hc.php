@@ -1,11 +1,11 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR HC v0.6.3 · PRODUCCIÓN
+ * TalIA / TotalXpedient · MOTOR HC v0.6.6 · STANDBY TOTAL + REGLA 40%
  * ============================================================================
  * Ubicación: /plataforma/includes/motor_hc.php
  * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
- * Fuentes: instalaciones, hc, historial_identidad_colaborador (HIC).
+ * Fuentes: instalaciones, hc, hc_standby, historial_identidad_colaborador (HIC).
  * Escritura en BD: ninguna. Solo consultas de lectura.
  *
  * REGLAS DE ATRIBUCIÓN
@@ -24,6 +24,32 @@ declare(strict_types=1);
  *   controlada de autorreferencias de coach de v0.6.2.
  * - Los campos de coach/líder registrados en instalaciones son diagnósticos,
  *   no sustituyen la autoridad jerárquica de Capital Humano.
+ *
+ * CAMBIO v0.6.6 (21-OCT-2026)
+ * - Productividad conserva jornadas-persona reales disponibles por período.
+ * - HC SIN INS incorpora elegibilidad centralizada: si STANDBY TOTAL (unión de
+ *   INCAPACIDAD + VACACIONES) cubre más del 40% de los días operativos del período,
+ *   el vendedor no cuenta como HC SIN INS.
+ * - 40% exacto permanece elegible; los traslapes se cuentan una sola vez.
+ * - HC Activo/Vacante no cambia por esta regla.
+ *
+ * CAMBIO v0.6.5 (20-OCT-2026)
+ * - hc_standby es la fuente precisa por FECHA para VACACIONES e INCAPACIDAD.
+ * - El Motor expone, por período, días operativos, días en standby y eventos que
+ *   se cruzan con el rango consultado. Fechas futuras de término son válidas.
+ * - La indisponibilidad se calcula como unión de fechas: eventos superpuestos
+ *   nunca descuentan dos veces el mismo día.
+ * - Domingos y días inhábiles no se descuentan de nuevo porque no forman parte
+ *   de las jornadas operativas del período.
+ * - HIC se aplica también al cruce con hc_standby para conservar identidad.
+ * - STATUS permanece como fuente de auditoría/fallback cuando no existe intervalo
+ *   preciso; no modifica atribución, identidad ni jerarquía.
+ *
+ * CAMBIO v0.6.4 (17-OCT-2026)
+ * - HC incorpora status y fecha_alta en el contrato de fotografía.
+ * - Se agrega clasificación canónica de estado operativo SOLO para nivel vendedor.
+ * - INCAPACIDAD/VACACIONES conservan HC total/ocupado; en v0.6.5 su impacto
+ *   operativo exacto se resuelve por hc_standby y STATUS queda como fallback.
  *
  * CAMBIO v0.6.3 (13-OCT-2026)
  * - Atribución de todos los orígenes comerciales a la jerarquía HC certificada.
@@ -44,6 +70,51 @@ final class RankingAtribucionServiceV06
     public function __construct(mysqli $db)
     {
         $this->db=$db;
+    }
+
+    /**
+     * Regla canónica HC SIN INS v0.6.6.
+     * - El umbral aplica al STANDBY TOTAL = unión de INCAPACIDAD + VACACIONES.
+     * - Más de 40% excluye; 40% exacto sigue elegible.
+     * - Solapamientos se cuentan una sola vez porque se usa dias_standby.
+     * - Cero días disponibles excluye por ausencia total de oportunidad operativa.
+     */
+    private const UMBRAL_STANDBY_HC_SIN_INS = 40.0;
+
+    public static function evaluarElegibilidadHcSinIns(
+        int $diasPeriodo,
+        int $diasStandby,
+        int $diasDisponibles
+    ): array {
+        $diasPeriodo=max(1,$diasPeriodo);
+        $diasStandby=max(0,min($diasPeriodo,$diasStandby));
+        $diasDisponibles=max(0,min($diasPeriodo,$diasDisponibles));
+        $pctStandby=($diasStandby/$diasPeriodo)*100.0;
+
+        if ($pctStandby > self::UMBRAL_STANDBY_HC_SIN_INS) {
+            return [
+                'elegible'=>false,
+                'motivo'=>'STANDBY_MAYOR_40',
+                'pct_standby'=>$pctStandby,
+                'umbral'=>self::UMBRAL_STANDBY_HC_SIN_INS,
+            ];
+        }
+
+        if ($diasDisponibles <= 0) {
+            return [
+                'elegible'=>false,
+                'motivo'=>'SIN_DIAS_DISPONIBLES',
+                'pct_standby'=>$pctStandby,
+                'umbral'=>self::UMBRAL_STANDBY_HC_SIN_INS,
+            ];
+        }
+
+        return [
+            'elegible'=>true,
+            'motivo'=>'',
+            'pct_standby'=>$pctStandby,
+            'umbral'=>self::UMBRAL_STANDBY_HC_SIN_INS,
+        ];
     }
 
     /** Homologación de distrito (misma semántica para HC y otros motores). */
@@ -122,6 +193,59 @@ final class RankingAtribucionServiceV06
     public static function norm(?string $s): string
     {
         return preg_replace('/\s+/u', ' ', (function_exists('mb_strtoupper') ? mb_strtoupper(trim((string)$s), 'UTF-8') : strtoupper(trim((string)$s)))) ?? '';
+    }
+
+    /**
+     * Clasificación canónica de STATUS para NIVEL VENDEDOR.
+     * No altera atribución ni estructura. Entrega únicamente metadatos HC operativos.
+     *
+     * Reglas:
+     * - ACTIVO o blanco: HC total=1, ocupado=1, activo=1, operativo=1.
+     * - VACANTE: sólo se acepta como vacante si el nombre contiene "VACANT".
+     * - INCAPACIDAD / VACACIONES: HC total=1, ocupado=1, activo=0, operativo=0.
+     * - Cualquier contradicción se marca INCONSISTENTE y no entra al denominador operativo.
+     */
+    public static function clasificarEstadoVendedor(?string $status, ?string $nombre): array
+    {
+        $st=self::norm($status);
+        $nom=self::norm($nombre);
+        if ($st==='') $st='ACTIVO';
+
+        $base=[
+            'status'=>$st,
+            'estado_hc'=>$st,
+            'hc_total'=>1,
+            'hc_ocupado'=>1,
+            'hc_activo'=>0,
+            'hc_operativo'=>0,
+            'es_vacante'=>false,
+            'valido'=>true,
+        ];
+
+        if ($st==='ACTIVO') {
+            $base['hc_activo']=1;
+            $base['hc_operativo']=1;
+            return $base;
+        }
+
+        if ($st==='VACANTE') {
+            if (str_contains($nom,'VACANT')) {
+                $base['hc_ocupado']=0;
+                $base['es_vacante']=true;
+                return $base;
+            }
+            $base['estado_hc']='INCONSISTENTE_STATUS_VACANTE';
+            $base['valido']=false;
+            return $base;
+        }
+
+        if ($st==='INCAPACIDAD' || $st==='VACACIONES') {
+            return $base;
+        }
+
+        $base['estado_hc']='INCONSISTENTE_STATUS';
+        $base['valido']=false;
+        return $base;
     }
 
     private static function nameKey(string $name): string
@@ -212,6 +336,190 @@ final class RankingAtribucionServiceV06
         return $this->query('SELECT numero_talento_anterior, numero_talento_nuevo FROM historial_identidad_colaborador');
     }
 
+    /**
+     * Fechas operativas reales del período.
+     * - Domingo nunca cuenta.
+     * - En semanal respeta el selector $diasIso y conserva la semántica histórica:
+     *   cualquier fecha registrada en dias_inhabiles se excluye.
+     * - En mensual/rango continuo se excluyen únicamente dias_inhabiles activos.
+     */
+    private function fechasOperativasPeriodo(string $desde, string $hasta, array $diasIso=[]): array
+    {
+        $ini=DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
+        $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$hasta);
+        if (!$ini || !$fin || $ini>$fin) throw new InvalidArgumentException('Rango standby inválido');
+
+        $diasIso=array_values(array_unique(array_map('intval',$diasIso)));
+        foreach ($diasIso as $d) if ($d<1 || $d>7) throw new InvalidArgumentException('Día ISO standby inválido');
+
+        $festivos=[];
+        if ($diasIso) {
+            // Homologa contar_dias_habiles_semana_seleccionada() de los Rankings.
+            $rows=$this->query(
+                'SELECT fecha FROM dias_inhabiles WHERE fecha>=? AND fecha<=?',
+                'ss',[$desde,$hasta]
+            );
+        } else {
+            // Homologa contar_dias_habiles() de los Rankings.
+            $rows=$this->query(
+                'SELECT fecha FROM dias_inhabiles WHERE activo=1 AND fecha>=? AND fecha<=?',
+                'ss',[$desde,$hasta]
+            );
+        }
+        foreach ($rows as $r) {
+            $f=substr((string)($r['fecha']??''),0,10);
+            if ($f!=='') $festivos[$f]=true;
+        }
+
+        $fechas=[];
+        for ($d=$ini; $d<=$fin; $d=$d->modify('+1 day')) {
+            $iso=(int)$d->format('N');
+            if ($iso===7) continue;
+            if ($diasIso && !in_array($iso,$diasIso,true)) continue;
+            $f=$d->format('Y-m-d');
+            if (isset($festivos[$f])) continue;
+            $fechas[$f]=true;
+        }
+        return array_keys($fechas);
+    }
+
+    /**
+     * Disponibilidad precisa por talento para el período.
+     * Identidad del evento en BD: numero_talento_gs + tipo_standby + fecha_inicio.
+     * Para cálculo se usa la UNIÓN de fechas afectadas, de modo que solapamientos
+     * VACACIONES/INCAPACIDAD o múltiples eventos no descuentan doble.
+     */
+    public function cargarStandby(
+        string $desde,
+        string $hasta,
+        array $diasIso=[],
+        array $canonicosTalento=[]
+    ): array {
+        $fechasOperativas=$this->fechasOperativasPeriodo($desde,$hasta,$diasIso);
+        // Compatibilidad con el comportamiento histórico del Ranking cuando el
+        // selector contiene únicamente días no hábiles.
+        $diasPeriodo=max(1,count($fechasOperativas));
+
+        $rows=$this->query(
+            "SELECT numero_talento_gs,nombre_colaborador,puesto,tipo_standby,
+                    fecha_inicio,fecha_fin,responsable_nombre,responsable_rol,
+                    sociedad,ceco,area,semana_carga,anio_carga
+             FROM hc_standby
+             WHERE fecha_inicio<=?
+               AND (fecha_fin IS NULL OR fecha_fin>=?)
+               AND tipo_standby IN ('VACACIONES','INCAPACIDAD')
+             ORDER BY numero_talento_gs,fecha_inicio,tipo_standby",
+            'ss',[$hasta,$desde]
+        );
+
+        $porTalento=[];
+        foreach ($rows as $r) {
+            $tal=trim((string)($r['numero_talento_gs']??''));
+            if ($tal==='' || self::norm($tal)==='VACANTE') continue;
+            $persona=(string)($canonicosTalento[$tal]??$tal);
+
+            $fi=substr((string)($r['fecha_inicio']??''),0,10);
+            $ffRaw=trim((string)($r['fecha_fin']??''));
+            $ff=$ffRaw!=='' ? substr($ffRaw,0,10) : null;
+            if ($fi==='') continue;
+
+            $overIni=max($desde,$fi);
+            $overFin=min($hasta,$ff??$hasta);
+            if ($overIni>$overFin) continue;
+
+            $tipo=self::norm($r['tipo_standby']??'');
+            $evento=[
+                'tipo_standby'=>$tipo,
+                'fecha_inicio'=>$fi,
+                'fecha_fin'=>$ff,
+                'overlap_inicio'=>$overIni,
+                'overlap_fin'=>$overFin,
+                'responsable_nombre'=>(string)($r['responsable_nombre']??''),
+                'responsable_rol'=>(string)($r['responsable_rol']??''),
+                'nombre_colaborador'=>(string)($r['nombre_colaborador']??''),
+                'puesto'=>(string)($r['puesto']??''),
+                'semana_carga'=>(int)($r['semana_carga']??0),
+                'anio_carga'=>(int)($r['anio_carga']??0),
+            ];
+
+            if (!isset($porTalento[$persona])) {
+                $porTalento[$persona]=[
+                    'eventos'=>[],
+                    'fechas_standby'=>[],
+                    'fechas_incapacidad'=>[],
+                    'fechas_vacaciones'=>[],
+                    'dias_standby'=>0,
+                    'dias_incapacidad'=>0,
+                    'dias_vacaciones'=>0,
+                    'dias_disponibles'=>$diasPeriodo,
+                    'dias_periodo'=>$diasPeriodo,
+                    'pct_incapacidad'=>0.0,
+                    'pct_standby'=>0.0,
+                    'elegible_hc_sin_ins'=>true,
+                    'motivo_exclusion_hc_sin_ins'=>'',
+                    'tiene_intervalo'=>false,
+                ];
+            }
+            $porTalento[$persona]['eventos'][]=$evento;
+            $porTalento[$persona]['tiene_intervalo']=true;
+
+            foreach ($fechasOperativas as $fechaOperativa) {
+                if ($fechaOperativa >= $overIni && $fechaOperativa <= $overFin) {
+                    // Unión general: una fecha nunca se descuenta dos veces de Productividad.
+                    $porTalento[$persona]['fechas_standby'][$fechaOperativa]=true;
+
+                    // Separación por causa para la regla HC SIN INS.
+                    // Un mismo día puede pertenecer a ambos conjuntos por una anomalía/solapamiento;
+                    // Productividad lo descuenta una sola vez, mientras INCAPACIDAD conserva su señal.
+                    if ($tipo==='INCAPACIDAD') {
+                        $porTalento[$persona]['fechas_incapacidad'][$fechaOperativa]=true;
+                    } elseif ($tipo==='VACACIONES') {
+                        $porTalento[$persona]['fechas_vacaciones'][$fechaOperativa]=true;
+                    }
+                }
+            }
+        }
+
+        foreach ($porTalento as &$p) {
+            usort($p['eventos'],static fn($a,$b)=>
+                strcmp((string)$a['fecha_inicio'],(string)$b['fecha_inicio'])
+                ?: strcmp((string)$a['tipo_standby'],(string)$b['tipo_standby'])
+            );
+            $p['fechas_standby']=array_keys($p['fechas_standby']);
+            sort($p['fechas_standby'],SORT_STRING);
+            $p['fechas_incapacidad']=array_keys($p['fechas_incapacidad']);
+            sort($p['fechas_incapacidad'],SORT_STRING);
+            $p['fechas_vacaciones']=array_keys($p['fechas_vacaciones']);
+            sort($p['fechas_vacaciones'],SORT_STRING);
+
+            $p['dias_standby']=count($p['fechas_standby']);
+            $p['dias_incapacidad']=count($p['fechas_incapacidad']);
+            $p['dias_vacaciones']=count($p['fechas_vacaciones']);
+            $p['dias_disponibles']=max(0,$diasPeriodo-$p['dias_standby']);
+
+            $regla=self::evaluarElegibilidadHcSinIns(
+                $diasPeriodo,
+                $p['dias_standby'],
+                $p['dias_disponibles']
+            );
+            $p['pct_incapacidad']=$diasPeriodo>0 ? ((float)$p['dias_incapacidad']/$diasPeriodo)*100.0 : 0.0;
+            $p['pct_standby']=(float)$regla['pct_standby'];
+            $p['elegible_hc_sin_ins']=(bool)$regla['elegible'];
+            $p['motivo_exclusion_hc_sin_ins']=(string)$regla['motivo'];
+        }
+        unset($p);
+
+        return [
+            'desde'=>$desde,
+            'hasta'=>$hasta,
+            'dias_periodo'=>$diasPeriodo,
+            'fechas_operativas'=>$fechasOperativas,
+            'por_talento'=>$porTalento,
+            'eventos_fuente'=>count($rows),
+            'umbral_standby_hc_sin_ins'=>self::UMBRAL_STANDBY_HC_SIN_INS,
+        ];
+    }
+
     /** Última fotografía <= semana de la FECHA del evento; nunca futura. */
     private function fotografia(string $fecha): ?array
     {
@@ -262,7 +570,7 @@ final class RankingAtribucionServiceV06
         foreach ($photos as $photo) if ($photo) $unique[implode('-',$photo)]=$photo;
         $hc=[];
         foreach ($unique as [$a,$s]) {
-            $rows=$this->query("SELECT anio,semana,distrito,numero_talento_gs,nombre_colaborador,id_posicion,posicion_lr,nombre_linea_reporte,puesto_lr FROM hc WHERE anio=? AND semana=?",'ii',[$a,$s]);
+            $rows=$this->query("SELECT anio,semana,distrito,numero_talento_gs,nombre_colaborador,id_posicion,posicion_lr,nombre_linea_reporte,puesto_lr,status,fecha_alta FROM hc WHERE anio=? AND semana=?",'ii',[$a,$s]);
             $hc["$a-$s"]=$rows;
         }
         return ['fotos'=>$photos,'datos'=>$hc];
@@ -442,13 +750,15 @@ final class RankingAtribucionServiceV06
     ): array {
         $eventos=$this->cargarEventos($desde,$hasta,$diasIso);
         $hc=$this->cargarHc($desde,$hasta);
-        // Sólo consultar HIC si hay eventos; ante error se interrumpe, sin fabricar ceros.
-        $hic=$eventos ? self::resolverEquivalenciasHic($this->cargarHic()) : ['equivalencias'=>[],'canonicos'=>[],'estados'=>[]];
+        // v0.6.5: HIC se consulta siempre. Aunque el período tenga 0 instalaciones,
+        // hc_standby debe homologarse contra la misma identidad canónica del HC.
+        $hic=self::resolverEquivalenciasHic($this->cargarHic());
         $map=$hic['equivalencias'];
         foreach ($equivalenciasTalento as $folio=>$aliases) {
             if (isset($hic['estados'][(string)$folio]) && $hic['estados'][(string)$folio]==='HIC_AMBIGUA') continue;
             $map[(string)$folio]=array_values(array_unique(array_merge($map[(string)$folio]??[],(array)$aliases)));
         }
+        $standby=$this->cargarStandby($desde,$hasta,$diasIso,$hic['canonicos']);
         $filas=$this->resolverFilas($eventos,$hc,$map,$hic['canonicos'],$hic['estados']);
         // Los candidatos pueden ser de otra región o no existir en HC.
         // Únicamente las cuentas HC con jerarquía ÚNICA suman en Ranking.
@@ -464,7 +774,7 @@ final class RankingAtribucionServiceV06
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.3-hc-all-channels',
+            'version'=>'0.6.6-hc-standby40-all-channels',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
@@ -478,6 +788,7 @@ final class RankingAtribucionServiceV06
             ],
             'auditoria_pendientes'=>$pendientes,
             'fotografias_hc'=>$hc['fotos'],
+            'standby'=>$standby,
         ];
     }
 
