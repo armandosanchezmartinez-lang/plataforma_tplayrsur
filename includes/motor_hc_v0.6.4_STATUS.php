@@ -1,53 +1,187 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA Ranking — motor canónico v0.5.1 (HC autoridad jerárquica / SOLO LECTURA).
- * Basado en STAGING v1.1: eventos por cuenta; HC fotografía <= semana;
- * HC determina líder y coach por folio y posición; evento solo diagnóstico/fallback explícito.
- * NO sustituye ni modifica ranking_productividad.php.
+ * TalIA / TotalXpedient · MOTOR HC v0.6.4 · PRODUCCIÓN
+ * ============================================================================
+ * Ubicación: /plataforma/includes/motor_hc.php
+ * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
+ * Fuentes: instalaciones, hc, historial_identidad_colaborador (HIC).
+ * Escritura en BD: ninguna. Solo consultas de lectura.
+ *
+ * REGLAS DE ATRIBUCIÓN
+ * - Universo: todos los orígenes de instalaciones, sin exclusión por canal.
+ * - Se certifica UNA cuenta por período solo cuando existe una cadena única
+ *   vendedor (folio / HIC) -> coach (posición HC) -> líder (plaza HC).
+ * - Los folios vacíos, '-' y 'VACANTE' no representan identidades; si hay dos
+ *   folios reales no equivalentes, la cuenta se deja pendiente de auditoría.
+ * - HIC homologa cambios documentados de número de talento sin asociar personas
+ *   diferentes por compartir una posición. Bifurcaciones y ciclos quedan
+ *   pendientes, nunca se elige un candidato de manera arbitraria.
+ * - Cada instalación toma su fotografía semanal HC; cuando no existe, se usa
+ *   exclusivamente la última fotografía ANTERIOR disponible, nunca una futura.
+ * - La estructura se valida por posiciones (distrito|líder, coach, vendedor).
+ *   Se mantiene la normalización de distrito de v0.6.1 y la resolución
+ *   controlada de autorreferencias de coach de v0.6.2.
+ * - Los campos de coach/líder registrados en instalaciones son diagnósticos,
+ *   no sustituyen la autoridad jerárquica de Capital Humano.
+ *
+ * CAMBIO v0.6.4 (17-OCT-2026)
+ * - HC incorpora status y fecha_alta en el contrato de fotografía.
+ * - Se agrega clasificación canónica de estado operativo SOLO para nivel vendedor:
+ *   ACTIVO/blanco, VACANTE validada por nombre, INCAPACIDAD y VACACIONES.
+ * - INCAPACIDAD/VACACIONES conservan HC total/ocupado pero no HC operativo.
+ * - La clasificación NO modifica atribución, identidad, jerarquía ni cálculos de Líder/Coach.
+ *
+ * CAMBIO v0.6.3 (13-OCT-2026)
+ * - Atribución de todos los orígenes comerciales a la jerarquía HC certificada.
+ * - Marcadores de folio inválido excluidos del conjunto de identidades.
+ * - Se preserva cuenta única, auditoría, HIC, jerarquía y contratos públicos.
+ *
+ * Entrada: obtenerInstalacionesJerarquia($desde,$hasta,$idLider=null,
+ *          $idCoach=null,$idVendedor=null,$diasIso=[],$equivalenciasTalento=[]).
+ * Salida: cuentas, conciliacion, conciliacion_global,
+ *         conciliacion_comercial, auditoria_pendientes, fotografias_hc.
+ * Ámbito: CANCUN, COATZA-MINA, MERIDA, TUXTLA y VILLAHERMOSA.
  */
-final class RankingAtribucionService
+final class RankingAtribucionServiceV06
 {
     private mysqli $db;
-    private array $lideres;
+    private const DISTRITOS = ['CANCUN', 'COATZA-MINA', 'MERIDA', 'TUXTLA', 'VILLAHERMOSA'];
 
-    public function __construct(mysqli $db, ?array $lideres = null)
+    public function __construct(mysqli $db)
     {
-        $this->db = $db;
-        $this->lideres = $lideres ?? self::lideresStaging();
-        $aliases = [];
-        foreach ($this->lideres as $id => $v) {
-            foreach ($v['aliases'] as $alias) {
-                $key = self::norm($alias);
-                if (isset($aliases[$key]) && $aliases[$key] !== $id) {
-                    throw new LogicException('Alias de líder ambiguo: '.$alias);
-                }
-                $aliases[$key] = $id;
-            }
-        }
+        $this->db=$db;
     }
 
-    /** Identidades de alcance tomadas del catálogo vigente de STAGING v1.1.
-     *  Las claves son de REPORTE (NO identificadores permanentes de persona).
-     *  Deben migrar a un catálogo de identidad/plaza validado cuando exista.
-     */
-    public static function lideresStaging(): array
+    /** Homologación de distrito (misma semántica para HC y otros motores). */
+    public static function normalizarDistrito(?string $valor): ?string
     {
-        return [
-            'CANCUN|COTO FELIX ERICK DANIEL'=>['distrito'=>'CANCUN','hc'=>'CANCUN','nombre'=>'COTO FELIX ERICK DANIEL','aliases'=>['COTO FELIX ERICK DANIEL'],'plaza'=>null],
-            'CANCUN|GAMBOA LARA LUIS ANTONIO'=>['distrito'=>'CANCUN','hc'=>'CANCUN','nombre'=>'GAMBOA LARA LUIS ANTONIO','aliases'=>['GAMBOA LARA LUIS ANTONIO'],'plaza'=>null],
-            'COATZA-MINA|HECTOR ANDRES PALMA HERNANDEZ'=>['distrito'=>'COATZA-MINA','hc'=>'COATZA MINA','nombre'=>'HECTOR ANDRES PALMA HERNANDEZ','aliases'=>['HECTOR ANDRES PALMA HERNANDEZ'],'plaza'=>null],
-            'MERIDA|ESTRADA MEDINA MERCY GUADALUPE'=>['distrito'=>'MERIDA','hc'=>'MERIDA','nombre'=>'ESTRADA MEDINA MERCY GUADALUPE','aliases'=>['JOVANY DAMIAN PARAMO AVILA','MERCY GUADALUPE ESTRADA MEDINA'],'plaza'=>'1739397'],
-            'MERIDA|PAREDES ROCHEL MARIA JOSE'=>['distrito'=>'MERIDA','hc'=>'MERIDA','nombre'=>'PAREDES ROCHEL MARIA JOSE','aliases'=>['PAREDES ROCHEL MARIA JOSE'],'plaza'=>null],
-            'TUXTLA|LOPEZ MANCILLA JOSE ALBERTO'=>['distrito'=>'TUXTLA','hc'=>'TUXTLA','nombre'=>'LOPEZ MANCILLA JOSE ALBERTO','aliases'=>['JOSE ALBERTO LOPEZ MANCILLA'],'plaza'=>null],
-            'TUXTLA|SANCHEZ SANCHEZ CHRISTIANNE MIGUEL'=>['distrito'=>'TUXTLA','hc'=>'TUXTLA','nombre'=>'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL','aliases'=>['CHRISTIANNE MIGUEL SANCHEZ SANCHEZ'],'plaza'=>null],
-            'VILLAHERMOSA|HERNANDEZ PALMA MIRIAN GABRIELA'=>['distrito'=>'VILLAHERMOSA','hc'=>'VILLAHERMOSA','nombre'=>'HERNANDEZ PALMA MIRIAN GABRIELA','aliases'=>['MIRIAN GABRIELA HERNANDEZ PALMA'],'plaza'=>null],
+        $n=self::norm($valor);
+        $n=strtr($n,['Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ü'=>'U']);
+        $compact=preg_replace('/[^A-Z0-9]/','',$n);
+        $equiv=[
+            'CANCUN'=>'CANCUN',
+            'COATZAMINA'=>'COATZA-MINA',
+            'COATZACOALCOSMINATITLAN'=>'COATZA-MINA',
+            'MERIDA'=>'MERIDA',
+            'TUXTLA'=>'TUXTLA',
+            'TUXTLAGUTIERREZ'=>'TUXTLA',
+            'VILLAHERMOSA'=>'VILLAHERMOSA',
         ];
+        return $equiv[$compact]??null;
+    }
+
+    /** Registro de posiciones de líder de una fotografía, no nombres predefinidos. */
+    private static function plazasLideres(array $rows): array
+    {
+        $porPos=[]; $referencias=[];
+        foreach ($rows as $r) {
+            $d=self::normalizarDistrito($r['distrito']??null);
+            $pos=trim((string)($r['id_posicion']??''));
+            if (!$d || $pos==='') continue;
+            $porPos[$d][$pos][]=$r;
+            if (stripos((string)($r['puesto_lr']??''),'LIDER')!==false) {
+                $super=trim((string)($r['posicion_lr']??''));
+                if ($super!=='') $referencias[$d][$super]=true;
+            }
+        }
+        $out=[];
+        foreach ($referencias as $d=>$posiciones) foreach ($posiciones as $pos=>$_) {
+            $asientos=$porPos[$d][$pos]??[];
+            // Un solo registro para la plaza; una plaza sin fila o duplicada no se certifica.
+            if (count($asientos)!==1) continue;
+            $r=$asientos[0];
+            // Una posición de líder debe reportar directamente a Dirección Distrital;
+            // si el dato está vacío/vacante, se conserva la plaza si tiene subordinados.
+            $sup=self::norm($r['puesto_lr']??'');
+            if ($sup!=='' && !str_contains($sup,'DIRECTOR DISTRITAL')) continue;
+            $nombre=self::norm($r['nombre_colaborador']??'');
+            $id=$d.'|'.$pos;
+            $out[$id]=[
+                'distrito'=>$d,'hc'=>$d,'nombre'=>($nombre===''?'VACANTE':$nombre),
+                'aliases'=>[$nombre], 'plaza'=>(string)$pos,
+                'ocupante_talento'=>trim((string)($r['numero_talento_gs']??'')),
+            ];
+        }
+        return $out;
+    }
+
+    /** Catálogo visible en Ranking: todas las plazas de ambas fechas, con etiqueta de la última fotografía. */
+    public function catalogoLideres(string $desde, string $hasta): array
+    {
+        $hc=$this->cargarHc($desde,$hasta);
+        $out=[];
+        foreach ($hc['datos'] as $foto=>$rows) {
+            foreach (self::plazasLideres($rows) as $id=>$info) {
+                if (!isset($out[$id])) $out[$id]=$info;
+                else {
+                    $out[$id]['aliases']=array_values(array_unique(array_merge($out[$id]['aliases'],$info['aliases'])));
+                    // Cada foto procesada por orden temporal ascendente, última etiqueta gana.
+                    $out[$id]['nombre']=$info['nombre'];
+                    $out[$id]['ocupante_talento']=$info['ocupante_talento'];
+                }
+            }
+        }
+        ksort($out);
+        return $out;
     }
 
     public static function norm(?string $s): string
     {
         return preg_replace('/\s+/u', ' ', (function_exists('mb_strtoupper') ? mb_strtoupper(trim((string)$s), 'UTF-8') : strtoupper(trim((string)$s)))) ?? '';
+    }
+
+    /**
+     * Clasificación canónica de STATUS para NIVEL VENDEDOR.
+     * No altera atribución ni estructura. Entrega únicamente metadatos HC operativos.
+     *
+     * Reglas:
+     * - ACTIVO o blanco: HC total=1, ocupado=1, activo=1, operativo=1.
+     * - VACANTE: sólo se acepta como vacante si el nombre contiene "VACANT".
+     * - INCAPACIDAD / VACACIONES: HC total=1, ocupado=1, activo=0, operativo=0.
+     * - Cualquier contradicción se marca INCONSISTENTE y no entra al denominador operativo.
+     */
+    public static function clasificarEstadoVendedor(?string $status, ?string $nombre): array
+    {
+        $st=self::norm($status);
+        $nom=self::norm($nombre);
+        if ($st==='') $st='ACTIVO';
+
+        $base=[
+            'status'=>$st,
+            'estado_hc'=>$st,
+            'hc_total'=>1,
+            'hc_ocupado'=>1,
+            'hc_activo'=>0,
+            'hc_operativo'=>0,
+            'es_vacante'=>false,
+            'valido'=>true,
+        ];
+
+        if ($st==='ACTIVO') {
+            $base['hc_activo']=1;
+            $base['hc_operativo']=1;
+            return $base;
+        }
+
+        if ($st==='VACANTE') {
+            if (str_contains($nom,'VACANT')) {
+                $base['hc_ocupado']=0;
+                $base['es_vacante']=true;
+                return $base;
+            }
+            $base['estado_hc']='INCONSISTENTE_STATUS_VACANTE';
+            $base['valido']=false;
+            return $base;
+        }
+
+        if ($st==='INCAPACIDAD' || $st==='VACACIONES') {
+            return $base;
+        }
+
+        $base['estado_hc']='INCONSISTENTE_STATUS';
+        $base['valido']=false;
+        return $base;
     }
 
     private static function nameKey(string $name): string
@@ -146,7 +280,7 @@ final class RankingAtribucionService
         return $r ? [(int)$r[0]['anio'], (int)$r[0]['semana']] : null;
     }
 
-    /** Carga SOLO Cambaceo/PDV sin filtro previo de líder; el HC certifica el alcance. */
+    /** Todos los orígenes: HC/HIC certifican la jerarquía sin inferencias por canal. */
     public function cargarEventos(string $desde, string $hasta, array $diasIso=[]): array
     {
         $ini = DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
@@ -155,19 +289,16 @@ final class RankingAtribucionService
             throw new InvalidArgumentException('Rango de fechas inválido');
         }
         foreach ($diasIso as $d) if (!is_int($d) || $d<1 || $d>7) throw new InvalidArgumentException('Día ISO inválido');
-        $map=[];
-        foreach ($this->lideres as $id=>$l) foreach ($l['aliases'] as $a) $map[self::norm($a)]=$id;
         $sql="SELECT i.cuenta,i.fecha,i.folio_empleado,i.lider,i.coach,i.origen_prospecto,i.subcanal
               FROM instalaciones i
               WHERE i.fecha>=? AND i.fecha<?
-                AND UPPER(TRIM(i.origen_prospecto)) IN ('CAMBACEO','PUNTO DE VENTA','PDV')
                 AND i.cuenta IS NOT NULL AND TRIM(i.cuenta)<>''";
         $hastaExcl=$fin->modify('+1 day')->format('Y-m-d');
         $rows=$this->query($sql,'ss',[$desde,$hastaExcl]);
         $out=[];
         foreach ($rows as $r) {
             if ($diasIso && !in_array((int)(new DateTimeImmutable(substr($r['fecha'],0,10)))->format('N'),$diasIso,true)) continue;
-            $r['lider_id']=$map[self::norm($r['lider'])] ?? null;
+            $r['lider_id']=null; // El texto del evento es diagnóstico, no autoridad.
             $out[]=$r;
         }
         return $out;
@@ -191,7 +322,7 @@ final class RankingAtribucionService
         foreach ($photos as $photo) if ($photo) $unique[implode('-',$photo)]=$photo;
         $hc=[];
         foreach ($unique as [$a,$s]) {
-            $rows=$this->query("SELECT anio,semana,distrito,numero_talento_gs,nombre_colaborador,id_posicion,posicion_lr,nombre_linea_reporte,puesto_lr FROM hc WHERE anio=? AND semana=?",'ii',[$a,$s]);
+            $rows=$this->query("SELECT anio,semana,distrito,numero_talento_gs,nombre_colaborador,id_posicion,posicion_lr,nombre_linea_reporte,puesto_lr,status,fecha_alta FROM hc WHERE anio=? AND semana=?",'ii',[$a,$s]);
             $hc["$a-$s"]=$rows;
         }
         return ['fotos'=>$photos,'datos'=>$hc];
@@ -207,39 +338,67 @@ final class RankingAtribucionService
         // Índices POR fotografía, no por fotografía actual global: jamás usar HC futuro.
         $indices=[];
         foreach ($hc['datos'] as $foto=>$rows) {
-            $positions=[]; $byFolio=[]; $coachSeats=[]; $leaderCandidates=[];
-            foreach ($this->lideres as $lid=>$def) {
-                foreach ($def['aliases'] as $alias) $leaderCandidates[$def['hc']][self::nameKey($alias)][$lid]=true;
-                $leaderCandidates[$def['hc']][self::nameKey($def['nombre'])][$lid]=true;
+            $byFolio=[]; $coachSeats=[]; $coachDuplicado=[];
+            $plazas=self::plazasLideres($rows);
+            // Indice EXCLUSIVAMENTE de ocupantes de plazas de lider certificadas
+            // en la fotografia. Permite resolver autorreferencias de coach sin
+            // catalogos de personas fijos y sin consultar nombres del evento.
+            // Una misma firma de nombre puede corresponder a varias plazas:
+            // nunca elegir una de forma arbitraria.
+            $plazasPorNombre=[];
+            foreach ($plazas as $liderId=>$liderInfo) {
+                $nombreLider=(string)($liderInfo['nombre']??'');
+                $distritoLider=(string)($liderInfo['distrito']??'');
+                if (!self::isValidName($nombreLider) || $distritoLider==='') continue;
+                $plazasPorNombre[$distritoLider][self::nameKey($nombreLider)][$liderId]=true;
             }
             foreach ($rows as $row) {
-                $district=(string)($row['distrito']??'');
+                $district=self::normalizarDistrito($row['distrito']??null);
+                if (!$district) continue;
                 $pos=trim((string)($row['id_posicion']??''));
-                if ($pos!=='') $positions[$district][$pos][]=$row;
                 $tal=trim((string)($row['numero_talento_gs']??''));
-                if ($tal!=='' && $tal!=='VACANTE' && self::norm($row['nombre_colaborador']??'')!=='VACANTE') {
+                if ($pos!=='' && $tal!=='' && $tal!=='VACANTE' && self::norm($row['nombre_colaborador']??'')!=='VACANTE') {
                     $person=($estadosHic[$tal]??'')==='HIC_AMBIGUA' ? 'AMBIGUA|'.$tal : ($canonicosTalento[$tal]??$tal);
+                    // Identidad en más de una posición permanece como varios candidatos.
                     $byFolio[$person][$district.'|'.$pos]=$row;
                 }
             }
             foreach ($rows as $coach) {
                 if (stripos((string)($coach['puesto_lr']??''),'LIDER')===false) continue;
-                $district=(string)($coach['distrito']??'');
+                $district=self::normalizarDistrito($coach['distrito']??null);
+                if (!$district) continue;
                 $coachPos=trim((string)($coach['id_posicion']??''));
-                if ($coachPos==='') continue;
-                $possible=[];
                 $superPos=trim((string)($coach['posicion_lr']??''));
-                foreach ($this->lideres as $lid=>$def) {
-                    if ($district!==$def['hc']) continue;
-                    if ($def['plaza']!==null && $superPos===(string)$def['plaza']) $possible[$lid]=true;
+                if ($coachPos==='' || $superPos==='') continue;
+                if ($superPos===$coachPos) {
+                    // Anomalia HC: posicion_lr apunta a la MISMA plaza del coach.
+                    // Fallback controlado: nombre del SUPERIOR contenido en HC,
+                    // no el nombre del coach ni el texto de instalaciones.
+                    // Unicamente si existe un ocupante de lider univoco y
+                    // validado por posicion en la misma foto y distrito.
+                    $superiorNombre=(string)($coach['nombre_linea_reporte']??'');
+                    if (!self::isValidName($superiorNombre)) continue;
+                    $posibles=array_keys($plazasPorNombre[$district][self::nameKey($superiorNombre)]??[]);
+                    if (count($posibles)!==1) continue;
+                    $lid=(string)$posibles[0];
+                    if (!isset($plazas[$lid]) || (string)$plazas[$lid]['plaza']===$coachPos) continue;
+                } else {
+                    // Regla ordinaria: la posicion superior determina el lider.
+                    // Un nombre solo NUNCA puede invalidar/cambiar este vinculo.
+                    $lid=$district.'|'.$superPos;
+                    if (!isset($plazas[$lid])) continue;
                 }
-                $nameKey=self::nameKey((string)($coach['nombre_linea_reporte']??''));
-                foreach ($leaderCandidates[$district][$nameKey]??[] as $lid=>$_) $possible[$lid]=true;
-                // La identificación de líder exige correspondencia única; no adivinar por posición compartida.
-                if (count($possible)===1) {
-                    $lid=(string)array_key_first($possible);
-                    $coachSeats[$district][$coachPos]=['lider_id'=>$lid,'coach_id'=>$coachPos,'coach_nombre'=>self::norm($coach['nombre_colaborador']??'')];
+                // Dos filas diferentes para la misma posición de coach => no asignar.
+                if (array_key_exists($coachPos,$coachSeats[$district]??[])) {
+                    $coachDuplicado[$district][$coachPos]=true;
+                    $coachSeats[$district][$coachPos]=null;
+                    continue;
                 }
+                if (isset($coachDuplicado[$district][$coachPos])) continue;
+                $coachSeats[$district][$coachPos]=[
+                    'lider_id'=>$lid,'coach_id'=>$coachPos,
+                    'coach_nombre'=>self::norm($coach['nombre_colaborador']??''),
+                ];
             }
             $indices[$foto]=['personas'=>$byFolio,'coaches'=>$coachSeats];
         }
@@ -250,7 +409,13 @@ final class RankingAtribucionService
         }
         $out=[];
         foreach ($groups as $cuenta=>$evs) {
+            $fechasSemanas=[];
+            foreach ($evs as $ev) {
+                $ef=substr((string)($ev['fecha']??''),0,10);
+                $fechasSemanas[implode('-',self::isoWeek($ef))]=true;
+            }
             $fecha=substr((string)$evs[0]['fecha'],0,10);
+            $fechaAmbigua=count($fechasSemanas)>1;
             $foto=$hc['fotos'][implode('-',self::isoWeek($fecha))]??null;
             $fotoKey=$foto?implode('-',$foto):null;
             $folios=[]; $eventLeaders=[]; $eventCoaches=[];
@@ -258,7 +423,10 @@ final class RankingAtribucionService
                 if (($e['lider_id']??null)!==null) $eventLeaders[(string)$e['lider_id']]=true;
                 if (self::isValidName($e['coach']??null)) $eventCoaches[self::nameKey((string)$e['coach'])]=self::norm($e['coach']);
                 $f=trim((string)($e['folio_empleado']??''));
-                if ($f!=='' && $f!=='VACANTE') $folios[$f]=true;
+                // Un marcador de folio (p. ej. Call Center sin folio) no es otro vendedor.
+                // Solo los folios reales participan en la identidad HC/HIC. Dos
+                // folios reales distintos siguen siendo ambiguos y no se certifican.
+                if (!in_array(self::norm($f), ['', '-', 'VACANTE'], true)) $folios[$f]=true;
             }
             $personas=[]; $hicAmbiguo=false;
             foreach (array_keys($folios) as $f) {
@@ -270,9 +438,14 @@ final class RankingAtribucionService
             $liderOriginal=count($eventLeaders)===1?(string)array_key_first($eventLeaders):null;
             $coachOriginal=count($eventCoaches)===1?(string)array_key_first($eventCoaches):null;
             $candidatos=[];
-            if ($seller!==null && !$hicAmbiguo && $fotoKey!==null) {
+            if ($seller!==null && !$hicAmbiguo && !$fechaAmbigua && $fotoKey!==null) {
                 foreach ($indices[$fotoKey]['personas'][$seller]??[] as $h) {
-                    $district=(string)$h['distrito'];
+                    // CRITICO: las plazas/los coaches se indexaron por distrito CANONICO.
+                    // La fila HC puede decir COATZA MINA / COATZA-MINA / COATZA/MINA.
+                    // Consultar con el texto crudo provocaba perder TODA la atribucion
+                    // de Coatza-Mina pese a existir vendedor, coach y lider en HC.
+                    $district=self::normalizarDistrito($h['distrito']??null);
+                    if ($district===null) continue;
                     $coachPos=trim((string)($h['posicion_lr']??''));
                     $coach=$indices[$fotoKey]['coaches'][$district][$coachPos]??null;
                     if (!$coach) continue;
@@ -284,9 +457,8 @@ final class RankingAtribucionService
             if (count($candidatos)===1) {
                 $c=array_values($candidatos)[0];
                 $lid=$c['lider_id']; $coachId=$c['coach_id']; $coachNombre=$c['coach_nombre'];
-                if ($liderOriginal!==null && $liderOriginal!==$lid) $estado='CAMBIO_ESTRUCTURA_LIDER';
-                // Diferencia de nombre se conserva como señal, no invalida relación por posición.
-                elseif ($coachOriginal!==null && self::nameKey($coachNombre)!==$coachOriginal) $estado='CAMBIO_ESTRUCTURA_COACH';
+                // Evento líder es informativo: una posición nunca se invalida por nombre.
+                if ($coachOriginal!==null && self::nameKey($coachNombre)!==$coachOriginal) $estado='CAMBIO_ESTRUCTURA_COACH';
             } else {
                 // HC no certificado: la cuenta permanece en AUDITORIA, jamás bajo
                 // un líder comercial inferido ni como venta certificada.
@@ -294,7 +466,7 @@ final class RankingAtribucionService
                 $coachNombre=null;
                 $coachId=null;
                 $fuente='PENDIENTE_HC';
-                $estado=$hicAmbiguo?'HIC_AMBIGUA':($seller===null?'SIN_FOLIO_UNICO':($fotoKey===null?'SIN_FOTO_HC':(count($candidatos)>1?'HC_JERARQUIA_AMBIGUA':'SIN_ASOCIACION_HC')));
+                $estado=$fechaAmbigua?'CUENTA_SEMANAS_MULTIPLES':($hicAmbiguo?'HIC_AMBIGUA':($seller===null?'SIN_FOLIO_UNICO':($fotoKey===null?'SIN_FOTO_HC':(count($candidatos)>1?'HC_JERARQUIA_AMBIGUA':'SIN_ASOCIACION_HC'))));
             }
             // No sobrescribir el motivo específico de ausencia de HC.
             $out[]=[
@@ -303,7 +475,7 @@ final class RankingAtribucionService
                 'subcanal'=>$evs[0]['subcanal']??'',
                 'lider_evento_original'=>$evs[0]['lider']??'',
                 'coach_evento_texto'=>$evs[0]['coach']??'',
-                'lider_id'=>$lid,'coach_id'=>$coachId,'vendedor_id'=>$seller,
+                'lider_id'=>$lid,'lider_posicion'=>($lid!==null?substr($lid,strpos($lid,'|')+1):null),'coach_id'=>$coachId,'vendedor_id'=>$seller,
                 'vendedor_folio_original'=>$original,
                 'identidad_hic'=>$hicAmbiguo?'HIC_AMBIGUA':($seller!==null && $seller!==$original?'HIC_VERIFICABLE':'DIRECTA_O_SIN_HIC'),
                 'coach_evento'=>$coachNombre,'lider_evento_id'=>$liderOriginal,
@@ -349,16 +521,16 @@ final class RankingAtribucionService
         ));
         $seleccion=self::filtrar($certificadas,$idLider,$idCoach,$idVendedor);
         if (count($certificadas)+count($pendientes)!==count($filas)) {
-            throw new LogicException('Conciliacion v0.5 incongruente');
+            throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.5.1-hc-certified',
+            'version'=>'0.6.4-hc-status-vendedor-all-channels',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
             'conciliacion_global'=>self::conciliar($filas),
             'conciliacion_comercial'=>[
-                'total_cambaceo_pdv'=>count($filas),
+                'total_todos_origenes'=>count($filas),
                 'certificadas_region_sur'=>count($certificadas),
                 'pendientes_hc_o_fuera_scope'=>count($pendientes),
                 'verificada'=>count($certificadas)+count($pendientes)===count($filas),

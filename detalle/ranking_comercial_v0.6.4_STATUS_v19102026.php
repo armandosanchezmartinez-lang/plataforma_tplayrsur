@@ -1,65 +1,36 @@
 <?php
 /**
- * TALIA / RANKING COMERCIAL v0.1.3 - MINI BARRAS HORIZONTALES - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
- * ====================================================
- * MODULO INDEPENDIENTE (10-OCT-2026):
- * - Base fiel de ranking_productividad.php aportado para esta iteracion.
- * - Vendedores: bloque original conservado sin cambios funcionales.
- * - Lider y Coach (incluye ranking_coach): encabezados e indicadores
- *   comerciales equivalentes a Vendedor, por periodos BASE/ACTUAL.
- * - Los agregados parten EXCLUSIVAMENTE de las cuentas del Motor HC.
- * - Motor Comercial devuelve sumarios por vendedor, consolidados por
- *   id de lider o por pareja (lider_id, coach_id). NO reatribuye ventas.
- * - ARPU global = SUM(importe_neto) / SUM(cuentas_con_precio_valido);
- *   nunca promedio simple de ARPU por vendedor.
- * - Porcentajes = cuentas de categoria / instalaciones certificadas.
- * - Valida contra HC por cada fila y periodo; sin concordancia, se
- *   bloquea el enriquecimiento comercial y se preservan las INS HC.
- * - Totales y tarjetas se recalculan al filtrar distrito.
- * - No se modifica ni Motor HC ni Motor Comercial ni el Ranking original.
- * - Requiere PHP 8.1+ y los 2 motores en /plataforma/includes/.
- * - Validar resultados contra produccion antes de publicar en menu.
+ * TalIA / TotalXpedient · RANKING COMERCIAL v0.1.4 · PRODUCCIÓN
+ * ============================================================================
+ * Ubicación: /plataforma/detalle/ranking_comercial.php
+ * Dependencias: /plataforma/includes/motor_hc_v0.6.4_STATUS.php (STAGING v0.6.4)
+ *               /plataforma/includes/motor_comercial.php (v0.2.1)
+ * Escritura en BD: ninguna. Consume únicamente vistas y motores de lectura.
  *
- * OBJETIVO: nuevo Ranking Comercial semanal/mensual con la misma navegacion
- * y universo certificado que el ranking_productividad.php existente.
+ * OBJETIVO
+ * - Ranking comercial semanal y mensual para los niveles líder, coach y
+ *   vendedor; navegación canónica por DISTRITO|ID_POSICION.
+ * - Mantener idéntico universo de instalaciones de Ranking Productividad,
+ *   ahora sobre TODOS los orígenes, siempre certificado por Motor HC.
+ * - Separar responsabilidades: Motor HC determina cuenta/identidad/jerarquía
+ *   mediante foto HC e historial_identidad_colaborador (HIC); Motor Comercial
+ *   clasifica producto y calcula ARPU sin atribuir instalaciones.
+ * - Comparar BASE y ACTUAL, enriquecer con 2P/3P, Residencial/Negocios,
+ *   Bundle/No Bundle y precio lista neto de IVA (incluidos paquetes PYME).
+ * - ARPU consolidado = SUM(ingreso neto) / SUM(cuentas con precio válido);
+ *   nunca se promedian los ARPU individuales de los vendedores.
+ * - Si el enriquecimiento comercial no concilia, preservar las instalaciones
+ *   certificadas y comunicar la incidencia, sin corregir totales artificialmente.
  *
- * UBICACION: /plataforma/detalle/ranking_comercial.php
- * DEPENDENCIAS: /plataforma/includes/motor_hc.php (SIN CAMBIOS)
- *               /plataforma/includes/motor_comercial.php (NUEVO)
- * AUTORIZACION: sesion TalIA; roles ADMIN o DIRECTOR_REGIONAL.
- * PARAMETROS HTTP: periodo, anio, semana, mes, anio_mes, rango_mode,
- * fecha_inicio, fecha_fin, dias_semana, view, distrito, lider, coach,
- * coach_pos, vendedor y folio. Ver validacion y selectores a continuacion.
- *
- * FUENTES: Motor HC para cuentas/jerarquias y fotos HC, tablas HC,
- * instalaciones y dias_inhabiles para vista, plantilla y productividad.
- * FLUJO: selecciona BASE/ACTUAL; consulta motor en ambos periodos;
- * obtiene catalogo dinamico de plazas de lider; reconstruye HC activo;
- * agrega por lider / coach / vendedor y pinta la tabla.
- * SALIDA: HTML; no escribe archivos ni modifica tablas.
- * ALCANCE: nuevo modulo STAGING independiente, no sobreescribe produccion.
- * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
- * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
- * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
- * reemplaza por el nombre de un colaborador escrito a mano.
- * FIX 09-OCT-2026 (v0.6.2): consume el contrato del motor que resuelve
- * unicamente autorreferencias HC verificables por nombre del superior
- * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
- * asigna ninguna cuenta ni cambia cifras por si mismo.
- *
- * IMPORTANTE: la presente actualización es visual. HC y Comercial preservan
- * sus reglas; validar funcionamiento tras publicar la vista.
- * EXTENSIÓN COMERCIAL (10-OCT-2026):
- * - Todas las vistas ejecutan Motor Comercial sobre las cuentas HC,
- *   pero la plantilla del nivel Vendedor conserva su implementacion original.
- * - Motor HC entrega las cuentas y atribuciones de BASE y ACTUAL.
- * - Motor Comercial clasifica esas cuentas mediante catalogo_paquetes.
- * - ARPU, 2P/3P, Oferta y Bundles comparan BASE y ACTUAL.
- * - Cada porcentaje usa el total HC certificado DEL MISMO período.
- * - DIF ARPU = ACTUAL - BASE, %DIF ARPU = DIF / BASE * 100.
- * - Sin ARPU en alguno de los períodos => diferencias no disponibles (—).
- * - Errores de clasificación NO ocultan las instalaciones HC del ranking.
- * - Control de despliegue: verificar cuentas e indicadores tras publicación.
+ * COMPATIBILIDAD 13-OCT-2026
+ * - Motor HC v0.6.3: salida '0.6.3-hc-all-channels', en BASE y ACTUAL.
+ * - Motor Comercial v0.2.1: VERSION '0.2.1-all-channels'.
+ * - Folios '-', vacíos y VACANTE no definen personas; HIC unifica migraciones
+ *   verificadas de número de talento, sin usar una misma plaza como identidad.
+ * - Se conservan los seis roles habilitados, calendario, filtros, mini barras,
+ *   claves de líder únicas, métricas y validaciones de integridad existentes.
+ * - La ampliación de orígenes se ejecuta en los motores; este Ranking solo
+ *   consume y presenta sus resultados sin duplicar reglas de certificación.
  */
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
@@ -120,8 +91,23 @@ if (empty($_SESSION['usuario'])) {
 
 include '../conexion.php';
 
-$rol = $_SESSION['rol'] ?? 'vendedor';
-if (!in_array(strtolower((string)$rol), ['admin','director_regional'], true)) { http_response_code(403); exit('Ranking reservado a ADMIN / Dirección Regional.'); }
+/*
+ * TalIA - Rankings competitivos de la Region SUR (11-OCT-2026).
+ * Los seis perfiles autenticados consultan el MISMO universo regional.
+ * El rol se utiliza solo para AUTENTICACION/AUTORIZACION DE ENTRADA,
+ * nunca como filtro de distrito, HC, cuentas, lider, coach o vendedor.
+ * Motor HC y Motor Comercial conservan sus reglas de atribucion.
+ * El dashboard index.php sigue siendo jerarquico e independiente.
+ */
+$rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$roles_ranking = [
+    'admin', 'director_regional', 'director_distrital',
+    'lider', 'coach', 'vendedor'
+];
+if (!in_array($rol, $roles_ranking, true)) {
+    http_response_code(403);
+    exit('Perfil de TalIA no autorizado para Ranking.');
+}
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -790,6 +776,8 @@ $cond_iactual_coach = str_replace('iactual.', 'iactual_coach.', $cond_iactual);
 
 $distrito_param  = $_GET['distrito'] ?? '';
 $lider_param     = $_GET['lider'] ?? '';
+// Plaza canónica recibida del Motor HC: no usar 'VACANTE' como identificador.
+$lider_id_param  = trim((string)($_GET['lider_id'] ?? ''));
 $coach_param     = $_GET['coach'] ?? '';
 $coach_pos_param = $_GET['coach_pos'] ?? '';
 $vendedor_param  = $_GET['vendedor'] ?? '';
@@ -870,8 +858,8 @@ lideres_activos AS (
 
 
 /**
- * TalIA Ranking STAGING v0.5 - ÚNICA fuente de instalaciones:
- * RankingAtribucionService v0.3 -> una fila por cuenta -> agrupaciones de vista.
+ * Ranking Comercial - ÚNICA fuente de instalaciones certificadas:
+ * Motor HC v0.6.3 -> una fila por cuenta -> agregación jerárquica.
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
@@ -933,12 +921,35 @@ function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, strin
         foreach ($catalogo as $lid=>$l) {
             $coachKey=$lid.'|'.$posCoach;
             if (!isset($coaches[$coachKey]) || RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
-            $vac=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'')==='VACANTE';
+            $nombreVendedor=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'');
+            $vac=$nombreVendedor==='VACANTE';
             $talento=(string)($h['numero_talento_gs']??'');
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
+
+            // Contrato Motor HC v0.6.4: STATUS/fecha_alta sólo enriquecen nivel vendedor.
+            // No se usan para recalcular Líder/Coach.
+            $estadoVendedor=RankingAtribucionServiceV06::clasificarEstadoVendedor(
+                $h['status']??null,
+                $h['nombre_colaborador']??null
+            );
+
             // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
-            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
+            $sellerByCoach[$coachKey][$idPos]=[
+                'id_posicion'=>$idPos,
+                'persona'=>$persona,
+                'nombre'=>$nombreVendedor,
+                'vacante'=>$vac,
+                'status'=>(string)($h['status']??''),
+                'estado_hc'=>$estadoVendedor['estado_hc'],
+                'hc_total'=>$estadoVendedor['hc_total'],
+                'hc_ocupado'=>$estadoVendedor['hc_ocupado'],
+                'hc_activo'=>$estadoVendedor['hc_activo'],
+                'hc_operativo'=>$estadoVendedor['hc_operativo'],
+                'es_vacante_status'=>$estadoVendedor['es_vacante'],
+                'estado_valido'=>$estadoVendedor['valido'],
+                'fecha_alta'=>$h['fecha_alta']??null,
+            ];
         }
     }
     return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
@@ -951,19 +962,47 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
         if ($coach!==null && $idCoach!==$coach) continue;
         foreach ($seats as $pos=>$seat) $filas[$k.'|'.$pos]=$seat;
     }
+
     $identidadesConInst=[];
     foreach ($eventos as $ev) {
         if (($ev['lider_id']??null)!==$lider) continue;
         if ($coach!==null && (string)($ev['coach_id']??'SIN_COACH')!==$coach) continue;
         if (!empty($ev['vendedor_id'])) $identidadesConInst[(string)$ev['vendedor_id']]=true;
     }
-    $activo=0;$vacante=0;$con=0;
+
+    // v0.6.4 STATUS:
+    // - "activo" conserva la lectura de HC ocupado para no alterar HC Total ni la vista de plantilla.
+    // - "operativo" es el denominador elegible para productividad / HC sin INS.
+    // - INCAPACIDAD y VACACIONES siguen dentro del HC ocupado/total, pero NO del operativo.
+    // - VACANTE se valida a nivel vendedor mediante el contrato canónico del Motor HC.
+    $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
+
     foreach ($filas as $seat) {
-        if ($seat['vacante']) { $vacante++; continue; }
+        $esVacante=(bool)($seat['vacante']??false) || (bool)($seat['es_vacante_status']??false);
+        if ($esVacante) {
+            $vacante++;
+            continue;
+        }
+
+        // Toda plaza ocupada sigue contando para HC Activo/Total mostrado.
         $activo++;
-        if ($seat['persona']!==null && isset($identidadesConInst[$seat['persona']])) $con++;
+
+        // Sólo vendedores operativamente disponibles participan del denominador.
+        $esOperativo=(int)($seat['hc_operativo']??1)===1;
+        if (!$esOperativo) continue;
+
+        $operativo++;
+        if (($seat['persona']??null)!==null && isset($identidadesConInst[(string)$seat['persona']])) {
+            $conOperativo++;
+        }
     }
-    return ['activo'=>$activo,'vacante'=>$vacante,'con_ins'=>$con];
+
+    return [
+        'activo'=>$activo,
+        'operativo'=>$operativo,
+        'vacante'=>$vacante,
+        'con_ins'=>$conOperativo,
+    ];
 }
 function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?string $vendedor=null): int {
     $n=0;
@@ -978,7 +1017,9 @@ function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?s
 function rank05_row(string $lider, string $coachId, string $nombre, array $catalogo, int $insBase, int $insActual, array $hb, array $ha, int $diasBase, int $diasActual): array {
     $l=rank05_ficha($catalogo,$lider);
     $hcActivoBase=$hb['activo'];$hcActivoActual=$ha['activo'];
-    $sinBase=max(0,$hcActivoBase-$hb['con_ins']);$sinActual=max(0,$hcActivoActual-$ha['con_ins']);
+    $hcOperativoBase=(int)($hb['operativo']??$hcActivoBase);
+    $hcOperativoActual=(int)($ha['operativo']??$hcActivoActual);
+    $sinBase=max(0,$hcOperativoBase-$hb['con_ins']);$sinActual=max(0,$hcOperativoActual-$ha['con_ins']);
     $dif=$insActual-$insBase;
     return [
         'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],
@@ -989,22 +1030,64 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
         'hc_activo_base'=>$hcActivoBase,'hc_activo_actual'=>$hcActivoActual,
         'hc_con_ins_base'=>$hb['con_ins'],'hc_con_ins_actual'=>$ha['con_ins'],
         'hc_sin_venta_base'=>$sinBase,'hc_sin_venta_actual'=>$sinActual,
-        'pct_hc_sin_ins_base'=>$hcActivoBase>0?round(100*$sinBase/$hcActivoBase):null,
-        'pct_hc_sin_ins_actual'=>$hcActivoActual>0?round(100*$sinActual/$hcActivoActual):null,
-        'prod_base'=>($hcActivoBase>0 && $diasBase>0)?round($insBase/$hcActivoBase/$diasBase,2):null,
-        'prod_actual'=>($hcActivoActual>0 && $diasActual>0)?round($insActual/$hcActivoActual/$diasActual,2):null,
+        'pct_hc_sin_ins_base'=>$hcOperativoBase>0?round(100*$sinBase/$hcOperativoBase):null,
+        'pct_hc_sin_ins_actual'=>$hcOperativoActual>0?round(100*$sinActual/$hcOperativoActual):null,
+        'prod_base'=>($hcOperativoBase>0 && $diasBase>0)?round($insBase/$hcOperativoBase/$diasBase,2):null,
+        'prod_actual'=>($hcOperativoActual>0 && $diasActual>0)?round($insActual/$hcOperativoActual/$diasActual,2):null,
         'activo_base'=>$hcActivoBase,'vacante_base'=>$hb['vacante'],'hc_total_base'=>$hcActivoBase+$hb['vacante'],
         'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
     ];
 }
-function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual): array {
+function rank05_antiguedad_corte(?string $fechaAlta, string $corte): array {
+    $fechaAlta=trim((string)$fechaAlta);
+    if ($fechaAlta==='' || $fechaAlta==='0000-00-00') return ['texto'=>'-','meses'=>0];
+
+    $alta=DateTimeImmutable::createFromFormat('!Y-m-d',$fechaAlta);
+    $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
+    if (!$alta || !$fin || $alta>$fin) return ['texto'=>'-','meses'=>0];
+
+    $diff=$alta->diff($fin);
+    $meses=((int)$diff->y*12)+(int)$diff->m;
+    $texto=$meses<12
+        ? $meses.' meses'
+        : ((int)$diff->y).' años '.((int)$diff->m).' meses';
+
+    return ['texto'=>$texto,'meses'=>$meses];
+}
+
+function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual, string $distritoParam='', string $liderIdParam='', string $corteBase='', string $corteActual=''): array {
     $ids=array_keys($catalogo);
     $seleccion=null;
     if (in_array($view,['coaches','vendedores'],true)) {
-        foreach ($catalogo as $lid=>$l) {
-            if (rank05_name_key($liderParam)===rank05_name_key($l['nombre'])) { $seleccion=$lid; break; }
+        $distrito=RankingAtribucionServiceV06::normalizarDistrito($distritoParam);
+        if ($distrito===null) throw new RuntimeException('Distrito no identificado al navegar por jerarquía');
+
+        if ($liderIdParam!=='') {
+            // La plaza, NO el nombre visible, identifica al líder incluso cuando está VACANTE.
+            if (!isset($catalogo[$liderIdParam]) || (string)$catalogo[$liderIdParam]['distrito']!==$distrito) {
+                throw new RuntimeException('La plaza del líder no corresponde al distrito seleccionado');
+            }
+            $seleccion=$liderIdParam;
+        } else {
+            // Compatibilidad con URLs anteriores. Exigir coincidencia UNÍVOCA por distrito.
+            $candidatos=[];
+            $nombreBuscado=rank05_name_key($liderParam);
+            foreach ($catalogo as $lid=>$l) {
+                if ((string)$l['distrito']!==$distrito) continue;
+                foreach (array_merge([(string)$l['nombre']],$l['aliases']??[]) as $alias) {
+                    if ($nombreBuscado!=='' && $nombreBuscado===rank05_name_key((string)$alias)) {
+                        $candidatos[$lid]=true;
+                        break;
+                    }
+                }
+            }
+            if (count($candidatos)!==1) {
+                throw new RuntimeException(count($candidatos)>1
+                    ? 'Nombre de líder ambiguo: regresa al Ranking y selecciona la plaza específica'
+                    : 'Líder no identificado en el distrito seleccionado');
+            }
+            $seleccion=(string)array_key_first($candidatos);
         }
-        if ($seleccion===null) throw new RuntimeException('Líder no identificado en el catálogo canónico');
         $ids=[$seleccion];
     }
     $rows=[];$matrix=[];
@@ -1049,18 +1132,38 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
             $ventas[$v] ??= ['base'=>0,'actual'=>0];
             $ventas[$v][$lado]++;
         }
-        $nombres=[];
-        foreach ([$fotoBase,$fotoActual] as $h) {
+        $nombres=[];$metaVendedores=[];
+        foreach (['base'=>$fotoBase,'actual'=>$fotoActual] as $ladoFoto=>$h) {
             foreach ($h['vendedores'][$lid.'|'.$coachPos]??[] as $seat) {
-                if ($seat['vacante'] || $seat['persona']===null) continue;
-                $nombres[$seat['persona']]=$seat['nombre'];
-                $ventas[$seat['persona']] ??= ['base'=>0,'actual'=>0];
+                if ($seat['vacante'] || ($seat['es_vacante_status']??false) || $seat['persona']===null) continue;
+                $persona=(string)$seat['persona'];
+                $nombres[$persona]=$seat['nombre'];
+                $metaVendedores[$persona][$ladoFoto]=$seat;
+                $ventas[$persona] ??= ['base'=>0,'actual'=>0];
             }
         }
         foreach ($ventas as $v=>$vcts) {
             $nombre=$nombres[$v]??($v==='SIN_VENDEDOR'?'VENDEDOR NO IDENTIFICADO':'FOLIO '.$v);
+            $metaActual=$metaVendedores[$v]['actual']??[];
+            $metaBase=$metaVendedores[$v]['base']??[];
+            $fechaAlta=(string)($metaActual['fecha_alta']??($metaBase['fecha_alta']??''));
+            $corteAntig=$corteActual!==''?$corteActual:date('Y-m-d');
+            $antig=rank05_antiguedad_corte($fechaAlta,$corteAntig);
+
             $matrix[$lid.'|'.$coachPos.'|'.$v]=[
-                'vendedor'=>$nombre,'folio_empleado'=>$v==='SIN_VENDEDOR'?'':$v,'antiguedad'=>'-',
+                'vendedor'=>$nombre,
+                'folio_empleado'=>$v==='SIN_VENDEDOR'?'':$v,
+                'fecha_alta'=>$fechaAlta,
+                'antiguedad'=>$antig['texto'],
+                'antiguedad_meses'=>$antig['meses'],
+                'status_base'=>(string)($metaBase['status']??''),
+                'status_actual'=>(string)($metaActual['status']??''),
+                'estado_hc_base'=>(string)($metaBase['estado_hc']??'ACTIVO'),
+                'estado_hc_actual'=>(string)($metaActual['estado_hc']??'ACTIVO'),
+                'hc_total_base'=>(int)($metaBase['hc_total']??0),
+                'hc_total_actual'=>(int)($metaActual['hc_total']??0),
+                'hc_operativo_base'=>(int)($metaBase['hc_operativo']??0),
+                'hc_operativo_actual'=>(int)($metaActual['hc_operativo']??0),
                 'ins_base'=>$vcts['base'],'ins_actual'=>$vcts['actual'],
                 'total'=>$vcts['base']+$vcts['actual'],
                 'doble_play'=>0,'triple_play'=>0,'residencial'=>0,'negocios'=>0,
@@ -1702,12 +1805,12 @@ ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'coaches') {
 /*
- * CANDIDATO STAGING v1.1 - Evento primero + continuidad Mercy/Jovany.
+ * Historial de atribución v1.1 - Evento primero + continuidad Mercy/Jovany.
  * Diagnostico SEM40: 50 cuentas Mercy/Jovany, 84 Maria Jose; todas coach unico.
  * Coach del evento prevalece; HC/HIC solo resuelve coach vacio de manera UNIVOCA.
  * Nunca se calcula NO IDENTIFICADO por diferencia de totales.
  * Identidad plaza 1739397: Jovany + Mercy (ambos nombres del evento).
- * Este cambio solo interviene view=coaches; no desplegar sin validar el resto.
+ * Esta regla se mantiene limitada a view=coaches y exige conciliación con HC.
  */
 $cond_ibase_hc_exists = str_replace('ibase.', 'ix.', $cond_ibase);
 $cond_iactual_hc_exists = str_replace('iactual.', 'ix.', $cond_iactual);
@@ -2269,16 +2372,16 @@ $comercial05_error='';
 $comercial05_auditoria=[];
 if ($view !== 'ventas') {
     try {
-        require_once __DIR__.'/../includes/motor_hc.php';
+        require_once __DIR__.'/../includes/motor_hc_v0.6.4_STATUS.php';
         $motor05=new RankingAtribucionServiceV06($conexion);
         $catalogo05=rank05_catalogo($motor05,$fecha_inicio_base_calc,$fecha_fin_actual_calc);
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.2: ambos periodos deben provenir de la version exacta
-        // desplegada de Motor HC STAGING. La verificacion protege la comparacion
+        // CONTRATO v0.6.3: ambos periodos deben provenir de la version exacta
+        // desplegada de Motor HC en producción. La verificacion protege la comparacion
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.2-hc-position-staging';
+        $versionMotorRequerida05 = '0.6.4-hc-status-vendedor-all-channels';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
@@ -2290,13 +2393,13 @@ if ($view !== 'ventas') {
         $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
         $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
         $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
-        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual);
+        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual,(string)$distrito_param,(string)$lider_id_param,$fecha_fin_base_calc,$fecha_fin_actual_calc);
         $rows=$datos05['rows'];
         $coach_matrix=$datos05['matrix'];
         $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
         $rank05_auditoria=['base'=>$resBase05['conciliacion_comercial'],'actual'=>$resActual05['conciliacion_comercial']];
         /*
-         * MOTOR COMERCIAL v0.2.0: ENRIQUECIMIENTO, NO REATRIBUCIÓN.
+         * MOTOR COMERCIAL v0.2.1: ENRIQUECIMIENTO, NO REATRIBUCIÓN.
          * Nunca modifica $resBase05/$resActual05 ni Motor HC. En caso de error
          * mantiene íntegro el ranking de instalaciones y muestra advertencia.
          */
@@ -2304,6 +2407,13 @@ if ($view !== 'ventas') {
             try {
                 require_once __DIR__.'/../includes/motor_comercial.php';
                 $motorComercial05 = new MotorComercial($conexion);
+                // El universo HC multicanal exige el clasificador comercial homólogo.
+                // La incidencia solo desactiva el enriquecimiento, nunca las INS HC.
+                if (MotorComercial::VERSION !== '0.2.1-all-channels') {
+                    throw new RuntimeException(
+                        'Motor Comercial incompatible. Requerido 0.2.1-all-channels; disponible '.MotorComercial::VERSION
+                    );
+                }
                 $mixBase05 = $motorComercial05->resumirVendedores(
                     $resBase05['cuentas'], $fecha_inicio_base_calc, $fecha_fin_base_calc, $dias05
                 );
@@ -2489,8 +2599,8 @@ if ($periodo === 'mensual') {
 
 $base_link = '?' . qs(array_merge($nav_estado, ['view'=>'lideres']));
 $ranking_coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'ranking_coach']));
-$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]));
-$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
+$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'lider_id'=>$lider_id_param]));
+$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'lider_id'=>$lider_id_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
 
 $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
 if ($periodo === 'semanal') $subtitle .= " · Días: {$dias_semana_label}";
@@ -2538,6 +2648,24 @@ body.page-ranking .commercial-compare-table thead th { vertical-align:middle; fo
 body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
 body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
 body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
+body.page-ranking .vendedor-status{
+    display:block;
+    width:max-content;
+    max-width:100%;
+    margin-top:4px;
+    padding:2px 7px;
+    border-radius:999px;
+    font-size:.67rem;
+    font-weight:800;
+    line-height:1.35;
+    letter-spacing:.02em;
+}
+body.page-ranking .vendedor-status--incapacidad{ color:#9a3412; background:#ffedd5; }
+body.page-ranking .vendedor-status--vacaciones{ color:#075985; background:#e0f2fe; }
+body.page-ranking .vendedor-status--base{ opacity:.82; }
+body.page-ranking .vendedor-status--actual{ opacity:1; }
+body.page-ranking .vendedor-status--alerta{ color:#991b1b; background:#fee2e2; }
+
 /* Ranking Comercial: idéntico acabado suave del nivel Vendedor. */
 body.page-ranking .rc-summary-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
 body.page-ranking .rc-summary-table thead th.group { font-size:11px; letter-spacing:.025em; }
@@ -2696,8 +2824,8 @@ include __DIR__ . '/../includes/sidebar.php';
         <p><?= h($subtitle) ?> · Días hábiles: <?= h($label_col_base) ?> <?= h($dias_habiles_base) ?> / <?= h($label_col_actual) ?> <?= h($dias_habiles_actual) ?></p>
     </div>
     <div class="week-nav">
-        <a class="week-btn <?= $periodo === 'semanal' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','view'=>'lideres','distrito'=>null,'lider'=>null,'coach'=>null,'coach_pos'=>null,'vendedor'=>null,'folio'=>null])) ?>">Semanal</a>
-        <a class="week-btn <?= $periodo === 'mensual' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','view'=>'lideres','distrito'=>null,'lider'=>null,'coach'=>null,'coach_pos'=>null,'vendedor'=>null,'folio'=>null])) ?>">Mensual</a>
+        <a class="week-btn <?= $periodo === 'semanal' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','view'=>'lideres','distrito'=>null,'lider'=>null,'lider_id'=>null,'coach'=>null,'coach_pos'=>null,'vendedor'=>null,'folio'=>null])) ?>">Semanal</a>
+        <a class="week-btn <?= $periodo === 'mensual' ? 'week-current' : '' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'mensual','view'=>'lideres','distrito'=>null,'lider'=>null,'lider_id'=>null,'coach'=>null,'coach_pos'=>null,'vendedor'=>null,'folio'=>null])) ?>">Mensual</a>
         <?php if ($periodo === 'semanal'): ?>
             <a class="week-btn <?= $has_prev ? '' : 'disabled' ?>" href="?<?= qs(array_merge($_GET, ['periodo'=>'semanal','anio'=>$prev_anio,'semana'=>$prev_semana])) ?>">← Semana <?= h($prev_semana) ?></a>
             <div class="range-dropdown week-range-dropdown">
@@ -3071,8 +3199,8 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                     $aa=$comercial05_ok ? $rcArpu($ca) : null;
                     $ad=$rcDif($ab,$aa); $ap=$rcPctDif($ab,$aa);
                     $rcUrl = $view === 'lideres'
-                        ? '?' . qs(array_merge($nav_estado,['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]))
-                        : '?' . qs(array_merge($nav_estado,['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
+                        ? '?' . qs(array_merge($nav_estado,['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id']]))
+                        : '?' . qs(array_merge($nav_estado,['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
                     $rcData = [ 'ins_base'=>$nb, 'ins_actual'=>$na, 'base'=>$cb, 'actual'=>$ca ];
                     $rcSort = ['ins_base'=>$nb,'ins_actual'=>$na,'dif'=>$nd,'pct_dif'=>$np,
                         'arpu_base'=>$ab,'arpu_actual'=>$aa,'arpu_dif'=>$ad,'arpu_pct_dif'=>$ap];
@@ -3220,7 +3348,7 @@ $dimensiones05 = [
 <section class="table-card">
     <div class="table-head">
         <strong>Resumen comparativo por vendedor del coach</strong>
-        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.2</span>
+        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.4 · Todos los orígenes</span>
     </div>
     <div class="table-wrap">
         <table class="sales-table commercial-compare-table" style="min-width:2390px">
@@ -3267,10 +3395,9 @@ $dimensiones05 = [
                         $mixPct05[$campo05.'_actual'] = $comercial05_ok
                             ? $pct_mc05($v[$campo05.'_actual'] ?? 0, $ins_actual_v) : null;
                     }
-                    $antig_meses = 0;
-                    if (is_numeric($v['antiguedad'])) $antig_meses = (float)$v['antiguedad'];
-                    elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1]*12+(int)$m[2];
-                    elseif (preg_match('/(\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1];
+                    $antig_meses = (int)($v['antiguedad_meses'] ?? 0);
+                    $estado_hc_base_v = strtoupper(trim((string)($v['estado_hc_base'] ?? 'ACTIVO')));
+                    $estado_hc_actual_v = strtoupper(trim((string)($v['estado_hc_actual'] ?? 'ACTIVO')));
                 ?>
                 <tr class="matrix-row"
                     data-antiguedad="<?= h($antig_meses) ?>"
@@ -3283,7 +3410,18 @@ $dimensiones05 = [
                         data-pct_<?= h($campo05) ?>_base="<?= h($mixPct05[$campo05.'_base'] ?? -999999) ?>"
                         data-pct_<?= h($campo05) ?>_actual="<?= h($mixPct05[$campo05.'_actual'] ?? -999999) ?>"
                     <?php endforeach; ?>>
-                    <td class="entity"><?= h($v['vendedor']) ?></td>
+                    <td class="entity">
+                        <?= h($v['vendedor']) ?>
+                        <?php if (in_array($estado_hc_base_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
+                            <span class="vendedor-status vendedor-status--base vendedor-status--<?= strtolower(h($estado_hc_base_v)) ?>"><?= h($label_col_base) ?> · <?= h($estado_hc_base_v) ?></span>
+                        <?php endif; ?>
+                        <?php if (in_array($estado_hc_actual_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
+                            <span class="vendedor-status vendedor-status--actual vendedor-status--<?= strtolower(h($estado_hc_actual_v)) ?>"><?= h($label_col_actual) ?> · <?= h($estado_hc_actual_v) ?></span>
+                        <?php endif; ?>
+                        <?php if (str_starts_with($estado_hc_actual_v, 'INCONSISTENTE')): ?>
+                            <span class="vendedor-status vendedor-status--alerta">REVISAR HC · <?= h($estado_hc_actual_v) ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
                     <td class="num"><?= fmt_num($ins_base_v) ?></td>
                     <td class="num"><?= fmt_num($ins_actual_v) ?></td>

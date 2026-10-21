@@ -3556,12 +3556,15 @@ function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, st
         if (count($asientos) !== 1) continue;
         $fila = $asientos[0];
         $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
-        $talento = trim((string)($fila['numero_talento_gs'] ?? ''));
-        if ($nombre === '' || strtoupper($nombre) === 'VACANTE' || stripos($talento,'VACANTE') !== false) continue;
-        $lideres[(string)$id] = $nombre;
+        // La plaza de líder VACANTE continúa siendo válida por ID de posición.
+        // Motor HC ya certificó la plaza: no excluir a sus coaches.
+        $lideres[(string)$id] = ($nombre === '' ? 'VACANTE' : $nombre);
     }
     $lideresPorNombre = [];
     foreach ($lideres as $id => $nombre) {
+        // Solo un líder ocupado sirve para resolver autorreferencias por nombre.
+        // VACANTE no es una identidad personal ni un alias único.
+        if (strtoupper(trim($nombre)) === 'VACANTE') continue;
         $d = explode('|', $id, 2)[0];
         $lideresPorNombre[$d][tx_coach_nombre_clave_hc_staging($nombre)][] = $id;
     }
@@ -5091,6 +5094,39 @@ if ($tx_geo_sum_count > 0) {
         }
 
 
+        /* Evolución ISO: el total del último período vive en el encabezado,
+           no encima de la última barra (evita recorte a la derecha en 42 semanas). */
+        .tx-evo-caption-row {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            flex-wrap:wrap;
+            gap:7px 10px;
+            margin-bottom:6px;
+        }
+        .tx-evo-caption-row .evo-sub { margin-bottom:0; }
+        .tx-evo-last-total {
+            display:inline-flex;
+            align-items:center;
+            gap:7px;
+            padding:5px 10px;
+            background:#f0eeff;
+            border:1px solid #ddd6fe;
+            border-radius:999px;
+            color:#483679;
+            font-size:11px;
+            font-weight:800;
+            line-height:1.2;
+            white-space:nowrap;
+            font-variant-numeric:tabular-nums;
+        }
+        .tx-evo-last-total strong {
+            font-size:13px;
+            font-weight:950;
+            color:#17213a;
+        }
+        .tx-evo-last-total[hidden] { display:none; }
+
         /* INDEX – última etiqueta ARPU protegida contra recorte. */
         .tx-arpu-ultimo { display:flex;justify-content:space-between;align-items:baseline;
             flex-wrap:wrap;gap:5px 8px;margin:6px 0 3px;padding:7px 9px;
@@ -5760,11 +5796,27 @@ include __DIR__ . '/includes/sidebar.php';
         <div id="txEvoError" class="tx-evo-error" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal' && !$tx_evo_fuente_catalogo_ok) ? '' : 'display:none;' ?>">No se pudo verificar la clasificación comercial. Consulta el registro de errores; no se muestran resultados estimados.</div>
         <div class="evo-grid">
             <div>
-                <div class="evo-sub" id="txEvoVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                <div class="tx-evo-caption-row">
+                    <div class="evo-sub" id="txEvoVentSub"><?= htmlspecialchars($evo_vent_sub) ?></div>
+                    <?php if ($periodo === 'semanal' && $tx_evo_week_keys): ?>
+                    <div class="tx-evo-last-total" id="txEvoVentUltima" title="Total de ventas de la última semana mostrada">
+                        <span class="tx-evo-badge-semana">Última semana</span>
+                        <strong class="tx-evo-badge-total">—</strong>
+                    </div>
+                    <?php endif; ?>
+                </div>
                 <div class="tx-historical-scroll<?= $periodo === 'semanal' ? ' tx-weekly-scroll' : '' ?>" id="txVentEvoScroll"><div class="evo-wrap tx-weekly-evo-inner"><canvas id="cVentEvo"></canvas></div></div>
             </div>
             <div>
-                <div class="evo-sub" id="txEvoInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                <div class="tx-evo-caption-row">
+                    <div class="evo-sub" id="txEvoInstSub"><?= htmlspecialchars($evo_inst_sub) ?></div>
+                    <?php if ($periodo === 'semanal' && $tx_evo_week_keys): ?>
+                    <div class="tx-evo-last-total" id="txEvoInstUltima" title="Total de instalaciones de la última semana mostrada">
+                        <span class="tx-evo-badge-semana">Última semana</span>
+                        <strong class="tx-evo-badge-total">—</strong>
+                    </div>
+                    <?php endif; ?>
+                </div>
                 <div class="tx-historical-scroll<?= $periodo === 'semanal' ? ' tx-weekly-scroll' : '' ?>" id="txInstEvoScroll"><div class="evo-wrap tx-weekly-evo-inner"><canvas id="cInstEvo"></canvas></div></div>
             </div>
         </div>
@@ -6416,9 +6468,11 @@ const pluginTotalesArriba = {
     id: 'pluginTotalesArriba',
     afterDatasetsDraw: (chart) => {
         if (!chart.data.datasets || !chart.data.datasets.length) return;
+        // Las series semanales muestran su último TOTAL en la cabecera fija.
+        // No dibujar sobre la última barra: Chart.js recorta el texto en el borde.
+        if (txWeeklyMode) return;
         const ctx = chart.ctx;
         chart.data.datasets[0].data.forEach((_, index) => {
-            if (txWeeklyMode && index !== chart.data.labels.length-1) return;
             let total = 0;
             let topY = chart.scales.y.bottom;
             let metaX = 0;
@@ -6485,10 +6539,26 @@ function makeStackOpts(matrix){
             barPercentage: txCompactMode ? 0.9 : 0.9, maxBarThickness: txWeeklyMode ? 16 : (txDailyMode ? 32 : 42) } },
         plugins: { 
             legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
-            tooltip: { callbacks: { title: contexts => {
-                const i = contexts?.[0]?.dataIndex ?? -1;
-                return txDailyMode ? (txDailyFullLabels[i] ? txDailyFullLabels[i].split('-').reverse().join('/') : (labels6[i] || '')) : (labels6[i] || '');
-            } } },
+            tooltip: {
+                // Un solo tooltip por semana/mes/dia: todas las categorias y su total.
+                // En vez de repetir cifras sobre cada barra, los datos quedan al pasar el cursor.
+                mode: 'index',
+                intersect: false,
+                filter: item => Number(item.parsed?.y || 0) > 0,
+                callbacks: {
+                    title: contexts => {
+                        const i = contexts?.[0]?.dataIndex ?? -1;
+                        return txDailyMode ? (txDailyFullLabels[i] ? txDailyFullLabels[i].split('-').reverse().join('/') : (labels6[i] || '')) : (labels6[i] || '');
+                    },
+                    label: item => ' ' + item.dataset.label + ': ' + Number(item.parsed?.y || 0).toLocaleString('es-MX'),
+                    footer: items => {
+                        if (!items.length) return '';
+                        const total = items.reduce((s, item) => s + Number(item.parsed?.y || 0), 0);
+                        const tipo = txWeeklyMode ? 'SEMANAL' : (txDailyMode ? 'DIARIO' : 'MENSUAL');
+                        return 'TOTAL ' + tipo + ': ' + total.toLocaleString('es-MX');
+                    }
+                }
+            },
             datalabels: { 
                 display: (context) => !txCompactMode && context.dataset.data[context.dataIndex] > 0, 
                 color: '#ffffff',
@@ -6634,6 +6704,26 @@ function txRenderEvoTable(view, source){
     });
 }
 
+// Resumen ejecutivo del último período; se recalcula al alternar Canal/Oferta/Plays/Bundle.
+// Se suma la misma matriz que dibuja la gráfica. No requiere consultas adicionales.
+function txEvoMostrarUltimoTotal(id, matrix) {
+    const badge = document.getElementById(id);
+    if (!badge) return;
+    const last = labels6.length - 1;
+    const series = Array.isArray(matrix?.data) ? matrix.data : [];
+    if (last < 0 || !series.length) {
+        badge.hidden = true;
+        return;
+    }
+    const total = series.reduce((s, fila) => s + Number((fila || [])[last] || 0), 0);
+    const etiqueta = String(labels6[last] || '');
+    const semana = (etiqueta.match(/^S\d+/i) || [])[0] || 'Última semana';
+    badge.hidden = false;
+    badge.querySelector('.tx-evo-badge-semana').textContent = semana + ' · Total';
+    badge.querySelector('.tx-evo-badge-total').textContent = total.toLocaleString('es-MX');
+    badge.setAttribute('aria-label', semana + ': ' + total.toLocaleString('es-MX') + ' en total');
+}
+
 function txApplyEvoView(view, updateUrl = true){
     if (!txEvoViewCache[view]) view = 'canal';
     const cfg = txEvoViewCache[view];
@@ -6647,6 +6737,11 @@ function txApplyEvoView(view, updateUrl = true){
     txVentEvoChart.data.datasets = txEvoDatasets(vent);
     txVentEvoChart.options = makeStackOpts(vent.data);
     txVentEvoChart.update();
+
+    if (txWeeklyMode) {
+        txEvoMostrarUltimoTotal('txEvoInstUltima', inst);
+        txEvoMostrarUltimoTotal('txEvoVentUltima', vent);
+    }
 
     const mapText = {
         txEvoTitle: cfg.titulo,

@@ -1,69 +1,36 @@
 <?php
 /**
- * TALIA / RANKING COMERCIAL v0.1.3 - MINI BARRAS HORIZONTALES - MOTOR HC v0.6.2 + MOTOR COMERCIAL v0.2.0
- * ====================================================
- * MODULO INDEPENDIENTE (10-OCT-2026):
- * - Base fiel de ranking_productividad.php aportado para esta iteracion.
- * - Vendedores: bloque original conservado sin cambios funcionales.
- * - Lider y Coach (incluye ranking_coach): encabezados e indicadores
- *   comerciales equivalentes a Vendedor, por periodos BASE/ACTUAL.
- * - Los agregados parten EXCLUSIVAMENTE de las cuentas del Motor HC.
- * - Motor Comercial devuelve sumarios por vendedor, consolidados por
- *   id de lider o por pareja (lider_id, coach_id). NO reatribuye ventas.
- * - ARPU global = SUM(importe_neto) / SUM(cuentas_con_precio_valido);
- *   nunca promedio simple de ARPU por vendedor.
- * - Porcentajes = cuentas de categoria / instalaciones certificadas.
- * - Valida contra HC por cada fila y periodo; sin concordancia, se
- *   bloquea el enriquecimiento comercial y se preservan las INS HC.
- * - Totales y tarjetas se recalculan al filtrar distrito.
- * - No se modifica ni Motor HC ni Motor Comercial ni el Ranking original.
- * - Requiere PHP 8.1+ y los 2 motores en /plataforma/includes/.
- * - Validar resultados contra produccion antes de publicar en menu.
+ * TalIA / TotalXpedient · RANKING COMERCIAL v0.1.4 · PRODUCCIÓN
+ * ============================================================================
+ * Ubicación: /plataforma/detalle/ranking_comercial.php
+ * Dependencias: /plataforma/includes/motor_hc.php (v0.6.3)
+ *               /plataforma/includes/motor_comercial.php (v0.2.1)
+ * Escritura en BD: ninguna. Consume únicamente vistas y motores de lectura.
  *
- * OBJETIVO: nuevo Ranking Comercial semanal/mensual con la misma navegacion
- * y universo certificado que el ranking_productividad.php existente.
+ * OBJETIVO
+ * - Ranking comercial semanal y mensual para los niveles líder, coach y
+ *   vendedor; navegación canónica por DISTRITO|ID_POSICION.
+ * - Mantener idéntico universo de instalaciones de Ranking Productividad,
+ *   ahora sobre TODOS los orígenes, siempre certificado por Motor HC.
+ * - Separar responsabilidades: Motor HC determina cuenta/identidad/jerarquía
+ *   mediante foto HC e historial_identidad_colaborador (HIC); Motor Comercial
+ *   clasifica producto y calcula ARPU sin atribuir instalaciones.
+ * - Comparar BASE y ACTUAL, enriquecer con 2P/3P, Residencial/Negocios,
+ *   Bundle/No Bundle y precio lista neto de IVA (incluidos paquetes PYME).
+ * - ARPU consolidado = SUM(ingreso neto) / SUM(cuentas con precio válido);
+ *   nunca se promedian los ARPU individuales de los vendedores.
+ * - Si el enriquecimiento comercial no concilia, preservar las instalaciones
+ *   certificadas y comunicar la incidencia, sin corregir totales artificialmente.
  *
- * UBICACION: /plataforma/detalle/ranking_comercial.php
- * DEPENDENCIAS: /plataforma/includes/motor_hc.php (SIN CAMBIOS)
- *               /plataforma/includes/motor_comercial.php (NUEVO)
- * AUTORIZACION: sesion TalIA; todos los seis perfiles. Ranking REGIONAL, no jerarquico.
- * PARAMETROS HTTP: periodo, anio, semana, mes, anio_mes, rango_mode,
- * fecha_inicio, fecha_fin, dias_semana, view, distrito, lider, coach,
- * coach_pos, vendedor y folio. Ver validacion y selectores a continuacion.
- *
- * FUENTES: Motor HC para cuentas/jerarquias y fotos HC, tablas HC,
- * instalaciones y dias_inhabiles para vista, plantilla y productividad.
- * FLUJO: selecciona BASE/ACTUAL; consulta motor en ambos periodos;
- * obtiene catalogo dinamico de plazas de lider; reconstruye HC activo;
- * agrega por lider / coach / vendedor y pinta la tabla.
- * SALIDA: HTML; no escribe archivos ni modifica tablas.
- * ALCANCE: ranking regional productivo; no modifica motor HC ni Comercial.
- * FIX 09-OCT-2026: toda comparacion de distrito usa normalizador
- * de Motor HC; corrige el conteo HC y las relaciones de COATZA-MINA.
- * El texto del ocupante procede de HC; un ocupante VACANTE nunca se
- * reemplaza por el nombre de un colaborador escrito a mano.
- * FIX 12-OCT-2026: navegación por plaza única DISTRITO|ID_POSICION.
- * Nombres repetidos (VACANTE Cancún / Villahermosa) no cruzan distritos.
- * Enlaces históricos sin lider_id se validan por distrito y unicidad.
- * Motor HC y Motor Comercial permanecen sin cambios.
- * FIX 09-OCT-2026 (v0.6.2): consume el contrato del motor que resuelve
- * unicamente autorreferencias HC verificables por nombre del superior
- * contra plazas de lider univocas en la misma foto/distrito. Ranking NO
- * asigna ninguna cuenta ni cambia cifras por si mismo.
- *
- * IMPORTANTE: la presente actualización es visual. HC y Comercial preservan
- * sus reglas; validar funcionamiento tras publicar la vista.
- * EXTENSIÓN COMERCIAL (10-OCT-2026):
- * - Todas las vistas ejecutan Motor Comercial sobre las cuentas HC,
- *   pero la plantilla del nivel Vendedor conserva su implementacion original.
- * - Motor HC entrega las cuentas y atribuciones de BASE y ACTUAL.
- * - Motor Comercial clasifica esas cuentas mediante catalogo_paquetes.
- * - ARPU, 2P/3P, Oferta y Bundles comparan BASE y ACTUAL.
- * - Cada porcentaje usa el total HC certificado DEL MISMO período.
- * - DIF ARPU = ACTUAL - BASE, %DIF ARPU = DIF / BASE * 100.
- * - Sin ARPU en alguno de los períodos => diferencias no disponibles (—).
- * - Errores de clasificación NO ocultan las instalaciones HC del ranking.
- * - Control de despliegue: verificar cuentas e indicadores tras publicación.
+ * COMPATIBILIDAD 13-OCT-2026
+ * - Motor HC v0.6.3: salida '0.6.3-hc-all-channels', en BASE y ACTUAL.
+ * - Motor Comercial v0.2.1: VERSION '0.2.1-all-channels'.
+ * - Folios '-', vacíos y VACANTE no definen personas; HIC unifica migraciones
+ *   verificadas de número de talento, sin usar una misma plaza como identidad.
+ * - Se conservan los seis roles habilitados, calendario, filtros, mini barras,
+ *   claves de líder únicas, métricas y validaciones de integridad existentes.
+ * - La ampliación de orígenes se ejecuta en los motores; este Ranking solo
+ *   consume y presenta sus resultados sin duplicar reglas de certificación.
  */
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
@@ -891,8 +858,8 @@ lideres_activos AS (
 
 
 /**
- * TalIA Ranking STAGING v0.5 - ÚNICA fuente de instalaciones:
- * RankingAtribucionService v0.3 -> una fila por cuenta -> agrupaciones de vista.
+ * Ranking Comercial - ÚNICA fuente de instalaciones certificadas:
+ * Motor HC v0.6.3 -> una fila por cuenta -> agregación jerárquica.
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
@@ -1748,12 +1715,12 @@ ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'coaches') {
 /*
- * CANDIDATO STAGING v1.1 - Evento primero + continuidad Mercy/Jovany.
+ * Historial de atribución v1.1 - Evento primero + continuidad Mercy/Jovany.
  * Diagnostico SEM40: 50 cuentas Mercy/Jovany, 84 Maria Jose; todas coach unico.
  * Coach del evento prevalece; HC/HIC solo resuelve coach vacio de manera UNIVOCA.
  * Nunca se calcula NO IDENTIFICADO por diferencia de totales.
  * Identidad plaza 1739397: Jovany + Mercy (ambos nombres del evento).
- * Este cambio solo interviene view=coaches; no desplegar sin validar el resto.
+ * Esta regla se mantiene limitada a view=coaches y exige conciliación con HC.
  */
 $cond_ibase_hc_exists = str_replace('ibase.', 'ix.', $cond_ibase);
 $cond_iactual_hc_exists = str_replace('iactual.', 'ix.', $cond_iactual);
@@ -2321,10 +2288,10 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.2: ambos periodos deben provenir de la version exacta
-        // desplegada de Motor HC STAGING. La verificacion protege la comparacion
+        // CONTRATO v0.6.3: ambos periodos deben provenir de la version exacta
+        // desplegada de Motor HC en producción. La verificacion protege la comparacion
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.2-hc-position-staging';
+        $versionMotorRequerida05 = '0.6.3-hc-all-channels';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
@@ -2342,7 +2309,7 @@ if ($view !== 'ventas') {
         $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
         $rank05_auditoria=['base'=>$resBase05['conciliacion_comercial'],'actual'=>$resActual05['conciliacion_comercial']];
         /*
-         * MOTOR COMERCIAL v0.2.0: ENRIQUECIMIENTO, NO REATRIBUCIÓN.
+         * MOTOR COMERCIAL v0.2.1: ENRIQUECIMIENTO, NO REATRIBUCIÓN.
          * Nunca modifica $resBase05/$resActual05 ni Motor HC. En caso de error
          * mantiene íntegro el ranking de instalaciones y muestra advertencia.
          */
@@ -2350,6 +2317,13 @@ if ($view !== 'ventas') {
             try {
                 require_once __DIR__.'/../includes/motor_comercial.php';
                 $motorComercial05 = new MotorComercial($conexion);
+                // El universo HC multicanal exige el clasificador comercial homólogo.
+                // La incidencia solo desactiva el enriquecimiento, nunca las INS HC.
+                if (MotorComercial::VERSION !== '0.2.1-all-channels') {
+                    throw new RuntimeException(
+                        'Motor Comercial incompatible. Requerido 0.2.1-all-channels; disponible '.MotorComercial::VERSION
+                    );
+                }
                 $mixBase05 = $motorComercial05->resumirVendedores(
                     $resBase05['cuentas'], $fecha_inicio_base_calc, $fecha_fin_base_calc, $dias05
                 );
@@ -3266,7 +3240,7 @@ $dimensiones05 = [
 <section class="table-card">
     <div class="table-head">
         <strong>Resumen comparativo por vendedor del coach</strong>
-        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.2</span>
+        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.3 · Todos los orígenes</span>
     </div>
     <div class="table-wrap">
         <table class="sales-table commercial-compare-table" style="min-width:2390px">

@@ -1,6 +1,30 @@
-
-
 <?php
+/**
+ * TalIA / TotalXpedient · RANKING DE PRODUCTIVIDAD · PRODUCCIÓN
+ * ============================================================================
+ * Ubicación: /plataforma/detalle/ranking_productividad.php
+ * Dependencias: /plataforma/includes/motor_hc_v0.6.4_STATUS.php (STAGING v0.6.4)
+ *               /plataforma/includes/motor_comercial.php (v0.2.1)
+ * Escritura en BD: ninguna; vista de consulta.
+ *
+ * OBJETIVO
+ * - Mostrar Productividad semanal/mensual por líder, coach y vendedor,
+ *   con navegación por plaza canónica DISTRITO|ID_POSICION.
+ * - BASE y ACTUAL usan sus respectivas fechas y fotografías HC históricas.
+ * - Motor HC certifica una cuenta por período con todos los orígenes,
+ *   resolviendo identidad HIC y estructura HC por posiciones.
+ * - Motor Comercial añade ARPU, 2P/3P, Oferta y Bundle a esas mismas cuentas,
+ *   sin modificar su atribución ni el universo certificado.
+ * - El reporte mantiene filtros de distrito, intervalos, días seleccionados,
+ *   productividad diaria, HC activo y HC sin instalaciones.
+ *
+ * IMPLEMENTACIÓN 13-OCT-2026
+ * - Publicación de reglas multicanal certificadas y folios marcadores inválidos.
+ * - Se conservan calendario, filtros, controles de integridad, indicadores,
+ *   autenticación y navegación ya operativos en la vista de producción.
+ * - Si el enriquecimiento comercial falla, el conteo HC queda íntegro y
+ *   se muestra el estado de auditoría correspondiente.
+ */
 /*
  * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
@@ -53,14 +77,30 @@ error_reporting(0);
 header("Cache-Control: no-cache, no-store, must-revalidate");
 session_start();
 
-if (!isset($_SESSION['usuario'])) {
-    header("Location: ../login.php");
-    exit();
+if (empty($_SESSION['usuario'])) {
+    http_response_code(403);
+    exit('Sesión de TalIA no disponible. Inicia sesión desde la plataforma.');
 }
 
 include '../conexion.php';
 
-$rol = $_SESSION['rol'] ?? 'vendedor';
+/*
+ * TalIA - Rankings competitivos de la Region SUR (11-OCT-2026).
+ * Los seis perfiles autenticados consultan el MISMO universo regional.
+ * El rol se utiliza solo para AUTENTICACION/AUTORIZACION DE ENTRADA,
+ * nunca como filtro de distrito, HC, cuentas, lider, coach o vendedor.
+ * Motor HC y Motor Comercial conservan sus reglas de atribucion.
+ * El dashboard index.php sigue siendo jerarquico e independiente.
+ */
+$rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$roles_ranking = [
+    'admin', 'director_regional', 'director_distrital',
+    'lider', 'coach', 'vendedor'
+];
+if (!in_array($rol, $roles_ranking, true)) {
+    http_response_code(403);
+    exit('Perfil de TalIA no autorizado para Ranking.');
+}
 
 $roles_labels = [
     'admin'              => 'Administrador',
@@ -249,6 +289,7 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
         'hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual',
+        'hc_operativo_base','hc_operativo_actual',
         'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'
     ];
     $tot = array_fill_keys($keys, 0);
@@ -256,10 +297,12 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
         foreach ($keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
     }
     $tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_base'] = $tot['hc_activo_base'] > 0 ? round(($tot['hc_sin_venta_base'] / $tot['hc_activo_base']) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_actual'] = $tot['hc_activo_actual'] > 0 ? round(($tot['hc_sin_venta_actual'] / $tot['hc_activo_actual']) * 100, 0) : null;
-    $tot['prod_base'] = ($tot['hc_activo_base'] > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $tot['hc_activo_base'] / $dias_habiles_base, 2) : null;
-    $tot['prod_actual'] = ($tot['hc_activo_actual'] > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'] / $dias_habiles_actual, 2) : null;
+    $denBase = (float)$tot['hc_operativo_base'];
+    $denActual = (float)$tot['hc_operativo_actual'];
+    $tot['pct_hc_sin_ins_base'] = $denBase > 0 ? round(($tot['hc_sin_venta_base'] / $denBase) * 100, 0) : null;
+    $tot['pct_hc_sin_ins_actual'] = $denActual > 0 ? round(($tot['hc_sin_venta_actual'] / $denActual) * 100, 0) : null;
+    $tot['prod_base'] = ($denBase > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $denBase / $dias_habiles_base, 2) : null;
+    $tot['prod_actual'] = ($denActual > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $denActual / $dias_habiles_actual, 2) : null;
     return $tot;
 }
 
@@ -338,6 +381,7 @@ $has_next = (
 
 $view = $_GET['view'] ?? 'lideres';
 if (!in_array($view, ['lideres','ranking_coach','coaches','vendedores','ventas'], true)) $view = 'lideres';
+if ($view === 'ventas') $view = 'vendedores'; // Evita mostrar historial no deduplicado fuera del motor.
 
 $periodo = $_GET['periodo'] ?? 'semanal';
 if (!in_array($periodo, ['semanal','mensual'], true)) $periodo = 'semanal';
@@ -431,11 +475,10 @@ $hc_anio_actual = $anio_actual;
 $hc_semana_actual = $semana_actual;
 
 $hc_actual_fallback = false;
-if ($periodo === 'semanal' && !week_has_hc($conexion, $hc_anio_actual, $hc_semana_actual)) {
-    [$fallback_anio, $fallback_semana] = previous_iso_week($hc_anio_actual, $hc_semana_actual);
-    $hc_anio_actual = $fallback_anio;
-    $hc_semana_actual = $fallback_semana;
-    $hc_actual_fallback = true;
+if ($periodo === 'semanal') {
+    [$hc_anio_base, $hc_semana_base] = ultima_semana_hc_disponible_hasta($conexion, $anio_base, $semana_base);
+    [$hc_anio_actual, $hc_semana_actual] = ultima_semana_hc_disponible_hasta($conexion, $anio_actual, $semana_actual);
+    $hc_actual_fallback = ($hc_anio_actual !== $anio_actual || $hc_semana_actual !== $semana_actual);
 }
 
 if ($periodo === 'mensual') {
@@ -714,6 +757,8 @@ $cond_iactual_coach = str_replace('iactual.', 'iactual_coach.', $cond_iactual);
 
 $distrito_param  = $_GET['distrito'] ?? '';
 $lider_param     = $_GET['lider'] ?? '';
+// FIX 12-OCT-2026: plaza canonica DISTRITO|ID_POSICION; el nombre VACANTE no es una identidad.
+$lider_id_param  = trim((string)($_GET['lider_id'] ?? ''));
 $coach_param     = $_GET['coach'] ?? '';
 $coach_pos_param = $_GET['coach_pos'] ?? '';
 $vendedor_param  = $_GET['vendedor'] ?? '';
@@ -791,6 +836,350 @@ lideres_activos AS (
     UNION ALL SELECT 'TUXTLA', 'TUXTLA', 'SANCHEZ SANCHEZ CHRISTIANNE MIGUEL', 'CHRISTIANNE MIGUEL SANCHEZ SANCHEZ', NULL
     UNION ALL SELECT 'VILLAHERMOSA', 'VILLAHERMOSA', 'HERNANDEZ PALMA MIRIAN GABRIELA', 'MIRIAN GABRIELA HERNANDEZ PALMA', NULL
 )";
+
+
+/**
+ * Ranking v0.6.3 - Fuente única de instalaciones certificadas:
+ * RankingAtribucionService v0.3 -> una fila por cuenta -> agrupaciones de vista.
+ * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
+ */
+function rank05_name_key($nombre): string {
+    $s = RankingAtribucionServiceV06::norm((string)$nombre);
+    $p = array_values(array_filter(explode(' ', $s), static fn($x)=>$x!==''));
+    sort($p, SORT_STRING);
+    return implode(' ', $p);
+}
+function rank05_catalogo(RankingAtribucionServiceV06 $motor, string $desde, string $hasta): array {
+    return $motor->catalogoLideres($desde, $hasta);
+}
+function rank05_ficha(array $catalogo, string $liderId): array {
+    return $catalogo[$liderId] ?? ['distrito'=>'SIN_DISTRITO','hc'=>'','nombre'=>'LÍDER NO IDENTIFICADO','aliases'=>[],'plaza'=>null];
+}
+function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
+    $info=$motor->cargarHc($desde,$hasta);
+    $photos=$info['fotos'];
+    $ultima=null;
+    foreach ($photos as $k=>$p) { if ($p !== null) $ultima=$p; }
+    if ($ultima===null) throw new RuntimeException('No hay fotografía HC histórica anterior al período seleccionado');
+    $fotoKey=implode('-',$ultima);
+    $hcs=$info['datos'][$fotoKey] ?? [];
+    if (!$hcs) throw new RuntimeException('Fotografía HC sin filas: '.$fotoKey);
+    $idsPorNombre=[];
+    foreach ($catalogo as $lid=>$l) {
+        foreach (array_unique(array_merge([(string)$l['nombre']], $l['aliases'])) as $alias) {
+            $idKey=rank05_name_key($alias);
+            $idsPorNombre[$idKey][$lid]=true;
+        }
+    }
+    $coaches=[];$sellerByCoach=[];
+    // La plaza identifica una posición, no una persona; HC da su ocupante en esta fotografía.
+    foreach ($hcs as $h) {
+        if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
+        $nombreLineal=rank05_name_key($h['nombre_linea_reporte']??'');
+        // Misma clave canonica de distrito que utiliza Motor HC v0.6.1.
+        $distrito=RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null);
+        if ($distrito===null) continue;
+        $candidates=[];
+        foreach ($idsPorNombre[$nombreLineal]??[] as $lid=>$_) {
+            if ($distrito===($catalogo[$lid]['hc']??'')) $candidates[$lid]=true;
+        }
+        foreach ($catalogo as $lid=>$l) {
+            if ($l['plaza']!==null && (string)($h['posicion_lr']??'')===(string)$l['plaza'] && $distrito===$l['hc']) $candidates[$lid]=true;
+        }
+        if (count($candidates)!==1) continue;
+        $lid=(string)array_key_first($candidates);
+        $pos=(string)($h['id_posicion']??'');
+        if ($pos==='') continue;
+        $k=$lid.'|'.$pos;
+        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
+    }
+    if (!$coaches) throw new RuntimeException('Ningún coach de Región SUR pudo relacionarse con HC '.$fotoKey);
+    foreach ($hcs as $h) {
+        if (stripos((string)($h['puesto_lr']??''),'COACH')===false) continue;
+        $posCoach=(string)($h['posicion_lr']??'');
+        $idPos=(string)($h['id_posicion']??'');
+        if ($posCoach==='' || $idPos==='') continue;
+        foreach ($catalogo as $lid=>$l) {
+            $coachKey=$lid.'|'.$posCoach;
+            if (!isset($coaches[$coachKey]) || RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
+            $nombreVendedor=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'');
+            $vac=$nombreVendedor==='VACANTE';
+            $talento=(string)($h['numero_talento_gs']??'');
+            if ($talento==='' || $talento==='VACANTE') $vac=true;
+            $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
+
+            // Contrato Motor HC v0.6.4: STATUS/fecha_alta sólo enriquecen nivel vendedor.
+            // No se usan para recalcular Líder/Coach.
+            $estadoVendedor=RankingAtribucionServiceV06::clasificarEstadoVendedor(
+                $h['status']??null,
+                $h['nombre_colaborador']??null
+            );
+
+            // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
+            $sellerByCoach[$coachKey][$idPos]=[
+                'id_posicion'=>$idPos,
+                'persona'=>$persona,
+                'nombre'=>$nombreVendedor,
+                'vacante'=>$vac,
+                'status'=>(string)($h['status']??''),
+                'estado_hc'=>$estadoVendedor['estado_hc'],
+                'hc_total'=>$estadoVendedor['hc_total'],
+                'hc_ocupado'=>$estadoVendedor['hc_ocupado'],
+                'hc_activo'=>$estadoVendedor['hc_activo'],
+                'hc_operativo'=>$estadoVendedor['hc_operativo'],
+                'es_vacante_status'=>$estadoVendedor['es_vacante'],
+                'estado_valido'=>$estadoVendedor['valido'],
+                'fecha_alta'=>$h['fecha_alta']??null,
+            ];
+        }
+    }
+    return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
+}
+function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $eventos): array {
+    $filas=[];
+    foreach ($hc['vendedores'] as $k=>$seats) {
+        if (!str_starts_with($k, $lider.'|')) continue;
+        $idCoach=substr($k,strlen($lider)+1);
+        if ($coach!==null && $idCoach!==$coach) continue;
+        foreach ($seats as $pos=>$seat) $filas[$k.'|'.$pos]=$seat;
+    }
+
+    $identidadesConInst=[];
+    foreach ($eventos as $ev) {
+        if (($ev['lider_id']??null)!==$lider) continue;
+        if ($coach!==null && (string)($ev['coach_id']??'SIN_COACH')!==$coach) continue;
+        if (!empty($ev['vendedor_id'])) $identidadesConInst[(string)$ev['vendedor_id']]=true;
+    }
+
+    // v0.6.4 STATUS:
+    // - "activo" conserva la lectura de HC ocupado para no alterar HC Total ni la vista de plantilla.
+    // - "operativo" es el denominador elegible para productividad / HC sin INS.
+    // - INCAPACIDAD y VACACIONES siguen dentro del HC ocupado/total, pero NO del operativo.
+    // - VACANTE se valida a nivel vendedor mediante el contrato canónico del Motor HC.
+    $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
+
+    foreach ($filas as $seat) {
+        $esVacante=(bool)($seat['vacante']??false) || (bool)($seat['es_vacante_status']??false);
+        if ($esVacante) {
+            $vacante++;
+            continue;
+        }
+
+        // Toda plaza ocupada sigue contando para HC Activo/Total mostrado.
+        $activo++;
+
+        // Sólo vendedores operativamente disponibles participan del denominador.
+        $esOperativo=(int)($seat['hc_operativo']??1)===1;
+        if (!$esOperativo) continue;
+
+        $operativo++;
+        if (($seat['persona']??null)!==null && isset($identidadesConInst[(string)$seat['persona']])) {
+            $conOperativo++;
+        }
+    }
+
+    return [
+        'activo'=>$activo,
+        'operativo'=>$operativo,
+        'vacante'=>$vacante,
+        'con_ins'=>$conOperativo,
+    ];
+}
+function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?string $vendedor=null): int {
+    $n=0;
+    foreach ($filas as $r) {
+        if (($r['lider_id']??null)!==$lider) continue;
+        if ($coach!==null && (string)($r['coach_id']??'SIN_COACH')!==$coach) continue;
+        if ($vendedor!==null && (string)($r['vendedor_id']??'SIN_VENDEDOR')!==$vendedor) continue;
+        $n++;
+    }
+    return $n;
+}
+function rank05_row(string $lider, string $coachId, string $nombre, array $catalogo, int $insBase, int $insActual, array $hb, array $ha, int $diasBase, int $diasActual): array {
+    $l=rank05_ficha($catalogo,$lider);
+    $hcActivoBase=$hb['activo'];$hcActivoActual=$ha['activo'];
+    $hcOperativoBase=(int)($hb['operativo']??$hcActivoBase);
+    $hcOperativoActual=(int)($ha['operativo']??$hcActivoActual);
+    $sinBase=max(0,$hcOperativoBase-$hb['con_ins']);$sinActual=max(0,$hcOperativoActual-$ha['con_ins']);
+    $dif=$insActual-$insBase;
+    return [
+        'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],'lider_id'=>$lider,
+        'coach'=>$coachId!==''?$nombre:'','coach_pos'=>$coachId,'folio_empleado'=>'',
+        'ins_sem_base'=>$insBase,'ins_sem_actual'=>$insActual,'dif'=>$dif,
+        'pct_dif'=>$insBase>0?round(100*$dif/$insBase):null,
+        'hc_activo_base'=>$hcActivoBase,'hc_activo_actual'=>$hcActivoActual,
+        'hc_operativo_base'=>$hcOperativoBase,'hc_operativo_actual'=>$hcOperativoActual,
+        'hc_con_ins_base'=>$hb['con_ins'],'hc_con_ins_actual'=>$ha['con_ins'],
+        'hc_sin_venta_base'=>$sinBase,'hc_sin_venta_actual'=>$sinActual,
+        'pct_hc_sin_ins_base'=>$hcOperativoBase>0?round(100*$sinBase/$hcOperativoBase):null,
+        'pct_hc_sin_ins_actual'=>$hcOperativoActual>0?round(100*$sinActual/$hcOperativoActual):null,
+        'prod_base'=>($hcOperativoBase>0 && $diasBase>0)?round($insBase/$hcOperativoBase/$diasBase,2):null,
+        'prod_actual'=>($hcOperativoActual>0 && $diasActual>0)?round($insActual/$hcOperativoActual/$diasActual,2):null,
+        'activo_base'=>$hcActivoBase,'vacante_base'=>$hb['vacante'],'hc_total_base'=>$hcActivoBase+$hb['vacante'],
+        'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
+    ];
+}
+function rank05_antiguedad_corte(?string $fechaAlta, string $corte): array {
+    $fechaAlta=trim((string)$fechaAlta);
+    if ($fechaAlta==='' || $fechaAlta==='0000-00-00') return ['texto'=>'-','meses'=>0];
+
+    $alta=DateTimeImmutable::createFromFormat('!Y-m-d',$fechaAlta);
+    $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
+    if (!$alta || !$fin || $alta>$fin) return ['texto'=>'-','meses'=>0];
+
+    $diff=$alta->diff($fin);
+    $meses=((int)$diff->y*12)+(int)$diff->m;
+    $texto=$meses<12
+        ? $meses.' meses'
+        : ((int)$diff->y).' años '.((int)$diff->m).' meses';
+
+    return ['texto'=>$texto,'meses'=>$meses];
+}
+
+function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual, string $distritoParam='', string $liderIdParam='', string $corteBase='', string $corteActual=''): array {
+    $ids=array_keys($catalogo);
+    $seleccion=null;
+    if (in_array($view,['coaches','vendedores'],true)) {
+        $distrito=RankingAtribucionServiceV06::normalizarDistrito($distritoParam);
+        if ($distrito===null) throw new RuntimeException('Distrito no identificado al navegar por jerarquía');
+
+        if ($liderIdParam!=='') {
+            // La plaza, NO el nombre visible, identifica al líder incluso cuando está VACANTE.
+            if (!isset($catalogo[$liderIdParam]) || (string)$catalogo[$liderIdParam]['distrito']!==$distrito) {
+                throw new RuntimeException('La plaza del líder no corresponde al distrito seleccionado');
+            }
+            $seleccion=$liderIdParam;
+        } else {
+            // Compatibilidad con URLs anteriores. Exigir coincidencia UNÍVOCA por distrito.
+            $candidatos=[];
+            $nombreBuscado=rank05_name_key($liderParam);
+            foreach ($catalogo as $lid=>$l) {
+                if ((string)$l['distrito']!==$distrito) continue;
+                foreach (array_merge([(string)$l['nombre']],$l['aliases']??[]) as $alias) {
+                    if ($nombreBuscado!=='' && $nombreBuscado===rank05_name_key((string)$alias)) {
+                        $candidatos[$lid]=true;
+                        break;
+                    }
+                }
+            }
+            if (count($candidatos)!==1) {
+                throw new RuntimeException(count($candidatos)>1
+                    ? 'Nombre de líder ambiguo: regresa al Ranking y selecciona la plaza específica'
+                    : 'Líder no identificado en el distrito seleccionado');
+            }
+            $seleccion=(string)array_key_first($candidatos);
+        }
+        $ids=[$seleccion];
+    }
+    $rows=[];$matrix=[];
+    if (in_array($view,['lideres','ranking_coach','coaches'],true)) {
+        foreach ($ids as $lid) {
+            if ($view==='lideres') {
+                $hb=rank05_resumen_hc($fotoBase,$lid,null,$base);
+                $ha=rank05_resumen_hc($fotoActual,$lid,null,$actual);
+                $rows[]=rank05_row($lid,'',$catalogo[$lid]['nombre'],$catalogo,rank05_num_cuentas($base,$lid),rank05_num_cuentas($actual,$lid),$hb,$ha,$diasBase,$diasActual);
+                continue;
+            }
+            $coachIds=[];$nombres=[];
+            foreach ([$fotoBase,$fotoActual] as $h) foreach ($h['coaches'] as $c) {
+                if ($c['lider_id']===$lid) { $coachIds[$c['id']]=true; $nombres[$c['id']]=$c['nombre']; }
+            }
+            foreach ([$base,$actual] as $es) foreach ($es as $e) {
+                if (($e['lider_id']??null)!==$lid) continue;
+                $co=(string)($e['coach_id']??'SIN_COACH');
+                $coachIds[$co]=true;
+                if (!isset($nombres[$co])) $nombres[$co]=RankingAtribucionServiceV06::norm($e['coach_evento']??'');
+            }
+            foreach (array_keys($coachIds) as $co) {
+                $nombre=$nombres[$co]??'';
+                if ($co==='SIN_COACH') $nombre='COACH NO IDENTIFICADO';
+                elseif ($nombre==='' || $nombre==='VACANTE') {
+                    $nombre=($co==='VACANTE'?'VACANTE':(str_starts_with($co,'EVENT|') ? 'EVENTO · '.str_replace('|',' ',substr($co,strrpos($co,'|')+1)) : ('PLAZA '.$co)));
+                }
+                if (str_starts_with($co,'EVENT|')) $nombre.=' · IDENTIDAD PROVISIONAL';
+                $rows[]=rank05_row($lid,$co,$nombre,$catalogo,
+                    rank05_num_cuentas($base,$lid,$co),rank05_num_cuentas($actual,$lid,$co),
+                    rank05_resumen_hc($fotoBase,$lid,$co,$base),rank05_resumen_hc($fotoActual,$lid,$co,$actual),$diasBase,$diasActual);
+            }
+        }
+        usort($rows,static fn($a,$b)=>(int)$b['ins_sem_actual']<=>(int)$a['ins_sem_actual'] ?: strcmp($a['entidad'],$b['entidad']));
+    } elseif ($view==='vendedores') {
+        if ($coachPos==='') throw new RuntimeException('Falta ID de coach en la navegación canónica (coach_pos)');
+        $lid=$seleccion;
+        $ventas=[];
+        foreach (['base'=>$base,'actual'=>$actual] as $lado=>$es) foreach ($es as $r) {
+            if (($r['lider_id']??null)!==$lid || (string)($r['coach_id']??'SIN_COACH')!==$coachPos) continue;
+            $v=(string)($r['vendedor_id']??'SIN_VENDEDOR');
+            $ventas[$v] ??= ['base'=>0,'actual'=>0];
+            $ventas[$v][$lado]++;
+        }
+        $nombres=[];$metaVendedores=[];
+        foreach (['base'=>$fotoBase,'actual'=>$fotoActual] as $ladoFoto=>$h) {
+            foreach ($h['vendedores'][$lid.'|'.$coachPos]??[] as $seat) {
+                if ($seat['vacante'] || ($seat['es_vacante_status']??false) || $seat['persona']===null) continue;
+                $persona=(string)$seat['persona'];
+                $nombres[$persona]=$seat['nombre'];
+                $metaVendedores[$persona][$ladoFoto]=$seat;
+                $ventas[$persona] ??= ['base'=>0,'actual'=>0];
+            }
+        }
+        foreach ($ventas as $v=>$vcts) {
+            $nombre=$nombres[$v]??($v==='SIN_VENDEDOR'?'VENDEDOR NO IDENTIFICADO':'FOLIO '.$v);
+            $metaActual=$metaVendedores[$v]['actual']??[];
+            $metaBase=$metaVendedores[$v]['base']??[];
+            $fechaAlta=(string)($metaActual['fecha_alta']??($metaBase['fecha_alta']??''));
+            $corteAntig=$corteActual!==''?$corteActual:date('Y-m-d');
+            $antig=rank05_antiguedad_corte($fechaAlta,$corteAntig);
+
+            $matrix[$lid.'|'.$coachPos.'|'.$v]=[
+                'vendedor'=>$nombre,
+                'folio_empleado'=>$v==='SIN_VENDEDOR'?'':$v,
+                'fecha_alta'=>$fechaAlta,
+                'antiguedad'=>$antig['texto'],
+                'antiguedad_meses'=>$antig['meses'],
+                'status_base'=>(string)($metaBase['status']??''),
+                'status_actual'=>(string)($metaActual['status']??''),
+                'estado_hc_base'=>(string)($metaBase['estado_hc']??'ACTIVO'),
+                'estado_hc_actual'=>(string)($metaActual['estado_hc']??'ACTIVO'),
+                'hc_total_base'=>(int)($metaBase['hc_total']??0),
+                'hc_total_actual'=>(int)($metaActual['hc_total']??0),
+                'hc_operativo_base'=>(int)($metaBase['hc_operativo']??0),
+                'hc_operativo_actual'=>(int)($metaActual['hc_operativo']??0),
+                'ins_base'=>$vcts['base'],'ins_actual'=>$vcts['actual'],
+                'total'=>$vcts['base']+$vcts['actual'],
+                'doble_play'=>0,'triple_play'=>0,'residencial'=>0,'negocios'=>0,
+            ];
+        }
+        uasort($matrix,static fn($a,$b)=>($b['ins_actual']<=>$a['ins_actual']) ?: strcmp($a['vendedor'],$b['vendedor']));
+    }
+    // Prueba independiente del indicador HC: cuentas únicas y conservación exacta de jerarquía.
+    $verifica=function(array $eventos,string $lado) use ($catalogo): void {
+        $keys=[];$leaders=[];$coaches=[];$vendedores=[];
+        foreach ($eventos as $ev) {
+            $cuenta=(string)($ev['cuenta']??'');
+            if ($cuenta==='' || isset($keys[$cuenta])) throw new LogicException('Cuenta ausente o duplicada en '.$lado);
+            $keys[$cuenta]=true;
+            $lid=(string)($ev['lider_id']??'SIN_LIDER');
+            $co=(string)($ev['coach_id']??'SIN_COACH');
+            $ve=(string)($ev['vendedor_id']??'SIN_VENDEDOR');
+            $leaders[$lid]=($leaders[$lid]??0)+1;
+            $coaches[$lid.'|'.$co]=($coaches[$lid.'|'.$co]??0)+1;
+            $vendedores[$lid.'|'.$co.'|'.$ve]=($vendedores[$lid.'|'.$co.'|'.$ve]??0)+1;
+        }
+        if (array_sum($leaders)!==count($keys) || array_sum($coaches)!==count($keys) || array_sum($vendedores)!==count($keys)) throw new LogicException('Discrepancia jerárquica en '.$lado);
+    };
+    $verifica($base,'BASE');$verifica($actual,'ACTUAL');
+    if ($view==='lideres' && (array_sum(array_column($rows,'ins_sem_base'))!==count($base) || array_sum(array_column($rows,'ins_sem_actual'))!==count($actual))) {
+        throw new LogicException('Ranking líder no conserva universo motor');
+    }
+    if ($view==='coaches') {
+        if (array_sum(array_column($rows,'ins_sem_base'))!==rank05_num_cuentas($base,$seleccion) || array_sum(array_column($rows,'ins_sem_actual'))!==rank05_num_cuentas($actual,$seleccion)) throw new LogicException('Ranking coach no conserva universo líder');
+    }
+    if ($view==='vendedores') {
+        if (array_sum(array_column($matrix,'ins_base'))!==rank05_num_cuentas($base,$seleccion,$coachPos) || array_sum(array_column($matrix,'ins_actual'))!==rank05_num_cuentas($actual,$seleccion,$coachPos)) throw new LogicException('Ranking vendedor no conserva universo coach');
+    }
+    return ['rows'=>$rows,'matrix'=>$matrix,'total_base'=>count($base),'total_actual'=>count($actual)];
+}
 
 $query_error = '';
 $rows = [];
@@ -1396,26 +1785,20 @@ WHERE
 ORDER BY prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'coaches') {
-
 /*
- * FIX funcionalidad mensual drill-down Lider -> Coach
- * ---------------------------------------------------
- * El timeout se provocaba en esta vista por hacer matching flexible de nombres
- * directamente contra instalaciones dentro de varios LEFT JOIN, generando una
- * consulta muy pesada cuando periodo=mensual.
- *
- * Ajuste quirúrgico:
- * 1) Primero se agregan instalaciones por coach del evento en install_base/install_actual.
- * 2) Después se hace el match contra coaches_base sobre un set pequeño ya agregado.
- * 3) El renglón SIN COACH se calcula por diferencia contra el total del líder.
- *
- * No se modifica la lógica comercial ni los labels de salida.
+ * Vista de coaches: evento primero y continuidad de plaza Mercy/Jovany.
+ * Diagnostico SEM40: 50 cuentas Mercy/Jovany, 84 Maria Jose; todas coach unico.
+ * Coach del evento prevalece; HC/HIC solo resuelve coach vacio de manera UNIVOCA.
+ * Nunca se calcula NO IDENTIFICADO por diferencia de totales.
+ * Identidad plaza 1739397: Jovany + Mercy (ambos nombres del evento).
+ * La vista conserva las validaciones históricas de atribución por coach.
  */
+$cond_ibase_hc_exists = str_replace('ibase.', 'ix.', $cond_ibase);
+$cond_iactual_hc_exists = str_replace('iactual.', 'ix.', $cond_iactual);
 $sql = "
 WITH {$lideres_cte},
 selected_lider AS (
-    SELECT *
-    FROM lideres_activos
+    SELECT * FROM lideres_activos
     WHERE (distrito_reporte = '{$distrito_sql}' OR distrito_hc = '{$distrito_hc_sql}')
       AND lider_hc = '{$lider_sql}'
 ),
@@ -1531,228 +1914,209 @@ vendedores AS (
             OR UPPER(TRIM(hic.nombre_colaborador)) = UPPER(TRIM(h.nombre_colaborador))
         )
 ),
-install_base AS (
-    SELECT
-        la.distrito_reporte AS distrito,
-        la.lider_hc AS lider,
-        UPPER(TRIM(i.coach)) AS coach_inst,
-        COUNT(DISTINCT i.cuenta) AS ins_sem_base
+-- Fotos HC para ambos periodos y resolucion HIC vigentes
+snapshot_coaches AS (
+    SELECT distrito, lider, coach,
+           CASE WHEN coach = 'VACANTE' THEN CONCAT('VACANTE|', coach_pos)
+                ELSE UPPER(TRIM(coach)) END AS coach_key,
+           MAX(coach_pos) AS coach_pos
+    FROM coaches_base
+    GROUP BY distrito, lider, coach, coach_pos
+),
+-- Universo UNICO de cuentas por periodo/lider. No sumar cuentas dos veces.
+eventos_raw AS (
+    SELECT la.distrito_reporte AS distrito, la.lider_hc AS lider,
+           'BASE' AS periodo_key, i.cuenta, i.fecha, i.folio_empleado,
+           UPPER(TRIM(COALESCE(i.coach,''))) AS coach_evento
     FROM selected_lider la
-    INNER JOIN instalaciones i
-        ON i.lider = la.lider_instalaciones
-       AND {$cond_i_base}
-    GROUP BY la.distrito_reporte, la.lider_hc, UPPER(TRIM(i.coach))
-),
-install_actual AS (
-    SELECT
-        la.distrito_reporte AS distrito,
-        la.lider_hc AS lider,
-        UPPER(TRIM(i.coach)) AS coach_inst,
-        COUNT(DISTINCT i.cuenta) AS ins_sem_actual
-    FROM selected_lider la
-    INNER JOIN instalaciones i
-        ON i.lider = la.lider_instalaciones
-       AND {$cond_i_actual}
-    GROUP BY la.distrito_reporte, la.lider_hc, UPPER(TRIM(i.coach))
-),
-ventas_base AS (
-    SELECT
-        c.coach_key,
-        SUM(ib.ins_sem_base) AS ins_sem_base
-    FROM coaches_match c
-    INNER JOIN install_base ib
-        ON ib.distrito = c.distrito
-       AND ib.lider = c.lider
-       AND (
-            ib.coach_inst = UPPER(TRIM(c.coach))
-            OR (
-                ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
-                AND ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%')
-            )
-            OR (
-                ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 2), '%')
-                AND ib.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -2), '%')
-            )
-       )
-    GROUP BY c.coach_key
-),
-ventas_actual AS (
-    SELECT
-        c.coach_key,
-        SUM(ia.ins_sem_actual) AS ins_sem_actual
-    FROM coaches_match c
-    INNER JOIN install_actual ia
-        ON ia.distrito = c.distrito
-       AND ia.lider = c.lider
-       AND (
-            ia.coach_inst = UPPER(TRIM(c.coach))
-            OR (
-                ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 1), '%')
-                AND ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -1), '%')
-            )
-            OR (
-                ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', 2), '%')
-                AND ia.coach_inst LIKE CONCAT('%', SUBSTRING_INDEX(UPPER(TRIM(c.coach)), ' ', -2), '%')
-            )
-       )
-    GROUP BY c.coach_key
-),
-ventas_base_hc AS (
-    SELECT
-        v.coach_key,
-        COUNT(DISTINCT ibase.cuenta) AS ins_sem_base_hc
-    FROM vendedores v
-    INNER JOIN instalaciones ibase
-        ON (ibase.folio_empleado = v.folio_empleado OR ibase.folio_empleado = v.folio_unificado OR ibase.folio_empleado = v.folio_anterior OR ibase.folio_empleado = v.folio_nuevo)
-       AND {$cond_ibase}
-    WHERE v.anio={$hc_anio_base}
-      AND v.semana={$hc_semana_base}
-    GROUP BY v.coach_key
-),
-ventas_actual_hc AS (
-    SELECT
-        v.coach_key,
-        COUNT(DISTINCT iactual.cuenta) AS ins_sem_actual_hc
-    FROM vendedores v
-    INNER JOIN instalaciones iactual
-        ON (iactual.folio_empleado = v.folio_empleado OR iactual.folio_empleado = v.folio_unificado OR iactual.folio_empleado = v.folio_anterior OR iactual.folio_empleado = v.folio_nuevo)
-       AND {$cond_iactual}
-    WHERE v.anio={$hc_anio_actual}
-      AND v.semana={$hc_semana_actual}
-    GROUP BY v.coach_key
-),
-resumen AS (
-    SELECT
-        c.distrito,
-        c.lider,
-        c.coach AS entidad,
-        c.coach,
-        c.coach_pos,
-        c.coach_key,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' THEN v.folio_unificado END) AS hc_activo_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE') THEN v.id_posicion END) AS vacante_actual,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND ibase.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_base,
-        COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual} AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE' AND iactual.folio_empleado IS NOT NULL THEN v.folio_unificado END) AS hc_con_ins_actual
-    FROM coaches_base c
-    LEFT JOIN vendedores v ON c.coach_key = v.coach_key AND c.anio = v.anio AND c.semana = v.semana
-    LEFT JOIN instalaciones ibase
-        ON (ibase.folio_empleado = v.folio_empleado OR ibase.folio_empleado = v.folio_unificado OR ibase.folio_empleado = v.folio_anterior OR ibase.folio_empleado = v.folio_nuevo)
-       AND {$cond_ibase}
-       AND v.anio={$hc_anio_base}
-       AND v.semana={$hc_semana_base}
-    LEFT JOIN instalaciones iactual
-        ON (iactual.folio_empleado = v.folio_empleado OR iactual.folio_empleado = v.folio_unificado OR iactual.folio_empleado = v.folio_anterior OR iactual.folio_empleado = v.folio_nuevo)
-       AND {$cond_iactual}
-       AND v.anio={$hc_anio_actual}
-       AND v.semana={$hc_semana_actual}
-    GROUP BY c.distrito, c.lider, c.coach, c.coach_key
-),
-total_lider AS (
-    SELECT
-        la.distrito_reporte AS distrito,
-        la.lider_hc AS lider,
-        COALESCE((SELECT SUM(ins_sem_base) FROM install_base), 0) AS total_base,
-        COALESCE((SELECT SUM(ins_sem_actual) FROM install_actual), 0) AS total_actual
-    FROM selected_lider la
-),
-matched_lider AS (
-    SELECT
-        COALESCE(SUM({$venta_base_expr}), 0) AS matched_base,
-        COALESCE(SUM({$venta_actual_expr}), 0) AS matched_actual
-    FROM resumen r
-    LEFT JOIN ventas_base vb ON r.coach_key = vb.coach_key
-    LEFT JOIN ventas_actual va ON r.coach_key = va.coach_key
-    LEFT JOIN ventas_base_hc vbh ON r.coach_key = vbh.coach_key
-    LEFT JOIN ventas_actual_hc vah ON r.coach_key = vah.coach_key
-),
-sin_coach AS (
-    SELECT
-        t.distrito,
-        t.lider,
-        GREATEST(t.total_base - m.matched_base, 0) AS ins_sem_base,
-        GREATEST(t.total_actual - m.matched_actual, 0) AS ins_sem_actual
-    FROM total_lider t
-    CROSS JOIN matched_lider m
-)
-SELECT *
-FROM (
-    SELECT
-        r.distrito,
-        r.entidad,
-        r.lider,
-        r.coach,
-        r.coach_pos,
-        '' AS folio_empleado,
-        {$venta_base_expr} AS ins_sem_base,
-        {$venta_actual_expr} AS ins_sem_actual,
-        {$venta_actual_expr} - {$venta_base_expr} AS dif,
-        ROUND((({$venta_actual_expr} - {$venta_base_expr}) / NULLIF({$venta_base_expr},0)) * 100,0) AS pct_dif,
-        r.hc_activo_base,
-        r.hc_activo_actual,
-        r.hc_con_ins_base,
-        r.hc_con_ins_actual,
-        r.hc_activo_base - r.hc_con_ins_base AS hc_sin_venta_base,
-        r.hc_activo_actual - r.hc_con_ins_actual AS hc_sin_venta_actual,
-        ROUND(((r.hc_activo_base - r.hc_con_ins_base) / NULLIF(r.hc_activo_base,0)) * 100,0) AS pct_hc_sin_ins_base,
-        ROUND(((r.hc_activo_actual - r.hc_con_ins_actual) / NULLIF(r.hc_activo_actual,0)) * 100,0) AS pct_hc_sin_ins_actual,
-        ROUND({$venta_base_expr} / NULLIF(r.hc_activo_base * {$dias_habiles_base},0),2) AS prod_base,
-        ROUND({$venta_actual_expr} / NULLIF(r.hc_activo_actual * {$dias_habiles_actual},0),2) AS prod_actual,
-        r.hc_activo_base AS activo_base,
-        r.vacante_base,
-        r.hc_activo_base + r.vacante_base AS hc_total_base,
-        r.hc_activo_actual AS activo_actual,
-        r.vacante_actual,
-        r.hc_activo_actual + r.vacante_actual AS hc_total_actual
-    FROM resumen r
-    LEFT JOIN ventas_base vb ON r.coach_key = vb.coach_key
-    LEFT JOIN ventas_actual va ON r.coach_key = va.coach_key
-    LEFT JOIN ventas_base_hc vbh ON r.coach_key = vbh.coach_key
-    LEFT JOIN ventas_actual_hc vah ON r.coach_key = vah.coach_key
-
+    INNER JOIN instalaciones i ON (
+        UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
+        OR (la.lider_pos = '1739397'
+            AND UPPER(TRIM(i.lider)) = 'MERCY GUADALUPE ESTRADA MEDINA')
+    ) AND {$cond_i_base}
+    WHERE i.cuenta IS NOT NULL AND TRIM(i.cuenta) <> ''
     UNION ALL
-
-    SELECT
-        distrito,
-        'SIN COACH / NO ENCONTRADO EN HC' AS entidad,
-        lider,
-        'SIN COACH / NO ENCONTRADO EN HC' AS coach,
-        '' AS coach_pos,
-        '' AS folio_empleado,
-        ins_sem_base,
-        ins_sem_actual,
-        ins_sem_actual - ins_sem_base AS dif,
-        ROUND(((ins_sem_actual - ins_sem_base) / NULLIF(ins_sem_base,0)) * 100,0) AS pct_dif,
-        0 AS hc_activo_base,
-        0 AS hc_activo_actual,
-        0 AS hc_con_ins_base,
-        0 AS hc_con_ins_actual,
-        0 AS hc_sin_venta_base,
-        0 AS hc_sin_venta_actual,
-        NULL AS pct_hc_sin_ins_base,
-        NULL AS pct_hc_sin_ins_actual,
-        NULL AS prod_base,
-        NULL AS prod_actual,
-        0 AS activo_base,
-        0 AS vacante_base,
-        0 AS hc_total_base,
-        0 AS activo_actual,
-        0 AS vacante_actual,
-        0 AS hc_total_actual
-    FROM sin_coach
-    WHERE (ins_sem_base + ins_sem_actual) > 0
-) final
-WHERE
-       COALESCE(ins_sem_base,0) > 0
-    OR COALESCE(ins_sem_actual,0) > 0
-    OR COALESCE(hc_total_base,0) > 0
-    OR COALESCE(hc_total_actual,0) > 0
-ORDER BY
-    CASE WHEN entidad = 'SIN COACH / NO ENCONTRADO EN HC' THEN 1 ELSE 0 END,
-    prod_actual DESC,
-    ins_sem_actual DESC,
-    entidad ASC
+    SELECT la.distrito_reporte, la.lider_hc,
+           'ACTUAL', i.cuenta, i.fecha, i.folio_empleado,
+           UPPER(TRIM(COALESCE(i.coach,'')))
+    FROM selected_lider la
+    INNER JOIN instalaciones i ON (
+        UPPER(TRIM(i.lider)) = UPPER(TRIM(la.lider_instalaciones))
+        OR (la.lider_pos = '1739397'
+            AND UPPER(TRIM(i.lider)) = 'MERCY GUADALUPE ESTRADA MEDINA')
+    ) AND {$cond_i_actual}
+    WHERE i.cuenta IS NOT NULL AND TRIM(i.cuenta) <> ''
+),
+-- Si una misma cuenta tiene mas de un nombre de coach, no elegir arbitrariamente.
+eventos_cuenta AS (
+    SELECT distrito, lider, periodo_key, cuenta,
+           COUNT(DISTINCT CASE
+               WHEN coach_evento NOT IN ('','-','VACANTE','SIN COACH','NO IDENTIFICADO')
+               THEN coach_evento END) AS coaches_distintos,
+           MIN(CASE
+               WHEN coach_evento NOT IN ('','-','VACANTE','SIN COACH','NO IDENTIFICADO')
+               THEN coach_evento END) AS coach_evento,
+           COUNT(DISTINCT NULLIF(folio_empleado,'')) AS folios_distintos,
+           MIN(NULLIF(folio_empleado,'')) AS folio_evento
+    FROM eventos_raw
+    GROUP BY distrito, lider, periodo_key, cuenta
+),
+-- Resolver nombres invertidos / alias solo con match de HC NO ambiguo.
+-- Eventos sin coach directo podran recurrir a HC/HIC por folio.
+match_directo AS (
+    SELECT e.distrito,e.lider,e.periodo_key,e.cuenta,
+           COUNT(DISTINCT c.coach_key) AS opciones,
+           MIN(c.coach_key) AS coach_key,
+           MIN(c.coach) AS coach
+    FROM eventos_cuenta e
+    INNER JOIN snapshot_coaches c
+      ON c.distrito=e.distrito AND c.lider=e.lider
+     AND e.coaches_distintos=1
+     AND c.coach <> 'VACANTE'
+     AND (
+         e.coach_evento = UPPER(TRIM(c.coach))
+         OR (e.coach_evento LIKE CONCAT('%',SUBSTRING_INDEX(UPPER(TRIM(c.coach)),' ',1),'%')
+             AND e.coach_evento LIKE CONCAT('%',SUBSTRING_INDEX(UPPER(TRIM(c.coach)),' ',-1),'%'))
+         OR (e.coach_evento LIKE CONCAT('%',SUBSTRING_INDEX(UPPER(TRIM(c.coach)),' ',2),'%')
+             AND e.coach_evento LIKE CONCAT('%',SUBSTRING_INDEX(UPPER(TRIM(c.coach)),' ',-2),'%'))
+     )
+    GROUP BY e.distrito,e.lider,e.periodo_key,e.cuenta
+),
+-- Evidencia de estructura: solo cuando no hay coach de evento y folio unico.
+match_hc AS (
+    SELECT e.distrito,e.lider,e.periodo_key,e.cuenta,
+           COUNT(DISTINCT v.coach_key) AS opciones,
+           MIN(v.coach_key) AS coach_key,
+           MIN(v.coach) AS coach
+    FROM eventos_cuenta e
+    INNER JOIN vendedores v
+       ON v.distrito=e.distrito AND v.lider=e.lider
+      AND ((e.periodo_key='BASE' AND v.anio={$hc_anio_base} AND v.semana={$hc_semana_base})
+        OR (e.periodo_key='ACTUAL' AND v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual}))
+      AND (e.folio_evento=v.folio_empleado
+        OR e.folio_evento=v.folio_unificado
+        OR e.folio_evento=v.folio_anterior
+        OR e.folio_evento=v.folio_nuevo)
+    WHERE e.coaches_distintos=0 AND e.folios_distintos=1
+      AND v.coach <> 'VACANTE'
+    GROUP BY e.distrito,e.lider,e.periodo_key,e.cuenta
+),
+-- Garantiza UNA atribucion por cuenta y periodo, sin compensacion artificial.
+atribucion AS (
+    SELECT e.distrito,e.lider,e.periodo_key,e.cuenta,
+       CASE
+         WHEN e.coaches_distintos=1 AND COALESCE(md.opciones,0)=1 THEN md.coach_key
+         WHEN e.coaches_distintos=1 THEN CONCAT('EVENT|',e.coach_evento)
+         WHEN e.coaches_distintos=0 AND COALESCE(mh.opciones,0)=1 THEN mh.coach_key
+         ELSE 'NO_IDENTIFICADO'
+       END AS coach_key,
+       CASE
+         WHEN e.coaches_distintos=1 AND COALESCE(md.opciones,0)=1 THEN md.coach
+         WHEN e.coaches_distintos=1 THEN e.coach_evento
+         WHEN e.coaches_distintos=0 AND COALESCE(mh.opciones,0)=1 THEN mh.coach
+         ELSE 'COACH NO IDENTIFICADO'
+       END AS coach,
+       CASE
+         WHEN e.coaches_distintos=1 THEN 'EVENTO'
+         WHEN e.coaches_distintos=0 AND COALESCE(mh.opciones,0)=1 THEN 'HC_HIC'
+         ELSE 'NO_IDENTIFICADO'
+       END AS fuente
+    FROM eventos_cuenta e
+    LEFT JOIN match_directo md
+       ON md.distrito=e.distrito AND md.lider=e.lider
+      AND md.periodo_key=e.periodo_key AND md.cuenta=e.cuenta
+    LEFT JOIN match_hc mh
+       ON mh.distrito=e.distrito AND mh.lider=e.lider
+      AND mh.periodo_key=e.periodo_key AND mh.cuenta=e.cuenta
+),
+ins_coach AS (
+    SELECT distrito,lider,coach_key,MAX(coach) AS coach,
+       COUNT(DISTINCT CASE WHEN periodo_key='BASE' THEN cuenta END) AS ins_sem_base,
+       COUNT(DISTINCT CASE WHEN periodo_key='ACTUAL' THEN cuenta END) AS ins_sem_actual
+    FROM atribucion
+    GROUP BY distrito,lider,coach_key
+),
+-- Universo combinado: roster HC y coaches que tuvieron eventos aunque hayan rotado.
+universo AS (
+    SELECT distrito,lider,coach_key,MAX(coach) AS coach,
+           MAX(coach_pos) AS coach_pos
+    FROM (
+       SELECT distrito,lider,coach_key,coach,coach_pos FROM snapshot_coaches
+       UNION ALL
+       SELECT distrito,lider,coach_key,coach,'' AS coach_pos FROM ins_coach
+    ) x
+    GROUP BY distrito,lider,coach_key
+),
+-- HC se calcula por fotografia, independiente de las instalaciones atribuidas.
+hc_agrupado AS (
+    SELECT v.distrito,v.lider,v.coach_key,
+       COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base}
+           AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE'
+           THEN v.folio_unificado END) AS hc_activo_base,
+       COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual}
+           AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE'
+           THEN v.folio_unificado END) AS hc_activo_actual,
+       COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base}
+           AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE')
+           THEN v.id_posicion END) AS vacante_base,
+       COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual}
+           AND (v.folio_empleado='VACANTE' OR v.nombre_colaborador='VACANTE')
+           THEN v.id_posicion END) AS vacante_actual,
+       COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_base} AND v.semana={$hc_semana_base}
+           AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE'
+           AND EXISTS (SELECT 1 FROM instalaciones ix
+                       WHERE {$cond_ibase_hc_exists}
+                       AND (ix.folio_empleado=v.folio_empleado
+                         OR ix.folio_empleado=v.folio_unificado
+                         OR ix.folio_empleado=v.folio_anterior
+                         OR ix.folio_empleado=v.folio_nuevo))
+           THEN v.folio_unificado END) AS hc_con_ins_base,
+       COUNT(DISTINCT CASE WHEN v.anio={$hc_anio_actual} AND v.semana={$hc_semana_actual}
+           AND v.folio_empleado <> 'VACANTE' AND v.nombre_colaborador <> 'VACANTE'
+           AND EXISTS (SELECT 1 FROM instalaciones ix
+                       WHERE {$cond_iactual_hc_exists}
+                       AND (ix.folio_empleado=v.folio_empleado
+                         OR ix.folio_empleado=v.folio_unificado
+                         OR ix.folio_empleado=v.folio_anterior
+                         OR ix.folio_empleado=v.folio_nuevo))
+           THEN v.folio_unificado END) AS hc_con_ins_actual
+    FROM vendedores v
+    GROUP BY v.distrito,v.lider,v.coach_key
+),
+resultado AS (
+    SELECT u.distrito,u.lider,u.coach AS entidad,u.coach,u.coach_pos,
+           COALESCE(ic.ins_sem_base,0) AS ins_sem_base,
+           COALESCE(ic.ins_sem_actual,0) AS ins_sem_actual,
+           COALESCE(ha.hc_activo_base,0) AS hc_activo_base,
+           COALESCE(ha.hc_activo_actual,0) AS hc_activo_actual,
+           COALESCE(ha.hc_con_ins_base,0) AS hc_con_ins_base,
+           COALESCE(ha.hc_con_ins_actual,0) AS hc_con_ins_actual,
+           COALESCE(ha.vacante_base,0) AS vacante_base,
+           COALESCE(ha.vacante_actual,0) AS vacante_actual
+    FROM universo u
+    LEFT JOIN ins_coach ic ON ic.distrito=u.distrito AND ic.lider=u.lider AND ic.coach_key=u.coach_key
+    LEFT JOIN hc_agrupado ha ON ha.distrito=u.distrito AND ha.lider=u.lider AND ha.coach_key=u.coach_key
+)
+SELECT r.distrito,r.entidad,r.lider,r.coach,r.coach_pos,'' AS folio_empleado,
+       r.ins_sem_base,r.ins_sem_actual,
+       r.ins_sem_actual-r.ins_sem_base AS dif,
+       ROUND((r.ins_sem_actual-r.ins_sem_base)/NULLIF(r.ins_sem_base,0)*100,0) AS pct_dif,
+       r.hc_activo_base,r.hc_activo_actual,r.hc_con_ins_base,r.hc_con_ins_actual,
+       r.hc_activo_base-r.hc_con_ins_base AS hc_sin_venta_base,
+       r.hc_activo_actual-r.hc_con_ins_actual AS hc_sin_venta_actual,
+       ROUND((r.hc_activo_base-r.hc_con_ins_base)/NULLIF(r.hc_activo_base,0)*100,0) AS pct_hc_sin_ins_base,
+       ROUND((r.hc_activo_actual-r.hc_con_ins_actual)/NULLIF(r.hc_activo_actual,0)*100,0) AS pct_hc_sin_ins_actual,
+       ROUND(r.ins_sem_base/NULLIF(r.hc_activo_base*{$dias_habiles_base},0),2) AS prod_base,
+       ROUND(r.ins_sem_actual/NULLIF(r.hc_activo_actual*{$dias_habiles_actual},0),2) AS prod_actual,
+       r.hc_activo_base AS activo_base,r.vacante_base,
+       r.hc_activo_base+r.vacante_base AS hc_total_base,
+       r.hc_activo_actual AS activo_actual,r.vacante_actual,
+       r.hc_activo_actual+r.vacante_actual AS hc_total_actual
+FROM resultado r
+WHERE r.ins_sem_base>0 OR r.ins_sem_actual>0
+   OR r.hc_activo_base+r.vacante_base>0 OR r.hc_activo_actual+r.vacante_actual>0
+ORDER BY CASE WHEN r.coach='COACH NO IDENTIFICADO' THEN 1 ELSE 0 END,
+         prod_actual DESC, ins_sem_actual DESC, entidad ASC
 ";
 } elseif ($view === 'vendedores') {
 /*
@@ -1925,8 +2289,103 @@ ORDER BY semana ASC
 ";
 }
 
-$res = mysqli_query($conexion, $sql);
 $coach_matrix = [];
+$rank05_estado='';
+$rank05_fotografias=[];
+$rank05_auditoria=[];
+$comercial05_ok=false;
+$comercial05_error='';
+$comercial05_auditoria=[];
+if ($view !== 'ventas') {
+    try {
+        require_once __DIR__.'/../includes/motor_hc_v0.6.4_STATUS.php';
+        $motor05=new RankingAtribucionServiceV06($conexion);
+        $catalogo05=rank05_catalogo($motor05,$fecha_inicio_base_calc,$fecha_fin_actual_calc);
+        $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
+        $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
+        $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
+        // CONTRATO v0.6.3: ambos periodos deben provenir de la versión exacta
+        // desplegada de Motor HC. La verificación protege la comparación
+        // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
+        $versionMotorRequerida05 = '0.6.4-hc-status-vendedor-all-channels';
+        if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
+            throw new RuntimeException(
+                'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
+                '; BASE='.($resBase05['version'] ?? 'SIN_VERSION').
+                '; ACTUAL='.($resActual05['version'] ?? 'SIN_VERSION')
+            );
+        }
+        $canonicos05=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
+        $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
+        $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
+        $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
+        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual,(string)$distrito_param,(string)$lider_id_param,$fecha_fin_base_calc,$fecha_fin_actual_calc);
+        $rows=$datos05['rows'];
+        $coach_matrix=$datos05['matrix'];
+        $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
+        $rank05_auditoria=['base'=>$resBase05['conciliacion_comercial'],'actual'=>$resActual05['conciliacion_comercial']];
+        /*
+         * MOTOR COMERCIAL v0.2.1: ENRIQUECIMIENTO, NO REATRIBUCIÓN.
+         * Nunca modifica $resBase05/$resActual05 ni Motor HC. En caso de error
+         * mantiene íntegro el ranking de instalaciones y muestra advertencia.
+         */
+        if ($view === 'vendedores') {
+            try {
+                require_once __DIR__.'/../includes/motor_comercial.php';
+                $motorComercial05 = new MotorComercial($conexion);
+                $mixBase05 = $motorComercial05->resumirVendedores(
+                    $resBase05['cuentas'], $fecha_inicio_base_calc, $fecha_fin_base_calc, $dias05
+                );
+                $mixActual05 = $motorComercial05->resumirVendedores(
+                    $resActual05['cuentas'], $fecha_inicio_actual_calc, $fecha_fin_actual_calc, $dias05
+                );
+                // Preparamos toda la matriz fuera de la vista; commit atómico.
+                $nuevaMatrix05 = $coach_matrix;
+                foreach ($nuevaMatrix05 as $clave05 => &$fila05) {
+                    $b05 = $mixBase05[$clave05] ?? MotorComercial::resumenVacio();
+                    $a05 = $mixActual05[$clave05] ?? MotorComercial::resumenVacio();
+                    if ((int)$b05['total'] !== (int)$fila05['ins_base'] ||
+                        (int)$a05['total'] !== (int)$fila05['ins_actual']) {
+                        throw new LogicException(
+                            'CONTRASTE NO CONCILIADO en vendedor '.($fila05['vendedor'] ?? $clave05).
+                            ' (HC BASE/ACTUAL='.$fila05['ins_base'].'/'.$fila05['ins_actual'].
+                            ', Comercial='.$b05['total'].'/'.$a05['total'].')'
+                        );
+                    }
+                    $fila05['arpu_base'] = $b05['arpu'];
+                    $fila05['arpu_actual'] = $a05['arpu'];
+                    $fila05['arpu_cuentas_base'] = $b05['arpu_cuentas'];
+                    $fila05['arpu_cuentas_actual'] = $a05['arpu_cuentas'];
+                    $fila05['arpu_neto_base'] = $b05['arpu_ingreso_neto'];
+                    $fila05['arpu_neto_actual'] = $a05['arpu_ingreso_neto'];
+                     // Conserva los contadores de AMBOS periodos. La atribucion
+                     // HC no cambia: solo anexa las propiedades comerciales.
+                     foreach (['doble_play','triple_play','play_sin_clasificar',
+                               'residencial','negocios','oferta_sin_clasificar',
+                               'no_bundle','bundle','bundle_sin_clasificar',
+                               'catalogo_sin_match','catalogo_ambiguo',
+                               'instalacion_no_encontrada','instalacion_plan_ambiguo',
+                               'arpu_fuente_catalogo','arpu_precio_ambiguo'] as $campo05) {
+                         $fila05[$campo05.'_base'] = $b05[$campo05];
+                         $fila05[$campo05.'_actual'] = $a05[$campo05];
+                    }
+                }
+                unset($fila05);
+                $coach_matrix = $nuevaMatrix05;
+                $comercial05_ok = true;
+                $comercial05_auditoria = ['base_grupos'=>count($mixBase05), 'actual_grupos'=>count($mixActual05)];
+            } catch (Throwable $comError05) {
+                $comercial05_error = $comError05->getMessage();
+                // NO se borra $coach_matrix: HC v0.6.3 sigue siendo autoridad.
+            }
+        }
+
+    } catch (Throwable $e) {
+        $query_error='Motor canónico: '.$e->getMessage();
+        $rows=[]; $coach_matrix=[];
+    }
+} else {
+$res = mysqli_query($conexion, $sql);
 if (!$res) {
     $query_error = mysqli_error($conexion);
 } else {
@@ -1980,6 +2439,25 @@ if (!$res) {
     }
 }
 
+} // FIN ruta heredada solo para vista ventas. Ranking L/C/V proviene exclusivamente del motor.
+
+// Orden inicial canónico: productividad DIARIA del período ACTUAL (SEM/mes seleccionado), descendente.
+// Solo ordena la presentación; no modifica datos, jerarquías ni indicadores del Motor HC.
+if (in_array($view, ['lideres', 'ranking_coach', 'coaches'], true)) {
+    usort($rows, static function (array $a, array $b): int {
+        $pa = ($a['prod_actual'] ?? null);
+        $pb = ($b['prod_actual'] ?? null);
+        // Productividad no disponible siempre después de las productividades calculadas.
+        $aNull = ($pa === null || $pa === '');
+        $bNull = ($pb === null || $pb === '');
+        if ($aNull !== $bNull) return $aNull ? 1 : -1;
+        $cmp = (float)$pb <=> (float)$pa;
+        if ($cmp !== 0) return $cmp;
+        $cmp = (int)($b['ins_sem_actual'] ?? 0) <=> (int)($a['ins_sem_actual'] ?? 0);
+        return $cmp !== 0 ? $cmp : strcmp((string)($a['entidad'] ?? ''), (string)($b['entidad'] ?? ''));
+    });
+}
+
 $tot = base_metrics_totals($rows, $dias_habiles_base, $dias_habiles_actual);
 $districts = [];
 if (in_array($view, ['lideres','ranking_coach'], true)) {
@@ -1993,12 +2471,15 @@ $title_label = [
     'lideres'        => 'Ranking de Productividad',
     'ranking_coach'  => 'Ranking Coach',
     'coaches'        => 'Ranking por Coach',
-    'vendedores' => 'Ventas Semanales del Coach',
+    'vendedores' => 'Instalaciones del Coach',
     'ventas'     => 'Ventas Semanales del Vendedor',
 ][$view];
 
 /* Mantener el rango seleccionado al navegar entre niveles del ranking. */
+// v0.5: la metodología canónica es la vista principal; no existe modo paralelo.
+$motor_modo = false;
 $nav_estado = [
+    'motor'       => $motor_modo ? '1' : '0',
     'periodo'     => $periodo,
     'anio'        => $anio_actual,
     'semana'      => $semana_actual,
@@ -2016,8 +2497,8 @@ if ($periodo === 'mensual') {
 
 $base_link = '?' . qs(array_merge($nav_estado, ['view'=>'lideres']));
 $ranking_coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'ranking_coach']));
-$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param]));
-$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
+$lider_link = '?' . qs(array_merge($nav_estado, ['view'=>'coaches', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'lider_id'=>$lider_id_param]));
+$coach_link = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores', 'distrito'=>$distrito_param, 'lider'=>$lider_param, 'lider_id'=>$lider_id_param, 'coach'=>$coach_param, 'coach_pos'=>$coach_pos_param]));
 
 $subtitle = ($periodo === 'mensual' ? 'MTD día vencido · ' : '') . "Comparativo {$label_periodo_base} vs {$label_periodo_actual} · {$fecha_label} · " . ($roles_labels[$rol] ?? $rol);
 if ($periodo === 'semanal') $subtitle .= " · Días: {$dias_semana_label}";
@@ -2055,11 +2536,35 @@ body.page-ranking .calendar-day.adjacent-month.selected-start,
 body.page-ranking .calendar-day.adjacent-month.selected-end,
 body.page-ranking .calendar-day.adjacent-month.in-range { opacity:1; }
 body.page-ranking .calendar-day.disabled-date { opacity:.20; cursor:not-allowed; }
+/* Solo tabla de vendedores: separación legible de 4 comparativos. */
+body.page-ranking .commercial-compare-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
+body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
+body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
+body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
+body.page-ranking .vendedor-status{
+    display:block;
+    width:max-content;
+    max-width:100%;
+    margin-top:4px;
+    padding:2px 7px;
+    border-radius:999px;
+    font-size:.67rem;
+    font-weight:800;
+    line-height:1.35;
+    letter-spacing:.02em;
+}
+body.page-ranking .vendedor-status--incapacidad{ color:#9a3412; background:#ffedd5; }
+body.page-ranking .vendedor-status--vacaciones{ color:#075985; background:#e0f2fe; }
+body.page-ranking .vendedor-status--base{ opacity:.82; }
+body.page-ranking .vendedor-status--actual{ opacity:1; }
+body.page-ranking .vendedor-status--alerta{ color:#991b1b; background:#fee2e2; }
+
 </style>
 
 </head>
 <body class="page-ranking">
 <?php
+// Sidebar compartido de TalIA, igual al Ranking de Productividad productivo.
 $current_page = 'ranking';
 include __DIR__ . '/../includes/sidebar.php';
 ?>
@@ -2275,7 +2780,7 @@ include __DIR__ . '/../includes/sidebar.php';
                     <span class="breadcrumb-sep">›</span>
                     <?php if ($view === 'coaches'): ?>
                         <span class="breadcrumb-current">👤 <?= h($lider_param) ?></span>
-                    <?php elseif ($view === 'vendedores'): ?>
+                    <?php elseif (!$query_error && $view === 'vendedores'): ?>
                         <a class="breadcrumb-link" href="<?= h($lider_link) ?>">👤 <?= h($lider_param) ?></a>
                         <span class="breadcrumb-sep">›</span>
                         <span class="breadcrumb-current">🧭 <?= h($coach_param) ?></span>
@@ -2300,7 +2805,17 @@ include __DIR__ . '/../includes/sidebar.php';
 
 <?php if ($query_error): ?><div class="error">Error al generar ranking: <?= h($query_error) ?></div><?php endif; ?>
 
-<?php if (!in_array($view, ['ventas','vendedores'], true)): ?>
+<?php
+/* Conciliacion comercial interna del motor v0.5.1.
+ * Se conserva en $rank05_auditoria para trazabilidad tecnica,
+ * pero no se presenta en la interfaz operativa del Ranking.
+ */
+?>
+
+
+<?php if ($query_error): ?>
+<section class="table-card" style="padding:20px"><strong>No se muestran indicadores porque el motor no pudo calcularlos.</strong><p>Corrige el error informado arriba y vuelve a cargar la página.</p></section>
+<?php elseif (!in_array($view, ['ventas','vendedores'], true)): ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones <?= h($label_periodo_actual) ?></div><div class="value" id="kpi-ins-actual"><?= fmt_num($tot['ins_sem_actual']) ?></div><div class="hint"><?= h($label_periodo_base) ?>: <span id="kpi-ins-base"><?= fmt_num($tot['ins_sem_base']) ?></span></div></div>
     <div class="card"><div class="label">Diferencia</div><div class="value" id="kpi-dif"><?= fmt_num($tot['dif']) ?></div><div class="hint"><span id="kpi-pct"><?= $tot['pct_dif'] === null ? '-' : fmt_num($tot['pct_dif']).'%' ?></span> vs semana anterior</div></div>
@@ -2356,15 +2871,17 @@ include __DIR__ . '/../includes/sidebar.php';
                 <?php $rank=1; foreach($rows as $r):
                     $href = '';
                     if ($view === 'lideres') {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider']]));
+                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id']]));
                     } elseif (in_array($view, ['coaches','ranking_coach'], true)) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
+                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
                     } elseif ($view === 'vendedores' && !empty($r['folio_empleado'])) {
-                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]));
+                        $href = '?' . qs(array_merge($nav_estado, ['view'=>'ventas','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$lider_id_param,'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos'],'vendedor'=>$r['entidad'],'folio'=>$r['folio_empleado']]));
                     }
                 ?>
                 <tr class="data-row <?= $href ? 'clickable' : '' ?>" data-href="<?= h($href) ?>" data-district="<?= h($r['distrito']) ?>"
-                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
+                    data-op-base="<?= h($r['hc_operativo_base'] ?? 0) ?>"
+                    data-op-actual="<?= h($r['hc_operativo_actual'] ?? 0) ?>"
+                    <?php foreach(['ins_sem_base','ins_sem_actual','dif','pct_dif','hc_activo_base','hc_activo_actual','hc_operativo_base','hc_operativo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','prod_base','prod_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'] as $k): ?>
                     data-<?= h($k) ?>="<?= h($r[$k] ?? 0) ?>"
                     <?php endforeach; ?>>
                     <td class="center"><span class="rank"><?= $rank++ ?></span></td>
@@ -2413,153 +2930,218 @@ include __DIR__ . '/../includes/sidebar.php';
 </section>
 <?php elseif ($view === 'vendedores'): ?>
 <?php
+/**
+ * TALIA - COMPARATIVO COMERCIAL VENDEDOR (FORMATO PROD 10-OCT-2026)
+ * ----------------------------------------------------------
+ * Mismo universo certificado del Motor HC para BASE y ACTUAL.
+ * Mix = cuentas clasificadas / TODAS las cuentas HC del MISMO periodo.
+ * ARPU se agrega por importe neto y cuentas validas (no por promedio simple
+ * de ARPU entre vendedores). Si no existe ARPU en BASE o ACTUAL, DIF/%DIF
+ * permanecen sin dato. Motor Comercial y Motor HC no se modifican aqui.
+ */
 $total_coach = 0;
 $mejor_vendedor = '';
 $mejor_total = -1;
+$camposComerciales05 = [
+    'doble_play','triple_play','play_sin_clasificar',
+    'residencial','negocios','oferta_sin_clasificar',
+    'no_bundle','bundle','bundle_sin_clasificar',
+    'catalogo_sin_match','catalogo_ambiguo',
+    'instalacion_no_encontrada','instalacion_plan_ambiguo',
+    'arpu_fuente_catalogo','arpu_precio_ambiguo'
+];
+$sum05 = array_fill_keys([
+    'ins_base','ins_actual',
+    'arpu_cuentas_base','arpu_cuentas_actual',
+    'arpu_neto_base','arpu_neto_actual'
+], 0);
+foreach ($camposComerciales05 as $campo05) {
+    $sum05[$campo05.'_base'] = 0;
+    $sum05[$campo05.'_actual'] = 0;
+}
 foreach ($coach_matrix as $v) {
-    // KPI del Coach = únicamente periodo ACTUAL; BASE sólo sirve para comparativo.
-    $ventas_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
+    $ventas_actual_v = (int)($v['ins_actual'] ?? 0);
     $total_coach += $ventas_actual_v;
     if ($ventas_actual_v > $mejor_total) {
         $mejor_total = $ventas_actual_v;
-        $mejor_vendedor = $v['vendedor'];
+        $mejor_vendedor = (string)($v['vendedor'] ?? '');
     }
+    foreach ($sum05 as $campo05 => &$valor05) {
+        $valor05 += (float)($v[$campo05] ?? 0);
+    }
+    unset($valor05);
 }
+// ARPU TOTAL = suma de importes netos / suma de cuentas con precio valido.
+$arpuTotBase05 = $sum05['arpu_cuentas_base'] > 0
+    ? $sum05['arpu_neto_base'] / $sum05['arpu_cuentas_base'] : null;
+$arpuTotActual05 = $sum05['arpu_cuentas_actual'] > 0
+    ? $sum05['arpu_neto_actual'] / $sum05['arpu_cuentas_actual'] : null;
+$pct_mc05 = static function($parte, $total): ?int {
+    return (float)$total > 0 ? (int)round(100 * (float)$parte / (float)$total) : null;
+};
+$arpuDif05 = static function($base, $actual): ?float {
+    return $base === null || $actual === null ? null : (float)$actual-(float)$base;
+};
+$arpuPctDif05 = static function($base, $actual): ?float {
+    return $base === null || $actual === null || (float)$base <= 0
+        ? null : (100 * ((float)$actual-(float)$base) / (float)$base);
+};
+$fmtDifArpu05 = static function($dif): string {
+    if ($dif === null) return '—';
+    $v = (float)$dif;
+    return ($v > 0 ? '+' : ($v < 0 ? '−' : '')).'$'.fmt_num(abs($v), 2);
+};
+$fmtPctArpu05 = static function($pct): string {
+    if ($pct === null) return '—';
+    $v = (float)$pct;
+    return ($v > 0 ? '+' : ($v < 0 ? '−' : '')).fmt_num(abs($v), 1).'%';
+};
+// Orden solicitado: cada dimensión BASE y ACTUAL, seguida por la siguiente.
+$dimensiones05 = [
+    ['campo'=>'doble_play', 'rotulo'=>'% 2P'],
+    ['campo'=>'triple_play', 'rotulo'=>'% 3P'],
+    ['campo'=>'residencial', 'rotulo'=>'% RES.'],
+    ['campo'=>'negocios', 'rotulo'=>'% NEG.'],
+    ['campo'=>'no_bundle', 'rotulo'=>'% NO BUNDLE'],
+    ['campo'=>'bundle', 'rotulo'=>'% BUNDLE'],
+];
 ?>
 <section class="cards">
-    <div class="card"><div class="label">Ventas del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
+    <div class="card"><div class="label">Instalaciones del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
     <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura <?= h($label_col_base) ?> o <?= h($label_col_actual) ?></div></div>
-    <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> ventas</div></div>
+    <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> instalaciones</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
 </section>
-
+<?php if (!$comercial05_ok): ?>
+<section class="table-card" style="padding:15px 20px; margin-bottom:16px">
+    <strong>Motor HC operativo · Mix comercial no disponible.</strong>
+    <p><?= h($comercial05_error ?: 'No se ha podido obtener clasificación comercial.') ?></p>
+    <p>No se alteran las instalaciones de los vendedores. Verifica el motor en <code>includes/motor_comercial.php</code>.</p>
+</section>
+<?php endif; ?>
 <section class="table-card">
     <div class="table-head">
-        <strong>Resumen por vendedor del coach</strong>
-        <span>Comparativo <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Mix comercial <?= h($label_col_actual) ?></span>
+        <strong>Resumen comparativo por vendedor del coach</strong>
+        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.4 · Todos los orígenes</span>
     </div>
     <div class="table-wrap">
-        <table class="sales-table" style="min-width:1280px">
+        <table class="sales-table commercial-compare-table" style="min-width:2390px">
             <thead>
                 <tr>
-                    <th>Nombre vendedor</th>
-                    <th class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="doble">2P <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_doble">% 2P <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="triple">3P <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_triple">% 3P <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="resid">Resid. <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_resid">% Resid. <span class="sort-icon">↕</span></th>
-                    <th class="num matrix-sortable" data-sort="neg">Neg. <span class="sort-icon">↕</span></th>
-                    <th class="center matrix-sortable" data-sort="pct_neg">% Neg. <span class="sort-icon">↕</span></th>
+                    <th rowspan="2">Nombre vendedor</th>
+                    <th rowspan="2" class="center matrix-sortable" data-sort="antiguedad">Antigüedad <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num matrix-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num matrix-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="num matrix-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
+                    <th rowspan="2" class="center matrix-sortable" data-sort="pct_dif">% Dif. <span class="sort-icon">↕</span></th>
+                    <th colspan="4" class="group center">ARPU</th>
+                    <th colspan="4" class="group center">PLAYS</th>
+                    <th colspan="4" class="group center">OFERTA (RESIDENCIAL / NEGOCIOS)</th>
+                    <th colspan="4" class="group center">BUNDLES</th>
+                </tr>
+                <tr>
+                    <th class="num matrix-sortable" data-sort="arpu_base">$ARPU<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="arpu_actual">$ARPU<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <th class="num matrix-sortable" data-sort="arpu_dif">DIF $ <span class="sort-icon">↕</span></th>
+                    <th class="center matrix-sortable" data-sort="arpu_pct_dif">% DIF <span class="sort-icon">↕</span></th>
+                    <?php foreach ($dimensiones05 as $dimension05): ?>
+                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_base"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
+                        <th class="center matrix-sortable" data-sort="pct_<?= h($dimension05['campo']) ?>_actual"><?= h($dimension05['rotulo']) ?><br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
+                    <?php endforeach; ?>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($coach_matrix as $v): ?>
                 <?php
-                        $ins_base_v = (int)($v['semanas'][$semana_base] ?? 0);
-                        $ins_actual_v = (int)($v['semanas'][$semana_actual] ?? 0);
-                        $dif_v = $ins_actual_v - $ins_base_v;
-                        $pct_v = $ins_base_v > 0 ? round(($dif_v / $ins_base_v) * 100, 0) : null;
-                        $total_v = (int)$v['total'];
-                        $doble_v = (int)$v['doble_play'];
-                        $triple_v = (int)$v['triple_play'];
-                        $resid_v = (int)$v['residencial'];
-                        $neg_v = (int)$v['negocios'];
-                        $mix_total_v = $doble_v + $triple_v;
-                        $segmento_total_v = $resid_v + $neg_v;
-                        $pct_doble = $mix_total_v > 0 ? round(($doble_v / $mix_total_v) * 100, 0) : null;
-                        $pct_triple = $mix_total_v > 0 ? round(($triple_v / $mix_total_v) * 100, 0) : null;
-                        $pct_resid = $segmento_total_v > 0 ? round(($resid_v / $segmento_total_v) * 100, 0) : null;
-                        $pct_neg = $segmento_total_v > 0 ? round(($neg_v / $segmento_total_v) * 100, 0) : null;
-                        $antig_meses = 0;
-                        if (is_numeric($v['antiguedad'])) {
-                            $antig_meses = (float)$v['antiguedad'];
-                        } elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) {
-                            $antig_meses = ((int)$m[1] * 12) + (int)$m[2];
-                        } elseif (preg_match('/(\d+) meses/', (string)$v['antiguedad'], $m)) {
-                            $antig_meses = (int)$m[1];
-                        }
-                    ?>
+                    $ins_base_v = (int)($v['ins_base'] ?? 0);
+                    $ins_actual_v = (int)($v['ins_actual'] ?? 0);
+                    $dif_v = $ins_actual_v - $ins_base_v;
+                    $pct_v = $pct_mc05($dif_v, $ins_base_v);
+                    $ab05 = $comercial05_ok ? ($v['arpu_base'] ?? null) : null;
+                    $aa05 = $comercial05_ok ? ($v['arpu_actual'] ?? null) : null;
+                    $difArpu05 = $arpuDif05($ab05, $aa05);
+                    $pctArpu05 = $arpuPctDif05($ab05, $aa05);
+                    $mixPct05 = [];
+                    foreach ($dimensiones05 as $dimension05) {
+                        $campo05 = $dimension05['campo'];
+                        $mixPct05[$campo05.'_base'] = $comercial05_ok
+                            ? $pct_mc05($v[$campo05.'_base'] ?? 0, $ins_base_v) : null;
+                        $mixPct05[$campo05.'_actual'] = $comercial05_ok
+                            ? $pct_mc05($v[$campo05.'_actual'] ?? 0, $ins_actual_v) : null;
+                    }
+                    $antig_meses = (int)($v['antiguedad_meses'] ?? 0);
+                    $estado_hc_base_v = strtoupper(trim((string)($v['estado_hc_base'] ?? 'ACTIVO')));
+                    $estado_hc_actual_v = strtoupper(trim((string)($v['estado_hc_actual'] ?? 'ACTIVO')));
+                ?>
                 <tr class="matrix-row"
                     data-antiguedad="<?= h($antig_meses) ?>"
-                    data-ins_base="<?= h($ins_base_v) ?>"
-                    data-ins_actual="<?= h($ins_actual_v) ?>"
-                    data-dif="<?= h($dif_v) ?>"
-                    data-pct_dif="<?= h($pct_v ?? 0) ?>"
-                    data-doble="<?= h($doble_v) ?>"
-                    data-pct_doble="<?= h($pct_doble ?? 0) ?>"
-                    data-triple="<?= h($triple_v) ?>"
-                    data-pct_triple="<?= h($pct_triple ?? 0) ?>"
-                    data-resid="<?= h($resid_v) ?>"
-                    data-pct_resid="<?= h($pct_resid ?? 0) ?>"
-                    data-neg="<?= h($neg_v) ?>"
-                    data-pct_neg="<?= h($pct_neg ?? 0) ?>">
-                    <td class="entity"><?= h($v['vendedor']) ?></td>
+                    data-ins_base="<?= h($ins_base_v) ?>" data-ins_actual="<?= h($ins_actual_v) ?>"
+                    data-dif="<?= h($dif_v) ?>" data-pct_dif="<?= h($pct_v ?? -999999) ?>"
+                    data-arpu_base="<?= h($ab05 ?? -999999) ?>" data-arpu_actual="<?= h($aa05 ?? -999999) ?>"
+                    data-arpu_dif="<?= h($difArpu05 ?? -999999) ?>" data-arpu_pct_dif="<?= h($pctArpu05 ?? -999999) ?>"
+                    <?php foreach ($dimensiones05 as $dimension05):
+                        $campo05=$dimension05['campo']; ?>
+                        data-pct_<?= h($campo05) ?>_base="<?= h($mixPct05[$campo05.'_base'] ?? -999999) ?>"
+                        data-pct_<?= h($campo05) ?>_actual="<?= h($mixPct05[$campo05.'_actual'] ?? -999999) ?>"
+                    <?php endforeach; ?>>
+                    <td class="entity">
+                        <?= h($v['vendedor']) ?>
+                        <?php if (in_array($estado_hc_base_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
+                            <span class="vendedor-status vendedor-status--base vendedor-status--<?= strtolower(h($estado_hc_base_v)) ?>"><?= h($label_col_base) ?> · <?= h($estado_hc_base_v) ?></span>
+                        <?php endif; ?>
+                        <?php if (in_array($estado_hc_actual_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
+                            <span class="vendedor-status vendedor-status--actual vendedor-status--<?= strtolower(h($estado_hc_actual_v)) ?>"><?= h($label_col_actual) ?> · <?= h($estado_hc_actual_v) ?></span>
+                        <?php endif; ?>
+                        <?php if (str_starts_with($estado_hc_actual_v, 'INCONSISTENTE')): ?>
+                            <span class="vendedor-status vendedor-status--alerta">REVISAR HC · <?= h($estado_hc_actual_v) ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
                     <td class="num"><?= fmt_num($ins_base_v) ?></td>
                     <td class="num"><?= fmt_num($ins_actual_v) ?></td>
                     <td class="num"><?= fmt_num($dif_v) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '-' : fmt_num($pct_v).'%' ?></span></td>
-                    <td class="num"><?= fmt_num($doble_v) ?></td>
-                    <td class="center"><?= $pct_doble === null ? '-' : fmt_num($pct_doble).'%' ?></td>
-                    <td class="num"><?= fmt_num($triple_v) ?></td>
-                    <td class="center"><?= $pct_triple === null ? '-' : fmt_num($pct_triple).'%' ?></td>
-                    <td class="num"><?= fmt_num($resid_v) ?></td>
-                    <td class="center"><?= $pct_resid === null ? '-' : fmt_num($pct_resid).'%' ?></td>
-                    <td class="num"><?= fmt_num($neg_v) ?></td>
-                    <td class="center"><?= $pct_neg === null ? '-' : fmt_num($pct_neg).'%' ?></td>
+                    <td class="center"><span class="badge <?= pct_class($pct_v) ?>"><?= $pct_v === null ? '—' : fmt_num($pct_v).'%' ?></span></td>
+                    <td class="num"><?= $ab05 === null ? '—' : '$'.fmt_num($ab05,2) ?></td>
+                    <td class="num"><?= $aa05 === null ? '—' : '$'.fmt_num($aa05,2) ?></td>
+                    <td class="num"><?= $fmtDifArpu05($difArpu05) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($pctArpu05) ?>"><?= $fmtPctArpu05($pctArpu05) ?></span></td>
+                    <?php foreach ($dimensiones05 as $dimension05):
+                        $campo05=$dimension05['campo']; ?>
+                        <td class="center"><?= $mixPct05[$campo05.'_base'] === null ? '—' : fmt_num($mixPct05[$campo05.'_base']).'%' ?></td>
+                        <td class="center"><?= $mixPct05[$campo05.'_actual'] === null ? '—' : fmt_num($mixPct05[$campo05.'_actual']).'%' ?></td>
+                    <?php endforeach; ?>
                 </tr>
                 <?php endforeach; ?>
+                <?php
+                    $difTotArpu05 = $comercial05_ok ? $arpuDif05($arpuTotBase05, $arpuTotActual05) : null;
+                    $pctTotArpu05 = $comercial05_ok ? $arpuPctDif05($arpuTotBase05, $arpuTotActual05) : null;
+                    $difTot05=$pct_mc05($sum05['ins_actual']-$sum05['ins_base'],$sum05['ins_base']);
+                ?>
                 <tr class="total-row">
-                    <?php
-                        $t_base = 0; $t_actual = 0; $t_doble = 0; $t_triple = 0; $t_resid = 0; $t_neg = 0;
-                        foreach ($coach_matrix as $v) {
-                            $t_base += (int)($v['semanas'][$semana_base] ?? 0);
-                            $t_actual += (int)($v['semanas'][$semana_actual] ?? 0);
-                            $t_doble += (int)($v['doble_play'] ?? 0);
-                            $t_triple += (int)($v['triple_play'] ?? 0);
-                            $t_resid += (int)($v['residencial'] ?? 0);
-                            $t_neg += (int)($v['negocios'] ?? 0);
-                        }
-                        $t_dif = $t_actual - $t_base;
-                        $t_pct = $t_base > 0 ? round(($t_dif / $t_base) * 100, 0) : null;
+                    <td>TOTAL</td><td></td>
+                    <td class="num"><?= fmt_num($sum05['ins_base']) ?></td>
+                    <td class="num"><?= fmt_num($sum05['ins_actual']) ?></td>
+                    <td class="num"><?= fmt_num($sum05['ins_actual']-$sum05['ins_base']) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($difTot05) ?>"><?= $difTot05===null?'—':fmt_num($difTot05).'%' ?></span></td>
+                    <td class="num"><?= $comercial05_ok && $arpuTotBase05!==null?'$'.fmt_num($arpuTotBase05,2):'—' ?></td>
+                    <td class="num"><?= $comercial05_ok && $arpuTotActual05!==null?'$'.fmt_num($arpuTotActual05,2):'—' ?></td>
+                    <td class="num"><?= $fmtDifArpu05($difTotArpu05) ?></td>
+                    <td class="center"><span class="badge <?= pct_class($pctTotArpu05) ?>"><?= $fmtPctArpu05($pctTotArpu05) ?></span></td>
+                    <?php foreach ($dimensiones05 as $dimension05):
+                        $campo05=$dimension05['campo'];
+                        $pBase05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_base'],$sum05['ins_base']) : null;
+                        $pActual05=$comercial05_ok ? $pct_mc05($sum05[$campo05.'_actual'],$sum05['ins_actual']) : null;
                     ?>
-                    <td>TOTAL</td>
-                    <td></td>
-                    <td class="num"><?= fmt_num($t_base) ?></td>
-                    <td class="num"><?= fmt_num($t_actual) ?></td>
-                    <td class="num"><?= fmt_num($t_dif) ?></td>
-                    <td class="center"><span class="badge <?= pct_class($t_pct) ?>"><?= $t_pct === null ? '-' : fmt_num($t_pct).'%' ?></span></td>
-                    <?php
-                        $t_mix = $t_doble + $t_triple;
-                        $t_segmento = $t_resid + $t_neg;
-
-                        $pct_t_doble = $t_mix > 0 ? round(($t_doble / $t_mix) * 100, 0) : null;
-                        $pct_t_triple = $t_mix > 0 ? round(($t_triple / $t_mix) * 100, 0) : null;
-
-                        $pct_t_resid = $t_segmento > 0 ? round(($t_resid / $t_segmento) * 100, 0) : null;
-                        $pct_t_neg = $t_segmento > 0 ? round(($t_neg / $t_segmento) * 100, 0) : null;
-                    ?>
-                    <td class="num"><?= fmt_num($t_doble) ?></td>
-                    <td class="center"><?= $pct_t_doble === null ? '-' : fmt_num($pct_t_doble).'%' ?></td>
-                    <td class="num"><?= fmt_num($t_triple) ?></td>
-                    <td class="center"><?= $pct_t_triple === null ? '-' : fmt_num($pct_t_triple).'%' ?></td>
-                    <td class="num"><?= fmt_num($t_resid) ?></td>
-                    <td class="center"><?= $pct_t_resid === null ? '-' : fmt_num($pct_t_resid).'%' ?></td>
-                    <td class="num"><?= fmt_num($t_neg) ?></td>
-                    <td class="center"><?= $pct_t_neg === null ? '-' : fmt_num($pct_t_neg).'%' ?></td>
+                        <td class="center"><?= $pBase05===null?'—':fmt_num($pBase05).'%' ?></td>
+                        <td class="center"><?= $pActual05===null?'—':fmt_num($pActual05).'%' ?></td>
+                    <?php endforeach; ?>
                 </tr>
             </tbody>
         </table>
     </div>
 </section>
 
-<?php else: ?>
+<?php elseif (!$query_error): ?>
 <?php
 $total_ventas_hist = 0;
 $best_week = 0;
@@ -2608,6 +3190,10 @@ const totalRow=document.getElementById('totalRow');
 const dataRows=()=>[...tbody.querySelectorAll('tr.data-row')];
 let activeDistrict='ALL';
 let sortState={key:'prod_actual',dir:'desc'};
+// El servidor entrega las filas ya ordenadas por PROD. DIARIA ACTUAL.
+// Mostrar la dirección activa desde la primera carga (sin requerir clic).
+const initialSortHeader=table.querySelector('th.sortable[data-key="prod_actual"]');
+if(initialSortHeader){const arrow=initialSortHeader.querySelector('.sort-icon');if(arrow)arrow.textContent='↓';}
 function num(v){const n=parseFloat(v);return isNaN(n)?0:n}
 function fmt0(n){return Math.round(n).toLocaleString('en-US')}
 function fmt2(n){return (Math.round(n*100)/100).toFixed(2)}
@@ -2623,14 +3209,16 @@ function applyFilter(){
 function recalc(){
  const rows=visibleRows();
  rows.forEach((r,i)=>{const rk=r.querySelector('.rank');if(rk)rk.textContent=i+1});
- const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
+ const keys=['ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual','hc_operativo_base','hc_operativo_actual','hc_sin_venta_base','pct_hc_sin_ins_base','hc_sin_venta_actual','pct_hc_sin_ins_actual','activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'];
  const t={};keys.forEach(k=>t[k]=0);
  rows.forEach(r=>keys.forEach(k=>t[k]+=num(r.dataset[k])));
  const pct=t.ins_sem_base>0?Math.round(((t.ins_sem_actual-t.ins_sem_base)/t.ins_sem_base)*100):null;
- const pctHcSinBase=t.hc_activo_base>0?Math.round((t.hc_sin_venta_base/t.hc_activo_base)*100):null;
- const pctHcSinActual=t.hc_activo_actual>0?Math.round((t.hc_sin_venta_actual/t.hc_activo_actual)*100):null;
- const pb=(t.hc_activo_base>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/t.hc_activo_base/DIAS_HABILES_BASE:null;
- const pa=(t.hc_activo_actual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/t.hc_activo_actual/DIAS_HABILES_ACTUAL:null;
+ const denBase=rows.reduce((acc,r)=>acc+num(r.dataset.opBase),0);
+ const denActual=rows.reduce((acc,r)=>acc+num(r.dataset.opActual),0);
+ const pctHcSinBase=denBase>0?Math.round((t.hc_sin_venta_base/denBase)*100):null;
+ const pctHcSinActual=denActual>0?Math.round((t.hc_sin_venta_actual/denActual)*100):null;
+ const pb=(denBase>0 && DIAS_HABILES_BASE>0)?t.ins_sem_base/denBase/DIAS_HABILES_BASE:null;
+ const pa=(denActual>0 && DIAS_HABILES_ACTUAL>0)?t.ins_sem_actual/denActual/DIAS_HABILES_ACTUAL:null;
  document.querySelectorAll('[data-total-key]').forEach(td=>td.textContent=fmt0(t[td.dataset.totalKey]||0));
  const p=document.getElementById('total-pct');p.textContent=pct===null?'-':fmt0(pct)+'%';p.className=pct===null?'badge flat':pctClass(pct);
  const hb=document.getElementById('total-hc-sin-base');hb.textContent=fmt0(t.hc_sin_venta_base);
