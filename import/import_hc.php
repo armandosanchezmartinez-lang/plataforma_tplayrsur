@@ -1,4 +1,35 @@
 <?php
+/**
+ * TalIA / TotalXpedient · IMPORTADOR HC + STANDBY · 21-OCT-2026
+ * ============================================================================
+ * Fuente esperada: hc_plataforma.xlsx generado por read_hc4_FINAL.py
+ * Hojas obligatorias:
+ *   - Consolidado -> tabla hc
+ *   - Standby     -> tabla hc_standby
+ *
+ * Reglas STANDBY:
+ * - tipo_standby: VACACIONES | INCAPACIDAD
+ * - FECHA INICIO y FECHA FIN son obligatorias en el archivo de intercambio.
+ *   La BD permite fecha_fin NULL solo como colchón técnico excepcional.
+ * - Se permiten fechas futuras; NO se aplica la corrección de FECHA DE ALTA.
+ * - responsable_rol:
+ *     VACACIONES   -> AUTORIZA
+ *     INCAPACIDAD  -> GESTOR CH
+ * - Identidad del evento (UNIQUE en BD):
+ *     numero_talento_gs + tipo_standby + fecha_inicio
+ * - No se almacena cantidad de días: se deriva de las fechas cuando sea necesario.
+ *
+ * Sincronización:
+ * - HC conserva la regla existente: reemplazo completo por (anio, semana)
+ *   para todos los periodos presentes en Consolidado.
+ * - STANDBY se sincroniza por ARCHIVO_ORIGEN. Antes de insertar la hoja
+ *   canónica Standby, se eliminan de hc_standby los registros cuyo
+ *   archivo_origen pertenece al conjunto de archivos fuente procesados en
+ *   Consolidado/Standby. Esto permite corregir o retirar eventos sin dejar
+ *   residuos históricos. El INSERT además usa ON DUPLICATE KEY UPDATE.
+ * - HC y STANDBY se ejecutan dentro de UNA MISMA transacción.
+ */
+
 set_time_limit(0);
 ini_set('memory_limit', '512M');
 session_start();
@@ -25,10 +56,32 @@ function normalizar_header($v) {
     return $v;
 }
 
+function construir_mapa_headers($encabezados) {
+    $mapa = [];
+    foreach ($encabezados as $idx => $header) {
+        $key = normalizar_header($header);
+        if ($key !== '') $mapa[$key] = $idx;
+    }
+    return $mapa;
+}
+
+function validar_headers_requeridos($mapa, $requeridos, $hoja) {
+    $faltantes = [];
+    foreach ($requeridos as $req) {
+        if (!array_key_exists(normalizar_header($req), $mapa)) {
+            $faltantes[] = $req;
+        }
+    }
+    if (!empty($faltantes)) {
+        throw new Exception(
+            "Hoja {$hoja}: faltan columnas obligatorias: " . implode(', ', $faltantes)
+        );
+    }
+}
+
 function valor_fila_por_header($fila, $mapa, $header) {
     $key = normalizar_header($header);
     if (!array_key_exists($key, $mapa)) return null;
-
     $idx = $mapa[$key];
     return $fila[$idx] ?? null;
 }
@@ -39,40 +92,66 @@ function limpiar_valor($val) {
     return $val === '' ? null : $val;
 }
 
+function fila_vacia($fila) {
+    return empty(array_filter($fila, function($v) {
+        return $v !== null && trim((string)$v) !== '';
+    }));
+}
+
+function es_marcador_fecha_vacia($val) {
+    if ($val === null) return true;
+    $s = trim((string)$val);
+    if ($s === '') return true;
+    return in_array(mb_strtoupper($s, 'UTF-8'), [
+        'N/A','NA','VACANTE','NULL','NONE','-','--'
+    ], true);
+}
+
 function fecha_mysql($val) {
     if ($val === null || $val === '') return null;
 
     if (is_numeric($val)) {
         $unix = ((float)$val - 25569) * 86400;
-        return gmdate('Y-m-d', $unix);
+        return gmdate('Y-m-d', (int)$unix);
     }
 
     $s = trim((string)$val);
-
-    if ($s === '' || in_array(strtoupper($s), ['N/A','NA','VACANTE','NULL','NONE','-','--'], true)) {
+    if ($s === '' || in_array(mb_strtoupper($s, 'UTF-8'), [
+        'N/A','NA','VACANTE','NULL','NONE','-','--'
+    ], true)) {
         return null;
     }
 
-    // El Python FINAL v2 ya entrega YYYY-MM-DD.
-    $d = DateTime::createFromFormat('Y-m-d', $s);
-    if ($d && $d->format('Y-m-d') === $s) {
-        return $s;
-    }
+    // El Python v4 entrega YYYY-MM-DD.
+    $d = DateTime::createFromFormat('!Y-m-d', $s);
+    if ($d && $d->format('Y-m-d') === $s) return $s;
 
     // Fallbacks defensivos.
     $s = preg_replace('#/+#', '/', $s);
     $s = preg_replace('#-+#', '-', $s);
-
     $formatos = ['d/m/Y','d-m-Y','Y/m/d','d/m/y','d-m-y'];
 
     foreach ($formatos as $fmt) {
-        $d = DateTime::createFromFormat($fmt, $s);
-        if ($d) {
-            return $d->format('Y-m-d');
-        }
+        $d = DateTime::createFromFormat('!'.$fmt, $s);
+        if ($d) return $d->format('Y-m-d');
     }
 
     return null;
+}
+
+function fecha_mysql_validada($val, $contexto, $obligatoria = false) {
+    if (es_marcador_fecha_vacia($val)) {
+        if ($obligatoria) {
+            throw new Exception("{$contexto}: fecha obligatoria vacía.");
+        }
+        return null;
+    }
+
+    $fecha = fecha_mysql($val);
+    if ($fecha === null) {
+        throw new Exception("{$contexto}: fecha no interpretable '" . trim((string)$val) . "'.");
+    }
+    return $fecha;
 }
 
 function entero_o_null($val) {
@@ -83,8 +162,30 @@ function entero_o_null($val) {
 function status_normalizado($val) {
     $val = limpiar_valor($val);
     if ($val === null) return null;
-
     return mb_strtoupper($val, 'UTF-8');
+}
+
+function tipo_standby_normalizado($val) {
+    $val = limpiar_valor($val);
+    if ($val === null) return null;
+    $val = mb_strtoupper($val, 'UTF-8');
+    return preg_replace('/\s+/', ' ', $val);
+}
+
+function rol_standby_normalizado($val) {
+    $val = limpiar_valor($val);
+    if ($val === null) return null;
+    $val = mb_strtoupper($val, 'UTF-8');
+    $val = str_replace('_', ' ', $val);
+    return preg_replace('/\s+/', ' ', trim($val));
+}
+
+function indice_hoja_por_nombre($xlsx, $nombre_buscado) {
+    $objetivo = normalizar_header($nombre_buscado);
+    foreach ($xlsx->sheetNames() as $idx => $nombre) {
+        if (normalizar_header($nombre) === $objetivo) return (int)$idx;
+    }
+    return null;
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
@@ -98,10 +199,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
     } else {
 
         $ruta_uploads = $_SERVER['DOCUMENT_ROOT'] . '/plataforma/uploads';
-
-        if (!is_dir($ruta_uploads)) {
-            @mkdir($ruta_uploads, 0775, true);
-        }
+        if (!is_dir($ruta_uploads)) @mkdir($ruta_uploads, 0775, true);
 
         $ruta_temp = $ruta_uploads . '/' . time() . '_' . basename($archivo['name']);
 
@@ -111,35 +209,37 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
 
         } elseif ($xlsx = SimpleXLSX::parse($ruta_temp)) {
 
-            $filas = $xlsx->rows();
+            $transaccion_iniciada = false;
 
-            $total = 0;
-            $errores = 0;
-            $eliminados = 0;
-            $semanas_detectadas = [];
-            $datos = [];
-
-            if (empty($filas) || empty($filas[0])) {
-                if (file_exists($ruta_temp)) unlink($ruta_temp);
-                $mensaje = "El Excel no contiene encabezados.";
-                $tipo_mensaje = "error";
-            } else {
-
+            try {
                 // ============================================================
-                // 1) MAPEO POR ENCABEZADOS, NO POR POSICIÓN
+                // 1) LOCALIZAR LAS DOS HOJAS CANÓNICAS
                 // ============================================================
+                $idx_consolidado = indice_hoja_por_nombre($xlsx, 'Consolidado');
+                $idx_standby = indice_hoja_por_nombre($xlsx, 'Standby');
 
-                $encabezados = $filas[0];
-                $mapa = [];
-
-                foreach ($encabezados as $idx => $header) {
-                    $key = normalizar_header($header);
-                    if ($key !== '') {
-                        $mapa[$key] = $idx;
-                    }
+                if ($idx_consolidado === null) {
+                    throw new Exception("No se encontró la hoja obligatoria 'Consolidado'.");
+                }
+                if ($idx_standby === null) {
+                    throw new Exception("No se encontró la hoja obligatoria 'Standby'.");
                 }
 
-                $requeridos = [
+                $filas_hc = $xlsx->rows($idx_consolidado);
+                $filas_standby = $xlsx->rows($idx_standby);
+
+                if (empty($filas_hc) || empty($filas_hc[0])) {
+                    throw new Exception("La hoja Consolidado no contiene encabezados.");
+                }
+                if (empty($filas_standby) || empty($filas_standby[0])) {
+                    throw new Exception("La hoja Standby no contiene encabezados.");
+                }
+
+                // ============================================================
+                // 2) MAPEAR Y VALIDAR CONSOLIDADO -> hc
+                // ============================================================
+                $mapa_hc = construir_mapa_headers($filas_hc[0]);
+                $requeridos_hc = [
                     'NUMERO SF',
                     'NUMERO BASE DE COMISIONES',
                     'NUMERO TALENTO GS',
@@ -155,319 +255,497 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
                     'ARCHIVO_ORIGEN',
                     'PESTANA_ORIGEN',
                     'SEMANA',
-                    'ANO'
+                    'ANO',
+                    'STATUS'
                 ];
+                validar_headers_requeridos($mapa_hc, $requeridos_hc, 'Consolidado');
 
-                $faltantes = [];
+                $status_validos = ['ACTIVO','VACANTE','INCAPACIDAD','VACACIONES'];
+                $datos_hc = [];
+                $semanas_detectadas = [];
+                $archivos_fuente_detectados = [];
 
-                foreach ($requeridos as $req) {
-                    if (!array_key_exists(normalizar_header($req), $mapa)) {
-                        $faltantes[] = $req;
+                for ($i = 1; $i < count($filas_hc); $i++) {
+                    $f = $filas_hc[$i];
+                    if (fila_vacia($f)) continue;
+
+                    $fila_excel = $i + 1;
+                    $v_semana = entero_o_null(limpiar_valor(
+                        valor_fila_por_header($f, $mapa_hc, 'SEMANA')
+                    ));
+                    $v_anio = entero_o_null(limpiar_valor(
+                        valor_fila_por_header($f, $mapa_hc, 'AÑO')
+                    ));
+
+                    if ($v_semana === null || $v_semana < 1 || $v_semana > 53) {
+                        throw new Exception("Consolidado fila {$fila_excel}: SEMANA inválida.");
                     }
+                    if ($v_anio === null || $v_anio < 2020 || $v_anio > 2100) {
+                        throw new Exception("Consolidado fila {$fila_excel}: AÑO inválido.");
+                    }
+
+                    $status = status_normalizado(
+                        valor_fila_por_header($f, $mapa_hc, 'STATUS')
+                    );
+
+                    // A partir de SEM42/2026, STATUS es obligatorio.
+                    $status_obligatorio = ($v_anio > 2026) || ($v_anio === 2026 && $v_semana >= 42);
+                    if ($status_obligatorio && $status === null) {
+                        throw new Exception(
+                            "Consolidado fila {$fila_excel}: STATUS obligatorio vacío " .
+                            "(SEM{$v_semana}-{$v_anio})."
+                        );
+                    }
+                    if ($status !== null && !in_array($status, $status_validos, true)) {
+                        throw new Exception(
+                            "Consolidado fila {$fila_excel}: STATUS no permitido '{$status}'. " .
+                            "Valores válidos: " . implode(', ', $status_validos)
+                        );
+                    }
+
+                    $fecha_alta_raw = valor_fila_por_header($f, $mapa_hc, 'FECHA DE ALTA');
+                    $fecha_alta = fecha_mysql_validada(
+                        $fecha_alta_raw,
+                        "Consolidado fila {$fila_excel} / FECHA DE ALTA",
+                        false
+                    );
+
+                    $archivo_origen = limpiar_valor(
+                        valor_fila_por_header($f, $mapa_hc, 'ARCHIVO_ORIGEN')
+                    );
+                    if ($archivo_origen !== null) {
+                        $archivos_fuente_detectados[$archivo_origen] = true;
+                    }
+
+                    $key = $v_anio . '-' . $v_semana;
+                    $semanas_detectadas[$key] = [
+                        'anio' => $v_anio,
+                        'semana' => $v_semana
+                    ];
+
+                    $datos_hc[] = [
+                        'numero_sf' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'NUMERO SF')),
+                        'numero_base_comisiones' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'NUMERO BASE DE COMISIONES')),
+                        'numero_talento_gs' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'NUMERO TALENTO GS')),
+                        'id_posicion' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'ID POSICIONES')),
+                        'nombre_colaborador' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'NOMBRE DEL COLABORADOR')),
+                        'posicion' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'POSICIÓN (PUESTO)')),
+                        'fecha_alta' => $fecha_alta,
+                        'distrito' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'DISTRITO')),
+                        'lr' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'LR')),
+                        'posicion_lr' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'POSICION LR')),
+                        'nombre_linea_reporte' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'NOMBRE LINEA DE REPORTE')),
+                        'puesto_lr' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'PUESTO LR')),
+                        'status' => $status,
+                        'archivo_origen_excel' => $archivo_origen,
+                        'pestana_origen' => limpiar_valor(valor_fila_por_header($f, $mapa_hc, 'PESTAÑA_ORIGEN')),
+                        'semana' => $v_semana,
+                        'anio' => $v_anio
+                    ];
                 }
 
-                if (!empty($faltantes)) {
-                    if (file_exists($ruta_temp)) unlink($ruta_temp);
-                    $mensaje = "Faltan columnas obligatorias: " . implode(', ', $faltantes);
-                    $tipo_mensaje = "error";
-                } else {
-
-                    $status_validos = ['ACTIVO','VACANTE','INCAPACIDAD','VACACIONES'];
-
-                    // ============================================================
-                    // 2) LEER Y VALIDAR TODO ANTES DE TOCAR LA BD
-                    // ============================================================
-
-                    for ($i = 1; $i < count($filas); $i++) {
-
-                        $f = $filas[$i];
-
-                        if (empty(array_filter($f, function($v) {
-                            return $v !== null && trim((string)$v) !== '';
-                        }))) {
-                            continue;
-                        }
-
-                        $v_semana = entero_o_null(
-                            limpiar_valor(valor_fila_por_header($f, $mapa, 'SEMANA'))
-                        );
-
-                        $v_anio = entero_o_null(
-                            limpiar_valor(valor_fila_por_header($f, $mapa, 'AÑO'))
-                        );
-
-                        if (empty($v_semana) || empty($v_anio)) {
-                            $errores++;
-                            continue;
-                        }
-
-                        $status = status_normalizado(
-                            valor_fila_por_header($f, $mapa, 'STATUS')
-                        );
-
-                        // A partir de SEM42/2026, STATUS es obligatorio.
-                        $status_obligatorio = ($v_anio > 2026) || ($v_anio === 2026 && $v_semana >= 42);
-
-                        if ($status_obligatorio && $status === null) {
-                            throw new Exception(
-                                "STATUS obligatorio vacío en fila Excel " . ($i + 1) .
-                                " (SEM{$v_semana}-{$v_anio})."
-                            );
-                        }
-
-                        if ($status !== null && !in_array($status, $status_validos, true)) {
-                            throw new Exception(
-                                "STATUS no permitido '{$status}' en fila Excel " . ($i + 1) .
-                                ". Valores válidos: " . implode(', ', $status_validos)
-                            );
-                        }
-
-                        $key = $v_anio . '-' . $v_semana;
-
-                        $semanas_detectadas[$key] = [
-                            'anio' => $v_anio,
-                            'semana' => $v_semana
-                        ];
-
-                        $datos[] = [
-                            'numero_sf' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'NUMERO SF')
-                            ),
-                            'numero_base_comisiones' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'NUMERO BASE DE COMISIONES')
-                            ),
-                            'numero_talento_gs' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'NUMERO TALENTO GS')
-                            ),
-                            'id_posicion' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'ID POSICIONES')
-                            ),
-                            'nombre_colaborador' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'NOMBRE DEL COLABORADOR')
-                            ),
-                            'posicion' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'POSICIÓN (PUESTO)')
-                            ),
-                            'fecha_alta' => fecha_mysql(
-                                valor_fila_por_header($f, $mapa, 'FECHA DE ALTA')
-                            ),
-                            'distrito' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'DISTRITO')
-                            ),
-                            'lr' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'LR')
-                            ),
-                            'posicion_lr' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'POSICION LR')
-                            ),
-                            'nombre_linea_reporte' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'NOMBRE LINEA DE REPORTE')
-                            ),
-                            'puesto_lr' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'PUESTO LR')
-                            ),
-                            'status' => $status,
-                            'archivo_origen_excel' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'ARCHIVO_ORIGEN')
-                            ),
-                            'pestana_origen' => limpiar_valor(
-                                valor_fila_por_header($f, $mapa, 'PESTAÑA_ORIGEN')
-                            ),
-                            'semana' => $v_semana,
-                            'anio' => $v_anio
-                        ];
-                    }
-
-                    if ($errores > 0) {
-                        if (file_exists($ruta_temp)) unlink($ruta_temp);
-                        $mensaje = "Se detectaron $errores filas sin SEMANA/AÑO. La importación fue cancelada.";
-                        $tipo_mensaje = "error";
-
-                    } elseif (empty($datos) || empty($semanas_detectadas)) {
-                        if (file_exists($ruta_temp)) unlink($ruta_temp);
-                        $mensaje = "No se encontraron filas válidas para importar.";
-                        $tipo_mensaje = "error";
-
-                    } else {
-
-                        mysqli_begin_transaction($conexion);
-
-                        try {
-
-                            // ============================================================
-                            // 3) REEMPLAZAR COMPLETAMENTE LOS PERIODOS PRESENTES EN EL EXCEL
-                            // ============================================================
-
-                            $delete = mysqli_prepare(
-                                $conexion,
-                                "DELETE FROM hc WHERE anio = ? AND semana = ?"
-                            );
-
-                            if (!$delete) {
-                                throw new Exception(
-                                    "No se pudo preparar DELETE: " . mysqli_error($conexion)
-                                );
-                            }
-
-                            foreach ($semanas_detectadas as $periodo) {
-
-                                mysqli_stmt_bind_param(
-                                    $delete,
-                                    "ii",
-                                    $periodo['anio'],
-                                    $periodo['semana']
-                                );
-
-                                if (!mysqli_stmt_execute($delete)) {
-                                    throw new Exception(
-                                        "Error al eliminar HC previo: " .
-                                        mysqli_stmt_error($delete)
-                                    );
-                                }
-
-                                $eliminados += mysqli_stmt_affected_rows($delete);
-                            }
-
-                            mysqli_stmt_close($delete);
-
-                            // ============================================================
-                            // 4) INSERT EXPLÍCITO POR NOMBRE DE COLUMNA
-                            // ============================================================
-
-                            $stmt = mysqli_prepare($conexion, "
-                                INSERT INTO hc (
-                                    numero_sf,
-                                    numero_base_comisiones,
-                                    numero_talento_gs,
-                                    id_posicion,
-                                    nombre_colaborador,
-                                    posicion,
-                                    fecha_alta,
-                                    distrito,
-                                    lr,
-                                    posicion_lr,
-                                    nombre_linea_reporte,
-                                    puesto_lr,
-                                    status,
-                                    archivo_origen_excel,
-                                    pestana_origen,
-                                    semana,
-                                    anio,
-                                    importado_en
-                                ) VALUES (
-                                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW()
-                                )
-                            ");
-
-                            if (!$stmt) {
-                                throw new Exception(
-                                    "No se pudo preparar INSERT: " . mysqli_error($conexion)
-                                );
-                            }
-
-                            foreach ($datos as $d) {
-
-                                mysqli_stmt_bind_param(
-                                    $stmt,
-                                    "sssssssssssssssii",
-                                    $d['numero_sf'],
-                                    $d['numero_base_comisiones'],
-                                    $d['numero_talento_gs'],
-                                    $d['id_posicion'],
-                                    $d['nombre_colaborador'],
-                                    $d['posicion'],
-                                    $d['fecha_alta'],
-                                    $d['distrito'],
-                                    $d['lr'],
-                                    $d['posicion_lr'],
-                                    $d['nombre_linea_reporte'],
-                                    $d['puesto_lr'],
-                                    $d['status'],
-                                    $d['archivo_origen_excel'],
-                                    $d['pestana_origen'],
-                                    $d['semana'],
-                                    $d['anio']
-                                );
-
-                                if (!mysqli_stmt_execute($stmt)) {
-                                    throw new Exception(
-                                        "Error insertando fila de " .
-                                        ($d['nombre_colaborador'] ?? 'SIN NOMBRE') .
-                                        ": " . mysqli_stmt_error($stmt)
-                                    );
-                                }
-
-                                $total++;
-                            }
-
-                            mysqli_stmt_close($stmt);
-
-                            // ============================================================
-                            // 5) LOG
-                            // ============================================================
-
-                            $tipo_log = 'hc';
-                            $v_archivo = $archivo['name'];
-                            $usuario = $_SESSION['usuario'] ?? 'test';
-
-                            $log = mysqli_prepare(
-                                $conexion,
-                                "INSERT INTO importaciones_log
-                                (tipo, archivo, registros_importados, usuario)
-                                VALUES (?,?,?,?)"
-                            );
-
-                            if (!$log) {
-                                throw new Exception(
-                                    "No se pudo preparar log: " . mysqli_error($conexion)
-                                );
-                            }
-
-                            mysqli_stmt_bind_param(
-                                $log,
-                                "ssis",
-                                $tipo_log,
-                                $v_archivo,
-                                $total,
-                                $usuario
-                            );
-
-                            if (!mysqli_stmt_execute($log)) {
-                                throw new Exception(
-                                    "Error al guardar log: " . mysqli_stmt_error($log)
-                                );
-                            }
-
-                            mysqli_stmt_close($log);
-
-                            mysqli_commit($conexion);
-
-                            if (file_exists($ruta_temp)) unlink($ruta_temp);
-
-                            $mensaje =
-                                "✅ Importación exitosa: {$total} registros importados. " .
-                                "Registros previos reemplazados: {$eliminados}. " .
-                                "Periodos sincronizados: " . count($semanas_detectadas) . ".";
-
-                            $tipo_mensaje = "exito";
-
-                        } catch (Throwable $e) {
-
-                            mysqli_rollback($conexion);
-
-                            if (file_exists($ruta_temp)) unlink($ruta_temp);
-
-                            $mensaje = "❌ Importación cancelada: " . $e->getMessage();
-                            $tipo_mensaje = "error";
-                        }
-                    }
+                if (empty($datos_hc) || empty($semanas_detectadas)) {
+                    throw new Exception("No se encontraron filas válidas en Consolidado.");
                 }
+
+                // ============================================================
+                // 3) MAPEAR Y VALIDAR STANDBY -> hc_standby
+                // ============================================================
+                $mapa_standby = construir_mapa_headers($filas_standby[0]);
+                $requeridos_standby = [
+                    'NUMERO TALENTO GS',
+                    'NOMBRE COLABORADOR',
+                    'PUESTO',
+                    'TIPO_STANDBY',
+                    'FECHA INICIO',
+                    'FECHA FIN',
+                    'RESPONSABLE_NOMBRE',
+                    'RESPONSABLE_ROL',
+                    'SOCIEDAD',
+                    'CECO',
+                    'AREA',
+                    'ARCHIVO_ORIGEN',
+                    'PESTANA_ORIGEN',
+                    'SEMANA_CARGA',
+                    'ANO_CARGA'
+                ];
+                validar_headers_requeridos($mapa_standby, $requeridos_standby, 'Standby');
+
+                $datos_standby = [];
+                $llaves_standby = [];
+                $conteo_standby_tipo = ['VACACIONES' => 0, 'INCAPACIDAD' => 0];
+
+                for ($i = 1; $i < count($filas_standby); $i++) {
+                    $f = $filas_standby[$i];
+                    if (fila_vacia($f)) continue;
+
+                    $fila_excel = $i + 1;
+                    $talento = limpiar_valor(
+                        valor_fila_por_header($f, $mapa_standby, 'NUMERO TALENTO GS')
+                    );
+                    if ($talento === null || mb_strtoupper($talento, 'UTF-8') === 'VACANTE') {
+                        throw new Exception(
+                            "Standby fila {$fila_excel}: NUMERO TALENTO GS obligatorio/inválido."
+                        );
+                    }
+
+                    $tipo = tipo_standby_normalizado(
+                        valor_fila_por_header($f, $mapa_standby, 'TIPO_STANDBY')
+                    );
+                    if (!in_array($tipo, ['VACACIONES','INCAPACIDAD'], true)) {
+                        throw new Exception(
+                            "Standby fila {$fila_excel}: TIPO_STANDBY no permitido '" .
+                            ($tipo ?? '') . "'."
+                        );
+                    }
+
+                    // Regla de negocio acordada: ambas fechas son obligatorias.
+                    // Las fechas futuras son válidas y se conservan sin corrección.
+                    $fecha_inicio = fecha_mysql_validada(
+                        valor_fila_por_header($f, $mapa_standby, 'FECHA INICIO'),
+                        "Standby fila {$fila_excel} / FECHA INICIO",
+                        true
+                    );
+                    $fecha_fin = fecha_mysql_validada(
+                        valor_fila_por_header($f, $mapa_standby, 'FECHA FIN'),
+                        "Standby fila {$fila_excel} / FECHA FIN",
+                        true
+                    );
+
+                    if ($fecha_fin < $fecha_inicio) {
+                        throw new Exception(
+                            "Standby fila {$fila_excel}: FECHA FIN {$fecha_fin} es anterior " .
+                            "a FECHA INICIO {$fecha_inicio}."
+                        );
+                    }
+
+                    $responsable_nombre = limpiar_valor(
+                        valor_fila_por_header($f, $mapa_standby, 'RESPONSABLE_NOMBRE')
+                    );
+                    $responsable_rol = rol_standby_normalizado(
+                        valor_fila_por_header($f, $mapa_standby, 'RESPONSABLE_ROL')
+                    );
+
+                    if ($responsable_nombre === null) {
+                        throw new Exception(
+                            "Standby fila {$fila_excel}: RESPONSABLE_NOMBRE obligatorio vacío."
+                        );
+                    }
+
+                    $rol_esperado = ($tipo === 'VACACIONES') ? 'AUTORIZA' : 'GESTOR CH';
+                    if ($responsable_rol !== $rol_esperado) {
+                        throw new Exception(
+                            "Standby fila {$fila_excel}: RESPONSABLE_ROL '{$responsable_rol}' " .
+                            "no corresponde a {$tipo}; se esperaba '{$rol_esperado}'."
+                        );
+                    }
+
+                    $semana_carga = entero_o_null(limpiar_valor(
+                        valor_fila_por_header($f, $mapa_standby, 'SEMANA_CARGA')
+                    ));
+                    $anio_carga = entero_o_null(limpiar_valor(
+                        valor_fila_por_header($f, $mapa_standby, 'AÑO_CARGA')
+                    ));
+
+                    if ($semana_carga === null || $semana_carga < 1 || $semana_carga > 53) {
+                        throw new Exception("Standby fila {$fila_excel}: SEMANA_CARGA inválida.");
+                    }
+                    if ($anio_carga === null || $anio_carga < 2020 || $anio_carga > 2100) {
+                        throw new Exception("Standby fila {$fila_excel}: AÑO_CARGA inválido.");
+                    }
+
+                    $archivo_origen = limpiar_valor(
+                        valor_fila_por_header($f, $mapa_standby, 'ARCHIVO_ORIGEN')
+                    );
+                    if ($archivo_origen === null) {
+                        throw new Exception("Standby fila {$fila_excel}: ARCHIVO_ORIGEN obligatorio vacío.");
+                    }
+                    $archivos_fuente_detectados[$archivo_origen] = true;
+
+                    $llave_evento = mb_strtoupper($talento, 'UTF-8') . '|' . $tipo . '|' . $fecha_inicio;
+                    if (isset($llaves_standby[$llave_evento])) {
+                        throw new Exception(
+                            "Standby fila {$fila_excel}: evento duplicado para llave " .
+                            "{$talento} + {$tipo} + {$fecha_inicio}."
+                        );
+                    }
+                    $llaves_standby[$llave_evento] = true;
+                    $conteo_standby_tipo[$tipo]++;
+
+                    $datos_standby[] = [
+                        'numero_talento_gs' => $talento,
+                        'nombre_colaborador' => limpiar_valor(valor_fila_por_header($f, $mapa_standby, 'NOMBRE COLABORADOR')),
+                        'puesto' => limpiar_valor(valor_fila_por_header($f, $mapa_standby, 'PUESTO')),
+                        'tipo_standby' => $tipo,
+                        'fecha_inicio' => $fecha_inicio,
+                        'fecha_fin' => $fecha_fin,
+                        'responsable_nombre' => $responsable_nombre,
+                        'responsable_rol' => $responsable_rol,
+                        'sociedad' => limpiar_valor(valor_fila_por_header($f, $mapa_standby, 'SOCIEDAD')),
+                        'ceco' => limpiar_valor(valor_fila_por_header($f, $mapa_standby, 'CECO')),
+                        'area' => limpiar_valor(valor_fila_por_header($f, $mapa_standby, 'AREA')),
+                        'archivo_origen' => $archivo_origen,
+                        'pestana_origen' => limpiar_valor(valor_fila_por_header($f, $mapa_standby, 'PESTAÑA_ORIGEN')),
+                        'semana_carga' => $semana_carga,
+                        'anio_carga' => $anio_carga
+                    ];
+                }
+
+                // Standby puede tener 0 eventos en una semana/año; la hoja con encabezados
+                // sigue siendo válida. No se exige que $datos_standby tenga filas.
+
+                // ============================================================
+                // 4) TRANSACCIÓN ÚNICA: HC + STANDBY
+                // ============================================================
+                mysqli_begin_transaction($conexion);
+                $transaccion_iniciada = true;
+
+                $total_hc = 0;
+                $hc_eliminados = 0;
+                $total_standby = 0;
+                $standby_eliminados = 0;
+
+                // ------------------------------------------------------------
+                // 4A) HC: reemplazar por periodo
+                // ------------------------------------------------------------
+                $delete_hc = mysqli_prepare(
+                    $conexion,
+                    "DELETE FROM hc WHERE anio = ? AND semana = ?"
+                );
+                if (!$delete_hc) {
+                    throw new Exception("No se pudo preparar DELETE HC: " . mysqli_error($conexion));
+                }
+
+                foreach ($semanas_detectadas as $periodo) {
+                    mysqli_stmt_bind_param(
+                        $delete_hc,
+                        "ii",
+                        $periodo['anio'],
+                        $periodo['semana']
+                    );
+                    if (!mysqli_stmt_execute($delete_hc)) {
+                        throw new Exception("Error al eliminar HC previo: " . mysqli_stmt_error($delete_hc));
+                    }
+                    $hc_eliminados += mysqli_stmt_affected_rows($delete_hc);
+                }
+                mysqli_stmt_close($delete_hc);
+
+                $stmt_hc = mysqli_prepare($conexion, "
+                    INSERT INTO hc (
+                        numero_sf,
+                        numero_base_comisiones,
+                        numero_talento_gs,
+                        id_posicion,
+                        nombre_colaborador,
+                        posicion,
+                        fecha_alta,
+                        distrito,
+                        lr,
+                        posicion_lr,
+                        nombre_linea_reporte,
+                        puesto_lr,
+                        status,
+                        archivo_origen_excel,
+                        pestana_origen,
+                        semana,
+                        anio,
+                        importado_en
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
+                ");
+                if (!$stmt_hc) {
+                    throw new Exception("No se pudo preparar INSERT HC: " . mysqli_error($conexion));
+                }
+
+                foreach ($datos_hc as $d) {
+                    mysqli_stmt_bind_param(
+                        $stmt_hc,
+                        "sssssssssssssssii",
+                        $d['numero_sf'],
+                        $d['numero_base_comisiones'],
+                        $d['numero_talento_gs'],
+                        $d['id_posicion'],
+                        $d['nombre_colaborador'],
+                        $d['posicion'],
+                        $d['fecha_alta'],
+                        $d['distrito'],
+                        $d['lr'],
+                        $d['posicion_lr'],
+                        $d['nombre_linea_reporte'],
+                        $d['puesto_lr'],
+                        $d['status'],
+                        $d['archivo_origen_excel'],
+                        $d['pestana_origen'],
+                        $d['semana'],
+                        $d['anio']
+                    );
+
+                    if (!mysqli_stmt_execute($stmt_hc)) {
+                        throw new Exception(
+                            "Error insertando HC de " .
+                            ($d['nombre_colaborador'] ?? 'SIN NOMBRE') .
+                            ": " . mysqli_stmt_error($stmt_hc)
+                        );
+                    }
+                    $total_hc++;
+                }
+                mysqli_stmt_close($stmt_hc);
+
+                // ------------------------------------------------------------
+                // 4B) STANDBY: limpiar fuentes procesadas y reinsertar canónico
+                // ------------------------------------------------------------
+                if (!empty($archivos_fuente_detectados)) {
+                    $delete_standby = mysqli_prepare(
+                        $conexion,
+                        "DELETE FROM hc_standby WHERE archivo_origen = ?"
+                    );
+                    if (!$delete_standby) {
+                        throw new Exception(
+                            "No se pudo preparar DELETE STANDBY: " . mysqli_error($conexion)
+                        );
+                    }
+
+                    foreach (array_keys($archivos_fuente_detectados) as $archivo_fuente) {
+                        mysqli_stmt_bind_param($delete_standby, "s", $archivo_fuente);
+                        if (!mysqli_stmt_execute($delete_standby)) {
+                            throw new Exception(
+                                "Error al sincronizar STANDBY de '{$archivo_fuente}': " .
+                                mysqli_stmt_error($delete_standby)
+                            );
+                        }
+                        $standby_eliminados += mysqli_stmt_affected_rows($delete_standby);
+                    }
+                    mysqli_stmt_close($delete_standby);
+                }
+
+                $stmt_standby = mysqli_prepare($conexion, "
+                    INSERT INTO hc_standby (
+                        numero_talento_gs,
+                        nombre_colaborador,
+                        puesto,
+                        tipo_standby,
+                        fecha_inicio,
+                        fecha_fin,
+                        responsable_nombre,
+                        responsable_rol,
+                        sociedad,
+                        ceco,
+                        area,
+                        archivo_origen,
+                        pestana_origen,
+                        semana_carga,
+                        anio_carga
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON DUPLICATE KEY UPDATE
+                        nombre_colaborador = VALUES(nombre_colaborador),
+                        puesto = VALUES(puesto),
+                        fecha_fin = VALUES(fecha_fin),
+                        responsable_nombre = VALUES(responsable_nombre),
+                        responsable_rol = VALUES(responsable_rol),
+                        sociedad = VALUES(sociedad),
+                        ceco = VALUES(ceco),
+                        area = VALUES(area),
+                        archivo_origen = VALUES(archivo_origen),
+                        pestana_origen = VALUES(pestana_origen),
+                        semana_carga = VALUES(semana_carga),
+                        anio_carga = VALUES(anio_carga),
+                        actualizado_en = CURRENT_TIMESTAMP
+                ");
+                if (!$stmt_standby) {
+                    throw new Exception(
+                        "No se pudo preparar INSERT STANDBY: " . mysqli_error($conexion)
+                    );
+                }
+
+                foreach ($datos_standby as $d) {
+                    mysqli_stmt_bind_param(
+                        $stmt_standby,
+                        "sssssssssssssii",
+                        $d['numero_talento_gs'],
+                        $d['nombre_colaborador'],
+                        $d['puesto'],
+                        $d['tipo_standby'],
+                        $d['fecha_inicio'],
+                        $d['fecha_fin'],
+                        $d['responsable_nombre'],
+                        $d['responsable_rol'],
+                        $d['sociedad'],
+                        $d['ceco'],
+                        $d['area'],
+                        $d['archivo_origen'],
+                        $d['pestana_origen'],
+                        $d['semana_carga'],
+                        $d['anio_carga']
+                    );
+
+                    if (!mysqli_stmt_execute($stmt_standby)) {
+                        throw new Exception(
+                            "Error insertando STANDBY de " .
+                            ($d['nombre_colaborador'] ?? $d['numero_talento_gs']) .
+                            ": " . mysqli_stmt_error($stmt_standby)
+                        );
+                    }
+                    $total_standby++;
+                }
+                mysqli_stmt_close($stmt_standby);
+
+                // ============================================================
+                // 5) LOG EXISTENTE
+                // ============================================================
+                // Conservamos el contrato histórico del log: tipo='hc' y el conteo
+                // corresponde a registros HC. STANDBY se informa en el mensaje UI.
+                $tipo_log = 'hc';
+                $v_archivo = $archivo['name'];
+                $usuario = $_SESSION['usuario'] ?? 'test';
+
+                $log = mysqli_prepare(
+                    $conexion,
+                    "INSERT INTO importaciones_log
+                    (tipo, archivo, registros_importados, usuario)
+                    VALUES (?,?,?,?)"
+                );
+                if (!$log) {
+                    throw new Exception("No se pudo preparar log: " . mysqli_error($conexion));
+                }
+
+                mysqli_stmt_bind_param(
+                    $log,
+                    "ssis",
+                    $tipo_log,
+                    $v_archivo,
+                    $total_hc,
+                    $usuario
+                );
+                if (!mysqli_stmt_execute($log)) {
+                    throw new Exception("Error al guardar log: " . mysqli_stmt_error($log));
+                }
+                mysqli_stmt_close($log);
+
+                mysqli_commit($conexion);
+                $transaccion_iniciada = false;
+
+                if (file_exists($ruta_temp)) unlink($ruta_temp);
+
+                $mensaje =
+                    "✅ Importación exitosa. " .
+                    "HC: {$total_hc} registros importados; {$hc_eliminados} previos reemplazados; " .
+                    count($semanas_detectadas) . " periodos sincronizados. " .
+                    "STANDBY: {$total_standby} eventos sincronizados " .
+                    "({$conteo_standby_tipo['VACACIONES']} vacaciones / " .
+                    "{$conteo_standby_tipo['INCAPACIDAD']} incapacidades); " .
+                    "{$standby_eliminados} registros previos reemplazados. " .
+                    "Archivos fuente auditados: " . count($archivos_fuente_detectados) . ".";
+
+                $tipo_mensaje = "exito";
+
+            } catch (Throwable $e) {
+                if ($transaccion_iniciada) mysqli_rollback($conexion);
+                if (file_exists($ruta_temp)) unlink($ruta_temp);
+                $mensaje = "❌ Importación cancelada: " . $e->getMessage();
+                $tipo_mensaje = "error";
             }
 
         } else {
-
             if (file_exists($ruta_temp)) unlink($ruta_temp);
-
             $mensaje = "Error al leer el archivo Excel: " . SimpleXLSX::parseError();
             $tipo_mensaje = "error";
         }
@@ -478,7 +756,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Importar HC</title>
+<title>Importar HC + Standby</title>
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
 body {
@@ -548,10 +826,10 @@ button:disabled { opacity:.65; cursor:not-allowed; }
 <body>
 <div class="card">
 
-    <h2>📥 Importar HC</h2>
+    <h2>📥 Importar HC + Standby</h2>
     <p class="sub">
-        Importación transaccional por encabezados.
-        STATUS obligatorio a partir de SEM42-2026.
+        Importación transaccional por encabezados.<br>
+        Sincroniza Consolidado → hc y Standby → hc_standby.
     </p>
 
     <?php if ($mensaje): ?>
