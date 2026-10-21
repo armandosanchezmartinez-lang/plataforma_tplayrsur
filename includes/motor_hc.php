@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR HC v0.6.6 · STANDBY TOTAL + REGLA 40%
+ * TalIA / TotalXpedient · MOTOR HC v0.6.7 · HC_STANDBY AUTORIDAD TEMPORAL
  * ============================================================================
  * Ubicación: /plataforma/includes/motor_hc.php
  * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
@@ -25,6 +25,14 @@ declare(strict_types=1);
  * - Los campos de coach/líder registrados en instalaciones son diagnósticos,
  *   no sustituyen la autoridad jerárquica de Capital Humano.
  *
+ * CAMBIO v0.6.7 (21-OCT-2026)
+ * - hc_standby es la ÚNICA autoridad operativa para VACACIONES/INCAPACIDAD.
+ * - hc.status se conserva para auditoría de la fotografía CH, pero INCAPACIDAD/
+ *   VACACIONES ya NO modifican HC activo, HC operativo, jornadas, HC SIN INS
+ *   ni generan indisponibilidad fuera de los intervalos reales de hc_standby.
+ * - VACANTE mantiene su semántica estructural y sus controles de consistencia.
+ * - Se conserva íntegra la regla >40% sobre STANDBY TOTAL y toda la atribución HIC.
+ *
  * CAMBIO v0.6.6 (21-OCT-2026)
  * - Productividad conserva jornadas-persona reales disponibles por período.
  * - HC SIN INS incorpora elegibilidad centralizada: si STANDBY TOTAL (unión de
@@ -42,14 +50,14 @@ declare(strict_types=1);
  * - Domingos y días inhábiles no se descuentan de nuevo porque no forman parte
  *   de las jornadas operativas del período.
  * - HIC se aplica también al cruce con hc_standby para conservar identidad.
- * - STATUS permanece como fuente de auditoría/fallback cuando no existe intervalo
- *   preciso; no modifica atribución, identidad ni jerarquía.
+ * - STATUS se conserva en la fotografía HC sólo como dato de auditoría. Desde
+ *   v0.6.7 ya no existe fallback operativo para INCAPACIDAD/VACACIONES.
  *
  * CAMBIO v0.6.4 (17-OCT-2026)
  * - HC incorpora status y fecha_alta en el contrato de fotografía.
  * - Se agrega clasificación canónica de estado operativo SOLO para nivel vendedor.
- * - INCAPACIDAD/VACACIONES conservan HC total/ocupado; en v0.6.5 su impacto
- *   operativo exacto se resuelve por hc_standby y STATUS queda como fallback.
+ * - INCAPACIDAD/VACACIONES conservan HC total/ocupado. Su impacto temporal
+ *   se resuelve exclusivamente por hc_standby desde v0.6.7.
  *
  * CAMBIO v0.6.3 (13-OCT-2026)
  * - Atribución de todos los orígenes comerciales a la jerarquía HC certificada.
@@ -196,14 +204,17 @@ final class RankingAtribucionServiceV06
     }
 
     /**
-     * Clasificación canónica de STATUS para NIVEL VENDEDOR.
-     * No altera atribución ni estructura. Entrega únicamente metadatos HC operativos.
+     * Clasificación canónica de STATUS para NIVEL VENDEDOR (v0.6.7).
+     * STATUS se conserva como metadato/auditoría de la fotografía CH.
+     * VACACIONES e INCAPACIDAD NO producen indisponibilidad por STATUS:
+     * la única autoridad temporal es hc_standby.
      *
      * Reglas:
      * - ACTIVO o blanco: HC total=1, ocupado=1, activo=1, operativo=1.
      * - VACANTE: sólo se acepta como vacante si el nombre contiene "VACANT".
-     * - INCAPACIDAD / VACACIONES: HC total=1, ocupado=1, activo=0, operativo=0.
-     * - Cualquier contradicción se marca INCONSISTENTE y no entra al denominador operativo.
+     * - INCAPACIDAD / VACACIONES: plaza ocupada y operativa por defecto; cualquier
+     *   descuento real se resolverá después exclusivamente con hc_standby.
+     * - Cualquier otro STATUS contradictorio se conserva como INCONSISTENTE para auditoría.
      */
     public static function clasificarEstadoVendedor(?string $status, ?string $nombre): array
     {
@@ -222,7 +233,7 @@ final class RankingAtribucionServiceV06
             'valido'=>true,
         ];
 
-        if ($st==='ACTIVO') {
+        if ($st==='ACTIVO' || $st==='INCAPACIDAD' || $st==='VACACIONES') {
             $base['hc_activo']=1;
             $base['hc_operativo']=1;
             return $base;
@@ -236,10 +247,6 @@ final class RankingAtribucionServiceV06
             }
             $base['estado_hc']='INCONSISTENTE_STATUS_VACANTE';
             $base['valido']=false;
-            return $base;
-        }
-
-        if ($st==='INCAPACIDAD' || $st==='VACACIONES') {
             return $base;
         }
 
@@ -774,7 +781,7 @@ final class RankingAtribucionServiceV06
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.6-hc-standby40-all-channels',
+            'version'=>'0.6.7-hc-standby-authority-all-channels',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
