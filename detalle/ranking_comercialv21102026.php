@@ -3,7 +3,7 @@
  * TalIA / TotalXpedient · RANKING COMERCIAL v0.1.4 · PRODUCCIÓN
  * ============================================================================
  * Ubicación: /plataforma/detalle/ranking_comercial.php
- * Dependencias: /plataforma/includes/motor_hc_v0.6.6_STANDBY_TOTAL40.php (STAGING v0.6.6)
+ * Dependencias: /plataforma/includes/motor_hc.php (v0.6.3)
  *               /plataforma/includes/motor_comercial.php (v0.2.1)
  * Escritura en BD: ninguna. Consume únicamente vistas y motores de lectura.
  *
@@ -21,47 +21,9 @@
  *   nunca se promedian los ARPU individuales de los vendedores.
  * - Si el enriquecimiento comercial no concilia, preservar las instalaciones
  *   certificadas y comunicar la incidencia, sin corregir totales artificialmente.
- * - Antigüedad promedio de equipo: promedio simple de meses de antigüedad de vendedores
- *   ocupados con fecha_alta válida al corte ACTUAL; excluye VACANTES y no usa antigüedad del Líder/Coach.
- * - STATUS se conserva exclusivamente como estado semanal de la plaza VENDEDOR.
- *   hc_standby aporta los intervalos reales de VACACIONES/INCAPACIDAD y manda
- *   sobre STATUS para disponibilidad; STATUS queda como fallback histórico.
- * - HC Activo/Total conserva plazas ocupadas. Productividad descuenta únicamente
- *   las jornadas-persona realmente no disponibles dentro del rango consultado.
  *
- * CAMBIO FUNCIONAL DOCUMENTADO 21-OCT-2026 · REGLA HC SIN INS >40% STANDBY
- * - STANDBY TOTAL = unión de INCAPACIDAD + VACACIONES dentro de los días operativos.
- * - Si STANDBY TOTAL cubre más del 40% del período, el vendedor con 0 instalaciones
- *   NO cuenta como HC SIN INS. 40% exacto sí permanece elegible.
- * - Traslapes INCAPACIDAD/VACACIONES cuentan una sola vez.
- * - HC Activo/Vacante y Productividad por jornadas reales no cambian.
- * - La elegibilidad se resuelve mediante Motor HC; el Ranking sólo agrega/presenta.
- * - Motor requerido: 0.6.6-hc-standby40-all-channels.
- *
- * CAMBIO FUNCIONAL DOCUMENTADO 20-OCT-2026 · STANDBY POR FECHAS
- * - hc_standby es autoridad operativa precisa para VACACIONES/INCAPACIDAD.
- * - HC Activo/Total permanece como plaza ocupada; VACANTE sigue fuera.
- * - HC operativo = vendedor con al menos un día disponible en el período.
- * - Productividad usa jornadas-persona exactas disponibles, no HC × días completos
- *   cuando existe una ausencia parcial.
- * - STATUS INCAPACIDAD/VACACIONES queda como fallback si no existe intervalo preciso.
- * - Solapamientos de standby descuentan cada fecha una sola vez; domingos/festivos
- *   no se descuentan nuevamente.
- * - En vendedor se muestran los intervalos reales que cruzan BASE/ACTUAL.
- * - Motor requerido: 0.6.5-hc-standby-fechas-all-channels.
- *
- * CAMBIO FUNCIONAL DOCUMENTADO 19-OCT-2026
- * - Motor requerido: 0.6.4-hc-status-vendedor-all-channels.
- * - La clasificación de STATUS ocurre en vendedor; Líder y Coach NO reciben STATUS propio.
- * - El efecto de STATUS sí se consolida hacia Líder/Coach mediante hc_operativo.
- * - Se incorpora Antigüedad prom. equipo en niveles Líder y Coach.
- * - TOTAL de antigüedad es ponderado por vendedores con fecha_alta válida; nunca
- *   es promedio de promedios de Líderes/Coaches.
- * - fecha_alta vacía, inválida o futura se excluye sólo del promedio de antigüedad.
- * - No cambia atribución de instalaciones, jerarquía, ARPU, Plays, Oferta ni Bundles.
- *
- * COMPATIBILIDAD 19-OCT-2026
- * - Motor HC v0.6.4: salida '0.6.4-hc-status-vendedor-all-channels', en BASE y ACTUAL.
+ * COMPATIBILIDAD 13-OCT-2026
+ * - Motor HC v0.6.3: salida '0.6.3-hc-all-channels', en BASE y ACTUAL.
  * - Motor Comercial v0.2.1: VERSION '0.2.1-all-channels'.
  * - Folios '-', vacíos y VACANTE no definen personas; HIC unifica migraciones
  *   verificadas de número de talento, sin usar una misma plaza como identidad.
@@ -71,7 +33,7 @@
  *   consume y presenta sus resultados sin duplicar reglas de certificación.
  */
 /*
- * RANKING COMERCIAL — NOTAS DE MANTENIMIENTO (Oct-2026)
+ * RANKING DE PRODUCTIVIDAD — NOTAS DE MANTENIMIENTO (Oct-2026)
  * ============================================================================
  * Este archivo concentra la navegación temporal y el drill-down Líder > Coach
  * > Vendedor. Los cambios recientes NO deben interpretarse como simples aliases
@@ -349,37 +311,17 @@ function base_metrics_totals($rows, $dias_habiles_base = 1, $dias_habiles_actual
     $keys = [
         'ins_sem_base','ins_sem_actual','dif','hc_activo_base','hc_activo_actual',
         'hc_con_ins_base','hc_con_ins_actual','hc_sin_venta_base','hc_sin_venta_actual',
-        'hc_operativo_base','hc_operativo_actual',
-        'hc_elegible_sin_ins_base','hc_elegible_sin_ins_actual',
-        'jornadas_operativas_base','jornadas_operativas_actual',
-        'dias_standby_base','dias_standby_actual','personas_standby_base','personas_standby_actual',
-        'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual',
-        'antiguedad_suma_meses_actual','antiguedad_con_fecha_actual','antiguedad_ocupados_actual'
+        'activo_base','vacante_base','hc_total_base','activo_actual','vacante_actual','hc_total_actual'
     ];
     $tot = array_fill_keys($keys, 0);
     foreach ($rows as $r) {
         foreach ($keys as $k) $tot[$k] += (float)($r[$k] ?? 0);
     }
-    $tot['pct_dif'] = $tot['ins_sem_base'] > 0
-        ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0)
-        : null;
-
-    // HC sin INS mantiene semántica de personas disponibles al menos un día.
-    $denBase=(float)$tot['hc_operativo_base'];
-    $denActual=(float)$tot['hc_operativo_actual'];
-    $tot['pct_hc_sin_ins_base'] = $denBase > 0 ? round(($tot['hc_sin_venta_base'] / $denBase) * 100, 0) : null;
-    $tot['pct_hc_sin_ins_actual'] = $denActual > 0 ? round(($tot['hc_sin_venta_actual'] / $denActual) * 100, 0) : null;
-
-    // Productividad v0.6.5: instalaciones / jornadas-persona realmente disponibles.
-    $jorBase=(float)$tot['jornadas_operativas_base'];
-    $jorActual=(float)$tot['jornadas_operativas_actual'];
-    $tot['prod_base'] = $jorBase > 0 ? round($tot['ins_sem_base'] / $jorBase, 2) : null;
-    $tot['prod_actual'] = $jorActual > 0 ? round($tot['ins_sem_actual'] / $jorActual, 2) : null;
-
-    $tot['antiguedad_promedio_actual_meses'] = $tot['antiguedad_con_fecha_actual'] > 0
-        ? (int)round($tot['antiguedad_suma_meses_actual'] / $tot['antiguedad_con_fecha_actual'])
-        : null;
-    $tot['antiguedad_promedio_actual'] = rank05_antiguedad_texto_meses($tot['antiguedad_promedio_actual_meses']);
+    $tot['pct_dif'] = $tot['ins_sem_base'] > 0 ? round((($tot['ins_sem_actual'] - $tot['ins_sem_base']) / $tot['ins_sem_base']) * 100, 0) : null;
+    $tot['pct_hc_sin_ins_base'] = $tot['hc_activo_base'] > 0 ? round(($tot['hc_sin_venta_base'] / $tot['hc_activo_base']) * 100, 0) : null;
+    $tot['pct_hc_sin_ins_actual'] = $tot['hc_activo_actual'] > 0 ? round(($tot['hc_sin_venta_actual'] / $tot['hc_activo_actual']) * 100, 0) : null;
+    $tot['prod_base'] = ($tot['hc_activo_base'] > 0 && $dias_habiles_base > 0) ? round($tot['ins_sem_base'] / $tot['hc_activo_base'] / $dias_habiles_base, 2) : null;
+    $tot['prod_actual'] = ($tot['hc_activo_actual'] > 0 && $dias_habiles_actual > 0) ? round($tot['ins_sem_actual'] / $tot['hc_activo_actual'] / $dias_habiles_actual, 2) : null;
     return $tot;
 }
 
@@ -917,7 +859,7 @@ lideres_activos AS (
 
 /**
  * Ranking Comercial - ÚNICA fuente de instalaciones certificadas:
- * Motor HC v0.6.5 -> una fila por cuenta -> agregación jerárquica.
+ * Motor HC v0.6.3 -> una fila por cuenta -> agregación jerárquica.
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
@@ -932,14 +874,7 @@ function rank05_catalogo(RankingAtribucionServiceV06 $motor, string $desde, stri
 function rank05_ficha(array $catalogo, string $liderId): array {
     return $catalogo[$liderId] ?? ['distrito'=>'SIN_DISTRITO','hc'=>'','nombre'=>'LÍDER NO IDENTIFICADO','aliases'=>[],'plaza'=>null];
 }
-function rank05_foto_hc(
-    RankingAtribucionServiceV06 $motor,
-    string $desde,
-    string $hasta,
-    array $catalogo,
-    array $canonicos,
-    array $standbyPeriodo=[]
-): array {
+function rank05_foto_hc(RankingAtribucionServiceV06 $motor, string $desde, string $hasta, array $catalogo, array $canonicos): array {
     $info=$motor->cargarHc($desde,$hasta);
     $photos=$info['fotos'];
     $ultima=null;
@@ -960,6 +895,7 @@ function rank05_foto_hc(
     foreach ($hcs as $h) {
         if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
         $nombreLineal=rank05_name_key($h['nombre_linea_reporte']??'');
+        // Misma clave canonica de distrito que utiliza Motor HC v0.6.1.
         $distrito=RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null);
         if ($distrito===null) continue;
         $candidates=[];
@@ -977,7 +913,6 @@ function rank05_foto_hc(
         $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
     }
     if (!$coaches) throw new RuntimeException('Ningún coach de Región SUR pudo relacionarse con HC '.$fotoKey);
-
     foreach ($hcs as $h) {
         if (stripos((string)($h['puesto_lr']??''),'COACH')===false) continue;
         $posCoach=(string)($h['posicion_lr']??'');
@@ -986,184 +921,17 @@ function rank05_foto_hc(
         foreach ($catalogo as $lid=>$l) {
             $coachKey=$lid.'|'.$posCoach;
             if (!isset($coaches[$coachKey]) || RankingAtribucionServiceV06::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
-            $nombreVendedor=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'');
-            $vac=$nombreVendedor==='VACANTE';
+            $vac=RankingAtribucionServiceV06::norm($h['nombre_colaborador']??'')==='VACANTE';
             $talento=(string)($h['numero_talento_gs']??'');
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
-
-            // STATUS conserva la fotografía semanal de CH. Su impacto por período
-            // es fallback; cuando existe hc_standby, mandan los intervalos reales.
-            $estadoVendedor=RankingAtribucionServiceV06::clasificarEstadoVendedor(
-                $h['status']??null,
-                $h['nombre_colaborador']??null
-            );
-            $standbyPersona=(!$vac && $persona!==null)
-                ? ($standbyPeriodo['por_talento'][$persona]??null)
-                : null;
-
             // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
-            $sellerByCoach[$coachKey][$idPos]=[
-                'id_posicion'=>$idPos,
-                'persona'=>$persona,
-                'nombre'=>$nombreVendedor,
-                'vacante'=>$vac,
-                'status'=>(string)($h['status']??''),
-                'estado_hc'=>$estadoVendedor['estado_hc'],
-                'hc_total'=>$estadoVendedor['hc_total'],
-                'hc_ocupado'=>$estadoVendedor['hc_ocupado'],
-                'hc_activo'=>$estadoVendedor['hc_activo'],
-                'hc_operativo'=>$estadoVendedor['hc_operativo'],
-                'es_vacante_status'=>$estadoVendedor['es_vacante'],
-                'estado_valido'=>$estadoVendedor['valido'],
-                'fecha_alta'=>$h['fecha_alta']??null,
-                'dias_periodo'=>max(1,(int)($standbyPeriodo['dias_periodo']??1)),
-                'standby'=>$standbyPersona,
-            ];
+            $sellerByCoach[$coachKey][$idPos]=['id_posicion'=>$idPos, 'persona'=>$persona, 'nombre'=>RankingAtribucionServiceV06::norm($h['nombre_colaborador']??''), 'vacante'=>$vac];
         }
     }
-    return [
-        'foto'=>$fotoKey,
-        'coaches'=>$coaches,
-        'vendedores'=>$sellerByCoach,
-        'standby'=>$standbyPeriodo,
-    ];
+    return ['foto'=>$fotoKey, 'coaches'=>$coaches,'vendedores'=>$sellerByCoach];
 }
-/**
- * Disponibilidad de una plaza VENDEDOR dentro del período consultado.
- * Prioridad:
- * 1) hc_standby con fechas exactas.
- * 2) STATUS semanal como fallback cuando no existe intervalo preciso.
- *
- * "operativo" sigue siendo HC de personas con al menos un día disponible.
- * "dias_disponibles" alimenta el denominador exacto de productividad.
- */
-function rank05_disponibilidad_seat(array $seat): array {
-    if (empty($seat)) {
-        return [
-            'dias_periodo'=>0,
-            'dias_standby'=>0,
-            'dias_incapacidad'=>0,
-            'dias_vacaciones'=>0,
-            'dias_disponibles'=>0,
-            'pct_incapacidad'=>0.0,
-            'pct_standby'=>0.0,
-            'operativo'=>false,
-            'elegible_hc_sin_ins'=>false,
-            'motivo_exclusion_hc_sin_ins'=>'AUSENTE_HC',
-            'fuente'=>'AUSENTE_HC',
-            'eventos'=>[],
-        ];
-    }
-
-    $diasPeriodo=max(1,(int)($seat['dias_periodo']??1));
-    $sb=$seat['standby']??null;
-
-    if (is_array($sb) && !empty($sb['tiene_intervalo'])) {
-        $diasStandby=max(0,min($diasPeriodo,(int)($sb['dias_standby']??0)));
-        $diasIncapacidad=max(0,min($diasPeriodo,(int)($sb['dias_incapacidad']??0)));
-        $diasVacaciones=max(0,min($diasPeriodo,(int)($sb['dias_vacaciones']??0)));
-        $diasDisponibles=max(0,min($diasPeriodo,(int)($sb['dias_disponibles']??($diasPeriodo-$diasStandby))));
-
-        // Regla centralizada en Motor HC: >40% STANDBY TOTAL excluye de HC SIN INS.
-        $regla=RankingAtribucionServiceV06::evaluarElegibilidadHcSinIns(
-            $diasPeriodo,
-            $diasStandby,
-            $diasDisponibles
-        );
-
-        return [
-            'dias_periodo'=>$diasPeriodo,
-            'dias_standby'=>$diasStandby,
-            'dias_incapacidad'=>$diasIncapacidad,
-            'dias_vacaciones'=>$diasVacaciones,
-            'dias_disponibles'=>$diasDisponibles,
-            'pct_incapacidad'=>$diasPeriodo>0 ? ($diasIncapacidad/$diasPeriodo)*100.0 : 0.0,
-            'pct_standby'=>(float)$regla['pct_standby'],
-            'operativo'=>$diasDisponibles>0,
-            'elegible_hc_sin_ins'=>(bool)$regla['elegible'],
-            'motivo_exclusion_hc_sin_ins'=>(string)$regla['motivo'],
-            'fuente'=>'STANDBY',
-            'eventos'=>array_values($sb['eventos']??[]),
-        ];
-    }
-
-    // Fallback histórico: sin intervalo preciso, STATUS conserva la regla anterior.
-    // INCAPACIDAD o VACACIONES implican el período completo para fines de fallback;
-    // por tanto STANDBY=100% y quedan excluidos de HC SIN INS.
-    $esOperativo=(int)($seat['hc_operativo']??1)===1;
-    $estado=strtoupper(trim((string)($seat['estado_hc']??$seat['status']??'ACTIVO')));
-    $diasIncapacidad=$estado==='INCAPACIDAD' ? $diasPeriodo : 0;
-    $diasVacaciones=$estado==='VACACIONES' ? $diasPeriodo : 0;
-    $diasDisponibles=$esOperativo?$diasPeriodo:0;
-    $diasStandby=$esOperativo?0:$diasPeriodo;
-
-    $regla=RankingAtribucionServiceV06::evaluarElegibilidadHcSinIns(
-        $diasPeriodo,
-        $diasStandby,
-        $diasDisponibles
-    );
-
-    return [
-        'dias_periodo'=>$diasPeriodo,
-        'dias_standby'=>$esOperativo?0:$diasPeriodo,
-        'dias_incapacidad'=>$diasIncapacidad,
-        'dias_vacaciones'=>$diasVacaciones,
-        'dias_disponibles'=>$diasDisponibles,
-        'pct_incapacidad'=>$diasPeriodo>0 ? ($diasIncapacidad/$diasPeriodo)*100.0 : 0.0,
-        'pct_standby'=>(float)$regla['pct_standby'],
-        'operativo'=>$esOperativo,
-        'elegible_hc_sin_ins'=>(bool)$regla['elegible'],
-        'motivo_exclusion_hc_sin_ins'=>(string)$regla['motivo'],
-        'fuente'=>in_array($estado,['INCAPACIDAD','VACACIONES'],true)?'STATUS_FALLBACK':'HC',
-        'eventos'=>[],
-    ];
-}
-
-function rank05_fecha_corta_es(?string $fecha): string {
-    $fecha=trim((string)$fecha);
-    if ($fecha==='') return 'VIGENTE';
-    $d=DateTimeImmutable::createFromFormat('!Y-m-d',$fecha);
-    if (!$d) return $fecha;
-    $meses=[1=>'ene',2=>'feb',3=>'mar',4=>'abr',5=>'may',6=>'jun',7=>'jul',8=>'ago',9=>'sep',10=>'oct',11=>'nov',12=>'dic'];
-    return (int)$d->format('j').' '.($meses[(int)$d->format('n')]??$d->format('m')).' '.$d->format('Y');
-}
-
-function rank05_standby_texto(array $evento): string {
-    $tipo=strtoupper(trim((string)($evento['tipo_standby']??'STANDBY')));
-    $fi=rank05_fecha_corta_es($evento['fecha_inicio']??null);
-    $ff=rank05_fecha_corta_es($evento['fecha_fin']??null);
-    return $tipo.' · '.$fi.' – '.$ff;
-}
-
-/**
- * Antigüedad promedio del EQUIPO (vendedores), no del Líder/Coach.
- * - Excluye VACANTES.
- * - Incluye plazas ocupadas aunque estén temporalmente en INCAPACIDAD/VACACIONES.
- * - Excluye del promedio fechas de alta vacías/inválidas/futuras, sin eliminar a la persona del HC.
- * - El corte siempre corresponde al fin del período consultado (ACTUAL o BASE).
- */
-function rank05_antiguedad_texto_meses($meses): string {
-    if ($meses === null || $meses === '') return '-';
-    $m=max(0,(int)round((float)$meses));
-    if ($m < 12) return $m.' meses';
-    return intdiv($m,12).' años '.($m%12).' meses';
-}
-
-function rank05_antiguedad_corte(?string $fechaAlta, string $corte): array {
-    $fechaAlta=trim((string)$fechaAlta);
-    if ($fechaAlta==='' || $fechaAlta==='0000-00-00') return ['texto'=>'-','meses'=>0,'valido'=>false];
-
-    $alta=DateTimeImmutable::createFromFormat('!Y-m-d',$fechaAlta);
-    $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
-    if (!$alta || !$fin || $alta>$fin) return ['texto'=>'-','meses'=>0,'valido'=>false];
-
-    $diff=$alta->diff($fin);
-    $meses=((int)$diff->y*12)+(int)$diff->m;
-    return ['texto'=>rank05_antiguedad_texto_meses($meses),'meses'=>$meses,'valido'=>true];
-}
-
-function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $eventos, string $corte=''): array {
+function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $eventos): array {
     $filas=[];
     foreach ($hc['vendedores'] as $k=>$seats) {
         if (!str_starts_with($k, $lider.'|')) continue;
@@ -1171,76 +939,19 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
         if ($coach!==null && $idCoach!==$coach) continue;
         foreach ($seats as $pos=>$seat) $filas[$k.'|'.$pos]=$seat;
     }
-
     $identidadesConInst=[];
     foreach ($eventos as $ev) {
         if (($ev['lider_id']??null)!==$lider) continue;
         if ($coach!==null && (string)($ev['coach_id']??'SIN_COACH')!==$coach) continue;
         if (!empty($ev['vendedor_id'])) $identidadesConInst[(string)$ev['vendedor_id']]=true;
     }
-
-    // v0.6.5 STANDBY:
-    // - activo = plaza ocupada (HC mostrado).
-    // - operativo = vendedor con al menos UN día operativo en el período.
-    // - jornadas_operativas = suma exacta de días disponibles por vendedor.
-    // - productividad = instalaciones / jornadas_operativas.
-    // - hc_standby manda sobre STATUS; STATUS queda como fallback histórico.
-    $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
-    $elegibleSinIns=0; $conInsElegible=0;
-    $jornadasOperativas=0; $diasStandby=0; $personasStandby=0;
-    $antiguedadSumaMeses=0; $antiguedadConFecha=0; $ocupadosEquipo=0;
-    if ($corte==='') $corte=date('Y-m-d');
-
+    $activo=0;$vacante=0;$con=0;
     foreach ($filas as $seat) {
-        $esVacante=(bool)($seat['vacante']??false) || (bool)($seat['es_vacante_status']??false);
-        if ($esVacante) {
-            $vacante++;
-            continue;
-        }
-
+        if ($seat['vacante']) { $vacante++; continue; }
         $activo++;
-        $ocupadosEquipo++;
-        $antig=rank05_antiguedad_corte($seat['fecha_alta']??null,$corte);
-        if (($antig['valido']??false)===true) {
-            $antiguedadSumaMeses+=(int)$antig['meses'];
-            $antiguedadConFecha++;
-        }
-
-        $disp=rank05_disponibilidad_seat($seat);
-        $jornadasOperativas+=(int)$disp['dias_disponibles'];
-        $diasStandby+=(int)$disp['dias_standby'];
-        if (!empty($disp['eventos'])) $personasStandby++;
-
-        $tieneInst=($seat['persona']??null)!==null
-            && isset($identidadesConInst[(string)$seat['persona']]);
-
-        // HC SIN INS es una métrica de personas, separada de Productividad.
-        // El vendedor sólo puede entrar al universo SIN INS si Motor HC lo declara elegible.
-        if (!empty($disp['elegible_hc_sin_ins'])) {
-            $elegibleSinIns++;
-            if ($tieneInst) $conInsElegible++;
-        }
-
-        if (empty($disp['operativo'])) continue;
-        $operativo++;
-        if ($tieneInst) $conOperativo++;
+        if ($seat['persona']!==null && isset($identidadesConInst[$seat['persona']])) $con++;
     }
-
-    return [
-        'activo'=>$activo,
-        'operativo'=>$operativo,
-        'vacante'=>$vacante,
-        'con_ins'=>$conOperativo,
-        'elegible_sin_ins'=>$elegibleSinIns,
-        'con_ins_elegible'=>$conInsElegible,
-        'jornadas_operativas'=>$jornadasOperativas,
-        'dias_standby'=>$diasStandby,
-        'personas_standby'=>$personasStandby,
-        'antiguedad_suma_meses'=>$antiguedadSumaMeses,
-        'antiguedad_con_fecha'=>$antiguedadConFecha,
-        'antiguedad_ocupados'=>$ocupadosEquipo,
-        'antiguedad_promedio_meses'=>$antiguedadConFecha>0 ? (int)round($antiguedadSumaMeses/$antiguedadConFecha) : null,
-    ];
+    return ['activo'=>$activo,'vacante'=>$vacante,'con_ins'=>$con];
 }
 function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?string $vendedor=null): int {
     $n=0;
@@ -1254,17 +965,8 @@ function rank05_num_cuentas(array $filas, string $lider, ?string $coach=null, ?s
 }
 function rank05_row(string $lider, string $coachId, string $nombre, array $catalogo, int $insBase, int $insActual, array $hb, array $ha, int $diasBase, int $diasActual): array {
     $l=rank05_ficha($catalogo,$lider);
-    $hcActivoBase=(int)$hb['activo'];$hcActivoActual=(int)$ha['activo'];
-    $hcOperativoBase=(int)($hb['operativo']??$hcActivoBase);
-    $hcOperativoActual=(int)($ha['operativo']??$hcActivoActual);
-    $jornadasBase=(int)($hb['jornadas_operativas']??0);
-    $jornadasActual=(int)($ha['jornadas_operativas']??0);
-    $elegibleSinBase=(int)($hb['elegible_sin_ins']??$hcOperativoBase);
-    $elegibleSinActual=(int)($ha['elegible_sin_ins']??$hcOperativoActual);
-    $conInsElegibleBase=(int)($hb['con_ins_elegible']??$hb['con_ins']??0);
-    $conInsElegibleActual=(int)($ha['con_ins_elegible']??$ha['con_ins']??0);
-    $sinBase=max(0,$elegibleSinBase-$conInsElegibleBase);
-    $sinActual=max(0,$elegibleSinActual-$conInsElegibleActual);
+    $hcActivoBase=$hb['activo'];$hcActivoActual=$ha['activo'];
+    $sinBase=max(0,$hcActivoBase-$hb['con_ins']);$sinActual=max(0,$hcActivoActual-$ha['con_ins']);
     $dif=$insActual-$insBase;
     return [
         'distrito'=>$l['distrito'],'entidad'=>$nombre,'lider'=>$l['nombre'],
@@ -1273,30 +975,17 @@ function rank05_row(string $lider, string $coachId, string $nombre, array $catal
         'ins_sem_base'=>$insBase,'ins_sem_actual'=>$insActual,'dif'=>$dif,
         'pct_dif'=>$insBase>0?round(100*$dif/$insBase):null,
         'hc_activo_base'=>$hcActivoBase,'hc_activo_actual'=>$hcActivoActual,
-        'hc_operativo_base'=>$hcOperativoBase,'hc_operativo_actual'=>$hcOperativoActual,
-        'hc_elegible_sin_ins_base'=>$elegibleSinBase,'hc_elegible_sin_ins_actual'=>$elegibleSinActual,
         'hc_con_ins_base'=>$hb['con_ins'],'hc_con_ins_actual'=>$ha['con_ins'],
         'hc_sin_venta_base'=>$sinBase,'hc_sin_venta_actual'=>$sinActual,
-        'pct_hc_sin_ins_base'=>$hcOperativoBase>0?round(100*$sinBase/$hcOperativoBase):null,
-        'pct_hc_sin_ins_actual'=>$hcOperativoActual>0?round(100*$sinActual/$hcOperativoActual):null,
-        'jornadas_operativas_base'=>$jornadasBase,
-        'jornadas_operativas_actual'=>$jornadasActual,
-        'dias_standby_base'=>(int)($hb['dias_standby']??0),
-        'dias_standby_actual'=>(int)($ha['dias_standby']??0),
-        'personas_standby_base'=>(int)($hb['personas_standby']??0),
-        'personas_standby_actual'=>(int)($ha['personas_standby']??0),
-        'prod_base'=>$jornadasBase>0?round($insBase/$jornadasBase,2):null,
-        'prod_actual'=>$jornadasActual>0?round($insActual/$jornadasActual,2):null,
+        'pct_hc_sin_ins_base'=>$hcActivoBase>0?round(100*$sinBase/$hcActivoBase):null,
+        'pct_hc_sin_ins_actual'=>$hcActivoActual>0?round(100*$sinActual/$hcActivoActual):null,
+        'prod_base'=>($hcActivoBase>0 && $diasBase>0)?round($insBase/$hcActivoBase/$diasBase,2):null,
+        'prod_actual'=>($hcActivoActual>0 && $diasActual>0)?round($insActual/$hcActivoActual/$diasActual,2):null,
         'activo_base'=>$hcActivoBase,'vacante_base'=>$hb['vacante'],'hc_total_base'=>$hcActivoBase+$hb['vacante'],
         'activo_actual'=>$hcActivoActual,'vacante_actual'=>$ha['vacante'],'hc_total_actual'=>$hcActivoActual+$ha['vacante'],
-        'antiguedad_suma_meses_actual'=>(int)($ha['antiguedad_suma_meses']??0),
-        'antiguedad_con_fecha_actual'=>(int)($ha['antiguedad_con_fecha']??0),
-        'antiguedad_ocupados_actual'=>(int)($ha['antiguedad_ocupados']??0),
-        'antiguedad_promedio_actual_meses'=>$ha['antiguedad_promedio_meses']??null,
-        'antiguedad_promedio_actual'=>rank05_antiguedad_texto_meses($ha['antiguedad_promedio_meses']??null),
     ];
 }
-function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual, string $distritoParam='', string $liderIdParam='', string $corteBase='', string $corteActual=''): array {
+function rank05_build(array $base, array $actual, array $fotoBase, array $fotoActual, array $catalogo, string $view, string $liderParam, string $coachPos, int $diasBase, int $diasActual, string $distritoParam='', string $liderIdParam=''): array {
     $ids=array_keys($catalogo);
     $seleccion=null;
     if (in_array($view,['coaches','vendedores'],true)) {
@@ -1335,8 +1024,8 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
     if (in_array($view,['lideres','ranking_coach','coaches'],true)) {
         foreach ($ids as $lid) {
             if ($view==='lideres') {
-                $hb=rank05_resumen_hc($fotoBase,$lid,null,$base,$corteBase);
-                $ha=rank05_resumen_hc($fotoActual,$lid,null,$actual,$corteActual);
+                $hb=rank05_resumen_hc($fotoBase,$lid,null,$base);
+                $ha=rank05_resumen_hc($fotoActual,$lid,null,$actual);
                 $rows[]=rank05_row($lid,'',$catalogo[$lid]['nombre'],$catalogo,rank05_num_cuentas($base,$lid),rank05_num_cuentas($actual,$lid),$hb,$ha,$diasBase,$diasActual);
                 continue;
             }
@@ -1359,7 +1048,7 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
                 if (str_starts_with($co,'EVENT|')) $nombre.=' · IDENTIDAD PROVISIONAL';
                 $rows[]=rank05_row($lid,$co,$nombre,$catalogo,
                     rank05_num_cuentas($base,$lid,$co),rank05_num_cuentas($actual,$lid,$co),
-                    rank05_resumen_hc($fotoBase,$lid,$co,$base,$corteBase),rank05_resumen_hc($fotoActual,$lid,$co,$actual,$corteActual),$diasBase,$diasActual);
+                    rank05_resumen_hc($fotoBase,$lid,$co,$base),rank05_resumen_hc($fotoActual,$lid,$co,$actual),$diasBase,$diasActual);
             }
         }
         usort($rows,static fn($a,$b)=>(int)$b['ins_sem_actual']<=>(int)$a['ins_sem_actual'] ?: strcmp($a['entidad'],$b['entidad']));
@@ -1373,58 +1062,18 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
             $ventas[$v] ??= ['base'=>0,'actual'=>0];
             $ventas[$v][$lado]++;
         }
-        $nombres=[];$metaVendedores=[];
-        foreach (['base'=>$fotoBase,'actual'=>$fotoActual] as $ladoFoto=>$h) {
+        $nombres=[];
+        foreach ([$fotoBase,$fotoActual] as $h) {
             foreach ($h['vendedores'][$lid.'|'.$coachPos]??[] as $seat) {
-                if ($seat['vacante'] || ($seat['es_vacante_status']??false) || $seat['persona']===null) continue;
-                $persona=(string)$seat['persona'];
-                $nombres[$persona]=$seat['nombre'];
-                $metaVendedores[$persona][$ladoFoto]=$seat;
-                $ventas[$persona] ??= ['base'=>0,'actual'=>0];
+                if ($seat['vacante'] || $seat['persona']===null) continue;
+                $nombres[$seat['persona']]=$seat['nombre'];
+                $ventas[$seat['persona']] ??= ['base'=>0,'actual'=>0];
             }
         }
         foreach ($ventas as $v=>$vcts) {
             $nombre=$nombres[$v]??($v==='SIN_VENDEDOR'?'VENDEDOR NO IDENTIFICADO':'FOLIO '.$v);
-            $metaActual=$metaVendedores[$v]['actual']??[];
-            $metaBase=$metaVendedores[$v]['base']??[];
-            $fechaAlta=(string)($metaActual['fecha_alta']??($metaBase['fecha_alta']??''));
-            $corteAntig=$corteActual!==''?$corteActual:date('Y-m-d');
-            $antig=rank05_antiguedad_corte($fechaAlta,$corteAntig);
-            $dispBase=rank05_disponibilidad_seat($metaBase);
-            $dispActual=rank05_disponibilidad_seat($metaActual);
-
             $matrix[$lid.'|'.$coachPos.'|'.$v]=[
-                'vendedor'=>$nombre,
-                'folio_empleado'=>$v==='SIN_VENDEDOR'?'':$v,
-                'fecha_alta'=>$fechaAlta,
-                'antiguedad'=>$antig['texto'],
-                'antiguedad_meses'=>$antig['meses'],
-                'status_base'=>(string)($metaBase['status']??''),
-                'status_actual'=>(string)($metaActual['status']??''),
-                'estado_hc_base'=>(string)($metaBase['estado_hc']??'ACTIVO'),
-                'estado_hc_actual'=>(string)($metaActual['estado_hc']??'ACTIVO'),
-                'hc_total_base'=>(int)($metaBase['hc_total']??0),
-                'hc_total_actual'=>(int)($metaActual['hc_total']??0),
-                'hc_operativo_base'=>!empty($dispBase['operativo'])?1:0,
-                'hc_operativo_actual'=>!empty($dispActual['operativo'])?1:0,
-                'dias_operativos_base'=>(int)($dispBase['dias_disponibles']??0),
-                'dias_operativos_actual'=>(int)($dispActual['dias_disponibles']??0),
-                'dias_standby_base'=>(int)($dispBase['dias_standby']??0),
-                'dias_standby_actual'=>(int)($dispActual['dias_standby']??0),
-                'dias_incapacidad_base'=>(int)($dispBase['dias_incapacidad']??0),
-                'dias_incapacidad_actual'=>(int)($dispActual['dias_incapacidad']??0),
-                'pct_incapacidad_base'=>(float)($dispBase['pct_incapacidad']??0),
-                'pct_incapacidad_actual'=>(float)($dispActual['pct_incapacidad']??0),
-                'pct_standby_base'=>(float)($dispBase['pct_standby']??0),
-                'pct_standby_actual'=>(float)($dispActual['pct_standby']??0),
-                'elegible_hc_sin_ins_base'=>!empty($dispBase['elegible_hc_sin_ins']),
-                'elegible_hc_sin_ins_actual'=>!empty($dispActual['elegible_hc_sin_ins']),
-                'motivo_exclusion_hc_sin_ins_base'=>(string)($dispBase['motivo_exclusion_hc_sin_ins']??''),
-                'motivo_exclusion_hc_sin_ins_actual'=>(string)($dispActual['motivo_exclusion_hc_sin_ins']??''),
-                'disponibilidad_fuente_base'=>(string)($dispBase['fuente']??'HC'),
-                'disponibilidad_fuente_actual'=>(string)($dispActual['fuente']??'HC'),
-                'standby_eventos_base'=>array_values($dispBase['eventos']??[]),
-                'standby_eventos_actual'=>array_values($dispActual['eventos']??[]),
+                'vendedor'=>$nombre,'folio_empleado'=>$v==='SIN_VENDEDOR'?'':$v,'antiguedad'=>'-',
                 'ins_base'=>$vcts['base'],'ins_actual'=>$vcts['actual'],
                 'total'=>$vcts['base']+$vcts['actual'],
                 'doble_play'=>0,'triple_play'=>0,'residencial'=>0,'negocios'=>0,
@@ -2633,16 +2282,16 @@ $comercial05_error='';
 $comercial05_auditoria=[];
 if ($view !== 'ventas') {
     try {
-        require_once __DIR__.'/../includes/motor_hc_v0.6.6_STANDBY_TOTAL40.php';
+        require_once __DIR__.'/../includes/motor_hc.php';
         $motor05=new RankingAtribucionServiceV06($conexion);
         $catalogo05=rank05_catalogo($motor05,$fecha_inicio_base_calc,$fecha_fin_actual_calc);
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.5: ambos periodos deben provenir de la version exacta
+        // CONTRATO v0.6.3: ambos periodos deben provenir de la version exacta
         // desplegada de Motor HC en producción. La verificacion protege la comparacion
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.6-hc-standby40-all-channels';
+        $versionMotorRequerida05 = '0.6.3-hc-all-channels';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
@@ -2651,10 +2300,10 @@ if ($view !== 'ventas') {
             );
         }
         $canonicos05=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor05->cargarHic())['canonicos'];
-        $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05,$resBase05['standby']??[]);
-        $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05,$resActual05['standby']??[]);
+        $fotoBase05=rank05_foto_hc($motor05,$fecha_inicio_base_calc,$fecha_fin_base_calc,$catalogo05,$canonicos05);
+        $fotoActual05=rank05_foto_hc($motor05,$fecha_inicio_actual_calc,$fecha_fin_actual_calc,$catalogo05,$canonicos05);
         $rank05_fotografias=['base'=>$fotoBase05['foto'],'actual'=>$fotoActual05['foto']];
-        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual,(string)$distrito_param,(string)$lider_id_param,$fecha_fin_base_calc,$fecha_fin_actual_calc);
+        $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual,(string)$distrito_param,(string)$lider_id_param);
         $rows=$datos05['rows'];
         $coach_matrix=$datos05['matrix'];
         $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
@@ -2909,24 +2558,6 @@ body.page-ranking .commercial-compare-table thead th { vertical-align:middle; fo
 body.page-ranking .commercial-compare-table thead th.group { font-size:11px; letter-spacing:.025em; }
 body.page-ranking .commercial-compare-table td { white-space:nowrap; padding-left:7px; padding-right:7px; }
 body.page-ranking .commercial-compare-table td.entity { white-space:normal; min-width:210px; }
-body.page-ranking .vendedor-status{
-    display:block;
-    width:max-content;
-    max-width:100%;
-    margin-top:4px;
-    padding:2px 7px;
-    border-radius:999px;
-    font-size:.67rem;
-    font-weight:800;
-    line-height:1.35;
-    letter-spacing:.02em;
-}
-body.page-ranking .vendedor-status--incapacidad{ color:#9a3412; background:#ffedd5; }
-body.page-ranking .vendedor-status--vacaciones{ color:#075985; background:#e0f2fe; }
-body.page-ranking .vendedor-status--base{ opacity:.82; }
-body.page-ranking .vendedor-status--actual{ opacity:1; }
-body.page-ranking .vendedor-status--alerta{ color:#991b1b; background:#fee2e2; }
-
 /* Ranking Comercial: idéntico acabado suave del nivel Vendedor. */
 body.page-ranking .rc-summary-table thead th { vertical-align:middle; font-size:11px; line-height:1.45; padding:10px 7px; }
 body.page-ranking .rc-summary-table thead th.group { font-size:11px; letter-spacing:.025em; }
@@ -2938,7 +2569,7 @@ body.page-ranking .rc-summary-table tbody tr.rc-row:hover { background:#f1efff; 
  * AJUSTE EXCLUSIVAMENTE VISUAL 10-OCT-2026 | VISTAS LÍDER / COACH.
  * Referencia de las tres primeras columnas: Ranking de Productividad.
  * La tabla se adapta al ancho disponible: sin width/min-width de 2450px.
- * Los campos comerciales conservan su orden y sus valores; se agrega Antigüedad prom. equipo; no se toca el Vendedor,
+ * Los 23 campos conservan su orden y sus valores; no se toca el Vendedor,
  * la atribución de Motor HC, Motor Comercial ni las rutinas de cálculo.
  */
 body.page-ranking #rcRankingTable {
@@ -3403,8 +3034,7 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
         <colgroup>
             <col style="width:2.87977%">
             <col style="width:6.83945%">
-            <col style="width:11.41865%">
-            <col style="width:5.50000%">
+            <col style="width:16.91865%">
             <col style="width:4.24766%">
             <col style="width:4.24766%">
             <col style="width:3.16775%">
@@ -3431,7 +3061,6 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                     <th rowspan="2" class="center">#</th>
                     <th rowspan="2">Distrito</th>
                     <th rowspan="2"><?= h($rcHead) ?></th>
-                    <th rowspan="2" class="center rc-sortable" data-sort="antiguedad_promedio_actual_meses">Antigüedad prom.<br>equipo <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num rc-sortable" data-sort="ins_base">INS<br><?= h($label_col_base) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num rc-sortable" data-sort="ins_actual">INS<br><?= h($label_col_actual) ?> <span class="sort-icon">↕</span></th>
                     <th rowspan="2" class="num rc-sortable" data-sort="dif">Dif. <span class="sort-icon">↕</span></th>
@@ -3465,8 +3094,7 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                         ? '?' . qs(array_merge($nav_estado,['view'=>'coaches','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id']]))
                         : '?' . qs(array_merge($nav_estado,['view'=>'vendedores','distrito'=>$r['distrito'],'lider'=>$r['lider'],'lider_id'=>$r['lider_id'],'coach'=>$r['coach'],'coach_pos'=>$r['coach_pos']]));
                     $rcData = [ 'ins_base'=>$nb, 'ins_actual'=>$na, 'base'=>$cb, 'actual'=>$ca ];
-                    $rcSort = ['antiguedad_promedio_actual_meses'=>$r['antiguedad_promedio_actual_meses']??-1,
-                        'ins_base'=>$nb,'ins_actual'=>$na,'dif'=>$nd,'pct_dif'=>$np,
+                    $rcSort = ['ins_base'=>$nb,'ins_actual'=>$na,'dif'=>$nd,'pct_dif'=>$np,
                         'arpu_base'=>$ab,'arpu_actual'=>$aa,'arpu_dif'=>$ad,'arpu_pct_dif'=>$ap];
                     foreach ($dimensionesRc as $dim) {
                         $f=$dim['campo'];
@@ -3476,13 +3104,10 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                 ?>
                 <tr class="rc-row" data-district="<?= h($r['distrito']) ?>" data-href="<?= h($rcUrl) ?>"
                     data-rc-metrics="<?= h(json_encode($rcData,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE)) ?>"
-                    data-antig-sum="<?= h($r['antiguedad_suma_meses_actual'] ?? 0) ?>"
-                    data-antig-count="<?= h($r['antiguedad_con_fecha_actual'] ?? 0) ?>"
                     <?php foreach ($rcSort as $k=>$v): ?>data-<?= h($k) ?>="<?= $v===null?'-999999':h($v) ?>" <?php endforeach; ?>>
                     <td class="center"><span class="rank"><?= $rcRank++ ?></span></td>
                     <td class="district"><?= h($r['distrito']) ?></td>
                     <td class="entity"><?= h($r['entidad']) ?></td>
-                    <td class="center" title="<?= h(($r['antiguedad_con_fecha_actual'] ?? 0).' de '.($r['antiguedad_ocupados_actual'] ?? 0).' vendedores con fecha de alta válida') ?>"><?= h($r['antiguedad_promedio_actual'] ?? '-') ?></td>
                     <td class="num"><?= fmt_num($nb) ?></td>
                     <td class="num"><?= fmt_num($na) ?></td>
                     <td class="num"><?= fmt_num($nd) ?></td>
@@ -3501,7 +3126,6 @@ $rcCardBundleActual = $comercial05_ok ? $rcPct($rcTotalActual['bundle'], $tot['i
                 <?php endforeach; ?>
                 <tr class="total-row" id="rcTotalRow">
                     <td></td><td></td><td>TOTAL</td>
-                    <td class="center" data-rc-total="antiguedad_promedio_actual"><?= h($tot['antiguedad_promedio_actual'] ?? '-') ?></td>
                     <td class="num" data-rc-total="ins_base"><?= fmt_num($tot['ins_sem_base']) ?></td>
                     <td class="num" data-rc-total="ins_actual"><?= fmt_num($tot['ins_sem_actual']) ?></td>
                     <td class="num" data-rc-total="dif"><?= fmt_num($tot['dif']) ?></td>
@@ -3616,7 +3240,7 @@ $dimensiones05 = [
 <section class="table-card">
     <div class="table-head">
         <strong>Resumen comparativo por vendedor del coach</strong>
-        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.4 · Todos los orígenes</span>
+        <span>ARPU, Plays, Oferta y Bundles: <?= h($label_col_base) ?> vs <?= h($label_col_actual) ?> · Universo Motor HC v0.6.3 · Todos los orígenes</span>
     </div>
     <div class="table-wrap">
         <table class="sales-table commercial-compare-table" style="min-width:2390px">
@@ -3663,13 +3287,10 @@ $dimensiones05 = [
                         $mixPct05[$campo05.'_actual'] = $comercial05_ok
                             ? $pct_mc05($v[$campo05.'_actual'] ?? 0, $ins_actual_v) : null;
                     }
-                    $antig_meses = (int)($v['antiguedad_meses'] ?? 0);
-                    $estado_hc_base_v = strtoupper(trim((string)($v['estado_hc_base'] ?? 'ACTIVO')));
-                    $estado_hc_actual_v = strtoupper(trim((string)($v['estado_hc_actual'] ?? 'ACTIVO')));
-                    $fuente_disp_base_v = strtoupper(trim((string)($v['disponibilidad_fuente_base'] ?? 'HC')));
-                    $fuente_disp_actual_v = strtoupper(trim((string)($v['disponibilidad_fuente_actual'] ?? 'HC')));
-                    $standby_base_v = array_values($v['standby_eventos_base'] ?? []);
-                    $standby_actual_v = array_values($v['standby_eventos_actual'] ?? []);
+                    $antig_meses = 0;
+                    if (is_numeric($v['antiguedad'])) $antig_meses = (float)$v['antiguedad'];
+                    elseif (preg_match('/(\d+) años (\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1]*12+(int)$m[2];
+                    elseif (preg_match('/(\d+) meses/', (string)$v['antiguedad'], $m)) $antig_meses = (int)$m[1];
                 ?>
                 <tr class="matrix-row"
                     data-antiguedad="<?= h($antig_meses) ?>"
@@ -3682,36 +3303,7 @@ $dimensiones05 = [
                         data-pct_<?= h($campo05) ?>_base="<?= h($mixPct05[$campo05.'_base'] ?? -999999) ?>"
                         data-pct_<?= h($campo05) ?>_actual="<?= h($mixPct05[$campo05.'_actual'] ?? -999999) ?>"
                     <?php endforeach; ?>>
-                    <td class="entity">
-                        <?= h($v['vendedor']) ?>
-                        <?php foreach ($standby_base_v as $ev_sb):
-                            $tipo_sb = strtoupper(trim((string)($ev_sb['tipo_standby'] ?? 'STANDBY')));
-                            $title_sb = trim((string)($ev_sb['responsable_rol'] ?? '').' · '.(string)($ev_sb['responsable_nombre'] ?? ''));
-                        ?>
-                            <span class="vendedor-status vendedor-status--base vendedor-status--<?= strtolower(h($tipo_sb)) ?>"
-                                  title="<?= h($title_sb) ?>"><?= h($label_col_base) ?> · <?= h(rank05_standby_texto($ev_sb)) ?></span>
-                        <?php endforeach; ?>
-                        <?php if (empty($standby_base_v) && $fuente_disp_base_v === 'STATUS_FALLBACK' && in_array($estado_hc_base_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
-                            <span class="vendedor-status vendedor-status--base vendedor-status--<?= strtolower(h($estado_hc_base_v)) ?>"
-                                  title="Sin intervalo preciso en hc_standby; se conserva STATUS semanal como fallback"><?= h($label_col_base) ?> · STATUS · <?= h($estado_hc_base_v) ?></span>
-                        <?php endif; ?>
-
-                        <?php foreach ($standby_actual_v as $ev_sb):
-                            $tipo_sb = strtoupper(trim((string)($ev_sb['tipo_standby'] ?? 'STANDBY')));
-                            $title_sb = trim((string)($ev_sb['responsable_rol'] ?? '').' · '.(string)($ev_sb['responsable_nombre'] ?? ''));
-                        ?>
-                            <span class="vendedor-status vendedor-status--actual vendedor-status--<?= strtolower(h($tipo_sb)) ?>"
-                                  title="<?= h($title_sb) ?>"><?= h($label_col_actual) ?> · <?= h(rank05_standby_texto($ev_sb)) ?></span>
-                        <?php endforeach; ?>
-                        <?php if (empty($standby_actual_v) && $fuente_disp_actual_v === 'STATUS_FALLBACK' && in_array($estado_hc_actual_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
-                            <span class="vendedor-status vendedor-status--actual vendedor-status--<?= strtolower(h($estado_hc_actual_v)) ?>"
-                                  title="Sin intervalo preciso en hc_standby; se conserva STATUS semanal como fallback"><?= h($label_col_actual) ?> · STATUS · <?= h($estado_hc_actual_v) ?></span>
-                        <?php endif; ?>
-
-                        <?php if (str_starts_with($estado_hc_actual_v, 'INCONSISTENTE')): ?>
-                            <span class="vendedor-status vendedor-status--alerta">REVISAR HC · <?= h($estado_hc_actual_v) ?></span>
-                        <?php endif; ?>
-                    </td>
+                    <td class="entity"><?= h($v['vendedor']) ?></td>
                     <td class="center"><?= h($v['antiguedad']) ?></td>
                     <td class="num"><?= fmt_num($ins_base_v) ?></td>
                     <td class="num"><?= fmt_num($ins_actual_v) ?></td>
@@ -3814,7 +3406,6 @@ foreach ($ventas_hist as $vh) {
  function number(v){const n=Number(v);return Number.isFinite(n)?n:0;}
  function format0(n){return Math.round(n).toLocaleString('en-US');}
  function format2(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
- function formatAntig(m){if(m===null||!Number.isFinite(m))return '—';m=Math.max(0,Math.round(m));return m<12?m+' meses':Math.floor(m/12)+' años '+(m%12)+' meses';}
  function percent(n,d){return d>0?Math.round(100*n/d):null;}
  function arpu(o){return o.arpu_cuentas>0?o.arpu_ingreso_neto/o.arpu_cuentas:null;}
  function pctDiff(a,b){return a!==null&&b!==null&&a>0?100*(b-a)/a:null;}
@@ -3847,12 +3438,11 @@ foreach ($ventas_hist as $vh) {
  function calc(){
    const visible=allRows().filter(r=>r.style.display!=='none');
    const empty=()=>Object.fromEntries(fields.map(f=>[f,0]));
-   const base=empty(),actual=empty();let insBase=0,insActual=0,antigSum=0,antigCount=0;
+   const base=empty(),actual=empty();let insBase=0,insActual=0;
    visible.forEach((r,index)=>{
      const rn=r.querySelector('.rank');if(rn)rn.textContent=index+1;
      const m=JSON.parse(r.dataset.rcMetrics);
      insBase+=number(m.ins_base);insActual+=number(m.ins_actual);
-     antigSum+=number(r.dataset.antigSum);antigCount+=number(r.dataset.antigCount);
      if(validCommercial)for(const f of fields){base[f]+=number(m.base[f]);actual[f]+=number(m.actual[f]);}
    });
    const diff=insActual-insBase, pd=percent(diff,insBase);
@@ -3861,7 +3451,6 @@ foreach ($ventas_hist as $vh) {
    updateField('ins_base',format0(insBase));
    updateField('ins_actual',format0(insActual));
    updateField('dif',format0(diff));
-   updateField('antiguedad_promedio_actual',formatAntig(antigCount>0?antigSum/antigCount:null));
    setBadge('pct_dif',pd,pd===null?'—':format0(pd)+'%');
    updateField('arpu_base',a===null?'—':'$'+format2(a));
    updateField('arpu_actual',z===null?'—':'$'+format2(z));
