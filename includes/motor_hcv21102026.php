@@ -1,94 +1,42 @@
 <?php
 declare(strict_types=1);
 /**
- * TALIA / MOTOR HC v0.6.3 - STAGING TODOS LOS ORIGENES (NO PRODUCTIVO)
- * =====================================================
- * CAMBIO AISLADO STAGING (13-OCT-2026): eliminar filtro de origen de
- * cargarEventos(); ignorar solo folios marcadores vacios/"-"/"VACANTE"
- * al resolver identidad (sin desestimar folios reales). HC semanal/HIC, plazas
- * y reglas de certificacion permanecen identicas. No alterar BD.
- * Clase distinta para convivir con produccion en el mismo proceso PHP.
+ * TalIA / TotalXpedient · MOTOR HC v0.6.3 · PRODUCCIÓN
+ * ============================================================================
+ * Ubicación: /plataforma/includes/motor_hc.php
+ * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
+ * Fuentes: instalaciones, hc, historial_identidad_colaborador (HIC).
+ * Escritura en BD: ninguna. Solo consultas de lectura.
  *
- * OBJETIVO: asociar una instalacion unica (cuenta) al vendedor, coach y
- * posicion de lider que acredita Capital Humano (HC). No modifica la BD.
+ * REGLAS DE ATRIBUCIÓN
+ * - Universo: todos los orígenes de instalaciones, sin exclusión por canal.
+ * - Se certifica UNA cuenta por período solo cuando existe una cadena única
+ *   vendedor (folio / HIC) -> coach (posición HC) -> líder (plaza HC).
+ * - Los folios vacíos, '-' y 'VACANTE' no representan identidades; si hay dos
+ *   folios reales no equivalentes, la cuenta se deja pendiente de auditoría.
+ * - HIC homologa cambios documentados de número de talento sin asociar personas
+ *   diferentes por compartir una posición. Bifurcaciones y ciclos quedan
+ *   pendientes, nunca se elige un candidato de manera arbitraria.
+ * - Cada instalación toma su fotografía semanal HC; cuando no existe, se usa
+ *   exclusivamente la última fotografía ANTERIOR disponible, nunca una futura.
+ * - La estructura se valida por posiciones (distrito|líder, coach, vendedor).
+ *   Se mantiene la normalización de distrito de v0.6.1 y la resolución
+ *   controlada de autorreferencias de coach de v0.6.2.
+ * - Los campos de coach/líder registrados en instalaciones son diagnósticos,
+ *   no sustituyen la autoridad jerárquica de Capital Humano.
  *
- * ENTRADA / CONSTRUCTOR:
- *   new RankingAtribucionServiceV06(mysqli $conexion)
- * ENTRADA / METODO PRINCIPAL:
- *   obtenerInstalacionesJerarquia(string $desde, string $hasta,
- *       ?string $idLider=null, ?string $idCoach=null,
- *       ?string $idVendedor=null, array $diasIso=[],
- *       array $equivalenciasTalento=[]): array
- *   - Fechas inclusivas YYYY-MM-DD; desde <= hasta.
- *   - idLider: identificador canonico DISTRITO|ID_POSICION; null = todos.
- *   - idCoach: id_posicion del coach; null = todos.
- *   - idVendedor: talento normalizado HIC; null = todos.
- *   - diasIso: 1=lunes ... 7=domingo; vacio = todos.
- *   - equivalenciasTalento: argumento compatible; sus relaciones adicionales
- *     no alteran la resolucion canonica en esta implementacion.
+ * CAMBIO v0.6.3 (13-OCT-2026)
+ * - Atribución de todos los orígenes comerciales a la jerarquía HC certificada.
+ * - Marcadores de folio inválido excluidos del conjunto de identidades.
+ * - Se preserva cuenta única, auditoría, HIC, jerarquía y contratos públicos.
  *
- * FUENTES Y COLUMNAS:
- *   instalaciones: cuenta, fecha, folio_empleado, lider, coach,
- *       origen_prospecto y subcanal.
- *   hc: anio, semana, distrito, numero_talento_gs, nombre_colaborador,
- *       id_posicion, posicion_lr, nombre_linea_reporte, puesto_lr.
- *   historial_identidad_colaborador: numero_talento_anterior/nuevo.
- *
- * PROCESO:
- *   1) Lee instalaciones de TODOS LOS ORIGENES en el periodo y dias seleccionados.
- *   2) Agrupa por cuenta para evitar duplicacion de instalaciones.
- *   3) Obtiene HC de cada semana ISO; si falta, usa ultima foto ANTERIOR.
- *   4) Resuelve identidad de PERSONA por talento/HIC; no por posicion.
- *   5) Descubre plazas de lider y relacion coach/vendedor por posiciones HC.
- *   6) Certifica solo cadenas HC unicas; conserva casos ambiguos pendientes.
- *   7) Filtra la salida certificada por lider/coach/vendedor solicitados.
- *
- * FIX v0.6.1 (09-OCT-2026):
- *   Todas las claves de distrito del indice HC se consultan con el mismo
- *   normalizador usado al construirlas. Antes Coatza-Mina mostraba ceros
- *   porque la fila decia 'COATZA MINA' y el indice 'COATZA-MINA'.
- *   No cambia identidad, criterio de certificacion ni alcance comercial.
- *
- * FIX v0.6.2 (09-OCT-2026) - HC AUTORREFERENCIADO:
- *   Si la fila de un coach declara posicion_lr = id_posicion, esa relacion
- *   es inconsistente y NO se interpreta como que sea su propio lider.
- *   Excepcionalmente se busca el nombre_linea_reporte de ESA MISMA fila HC
- *   entre los ocupantes de plazas de lider validadas por HC, en el MISMO
- *   distrito normalizado y la MISMA fotografia. El cotejo exige coincidencia
- *   exacta de tokens del nombre (sin depender del orden), UNA sola plaza
- *   candidata y ocupante identificado. Sin coincidencia unica, la atribucion
- *   queda pendiente; nunca se toma el nombre comercial de instalaciones.
- *   El criterio es general: NO codifica nombres, talentos ni posiciones
- *   particulares de ningun colaborador.
- *
- * SALIDA / ARRAY:
- *   version: 0.6.3-hc-all-channels-staging.
- *   cuentas: filas certificadas (una por cuenta), incluyendo cuenta, fecha,
- *       lider_id, lider_posicion, coach_id, vendedor_id, fuente, estado, hc_foto.
- *   conciliacion: sumatorias de las cuentas filtradas.
- *   conciliacion_global: sumatorias de todas las cuentas procesadas.
- *   conciliacion_comercial: total todos los origenes, certificadas SUR, pendientes,
- *       motivos y bandera verificada.
- *   auditoria_pendientes: filas sin jerarquia HC certificada.
- *   fotografias_hc: mapa de semana consultada a foto real utilizada.
- *
- * ALCANCE: Region SUR (CANCUN, COATZA-MINA, MERIDA, TUXTLA,
- * VILLAHERMOSA); reconoce variantes ortograficas de distrito.
- * Las posiciones identifican estructura; la foto HC identifica ocupante.
- * La fuente oficial es HC, incluso cuando la operacion comunica cambios antes
- * de que Capital Humano los refleje en sus archivos.
- *
- * LIMITES: semana HC no expresa movimientos de mitad de semana; los nombres
- * de las personas NO se fijan en PHP; los casos no univocos no se inventan.
- * El catalogo dinamico se limita a plazas observables en HC y a reglas
- * de subordinacion; cambios organizacionales reales pueden variar resultados
- * respecto a v0.5.1 y deben contrastarse antes de certificarse.
- * NO comprende 2P/3P, Negocios, Bundle, ARPU ni calculos de productividad.
- *
- * INTEGRACION: /plataforma/includes/motor_hc_STAGING.php; es exclusivo
- * de pruebas y NO reemplaza /plataforma/includes/motor_hc.php.
+ * Entrada: obtenerInstalacionesJerarquia($desde,$hasta,$idLider=null,
+ *          $idCoach=null,$idVendedor=null,$diasIso=[],$equivalenciasTalento=[]).
+ * Salida: cuentas, conciliacion, conciliacion_global,
+ *         conciliacion_comercial, auditoria_pendientes, fotografias_hc.
+ * Ámbito: CANCUN, COATZA-MINA, MERIDA, TUXTLA y VILLAHERMOSA.
  */
-final class RankingAtribucionServiceV06Staging
+final class RankingAtribucionServiceV06
 {
     private mysqli $db;
     private const DISTRITOS = ['CANCUN', 'COATZA-MINA', 'MERIDA', 'TUXTLA', 'VILLAHERMOSA'];
@@ -272,7 +220,7 @@ final class RankingAtribucionServiceV06Staging
         return $r ? [(int)$r[0]['anio'], (int)$r[0]['semana']] : null;
     }
 
-    /** STAGING: carga TODOS los orígenes; HC certifica la jerarquía sin inferencias por canal. */
+    /** Todos los orígenes: HC/HIC certifican la jerarquía sin inferencias por canal. */
     public function cargarEventos(string $desde, string $hasta, array $diasIso=[]): array
     {
         $ini = DateTimeImmutable::createFromFormat('!Y-m-d',$desde);
@@ -415,7 +363,7 @@ final class RankingAtribucionServiceV06Staging
                 if (($e['lider_id']??null)!==null) $eventLeaders[(string)$e['lider_id']]=true;
                 if (self::isValidName($e['coach']??null)) $eventCoaches[self::nameKey((string)$e['coach'])]=self::norm($e['coach']);
                 $f=trim((string)($e['folio_empleado']??''));
-                // STAGING S40: '-' no es otro vendedor (p. ej. Call Center sin folio).
+                // Un marcador de folio (p. ej. Call Center sin folio) no es otro vendedor.
                 // Solo los folios reales participan en la identidad HC/HIC. Dos
                 // folios reales distintos siguen siendo ambiguos y no se certifican.
                 if (!in_array(self::norm($f), ['', '-', 'VACANTE'], true)) $folios[$f]=true;
@@ -516,7 +464,7 @@ final class RankingAtribucionServiceV06Staging
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.3-hc-all-channels-staging',
+            'version'=>'0.6.3-hc-all-channels',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
