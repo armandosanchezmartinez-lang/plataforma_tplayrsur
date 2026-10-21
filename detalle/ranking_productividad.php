@@ -3,7 +3,7 @@
  * TalIA / TotalXpedient · RANKING DE PRODUCTIVIDAD · PRODUCCIÓN
  * ============================================================================
  * Ubicación: /plataforma/detalle/ranking_productividad.php
- * Dependencias: /plataforma/includes/motor_hc.php (PRODUCCIÓN v0.6.6)
+ * Dependencias: /plataforma/includes/motor_hc.php (PRODUCCIÓN v0.6.7)
  *               /plataforma/includes/motor_comercial.php (v0.2.1)
  * Escritura en BD: ninguna; vista de consulta.
  *
@@ -19,11 +19,20 @@
  *   productividad diaria, HC activo y HC sin instalaciones.
  * - Antigüedad promedio de equipo: promedio simple de meses de antigüedad de vendedores
  *   ocupados con fecha_alta válida al corte ACTUAL; excluye VACANTES y no usa antigüedad del Líder/Coach.
- * - STATUS se conserva exclusivamente como estado semanal de la plaza VENDEDOR.
- *   hc_standby aporta los intervalos reales de VACACIONES/INCAPACIDAD y manda
- *   sobre STATUS para disponibilidad; STATUS queda como fallback histórico.
+ * - STATUS se conserva exclusivamente como dato de auditoría de la fotografía HC.
+ *   VACACIONES/INCAPACIDAD operativas provienen únicamente de hc_standby;
+ *   STATUS ya no genera fallback, jornadas ni exclusiones temporales.
  * - HC Activo/Total conserva plazas ocupadas. Productividad descuenta únicamente
  *   las jornadas-persona realmente no disponibles dentro del rango consultado.
+ *
+ * CAMBIO FUNCIONAL DOCUMENTADO 21-OCT-2026 · v0.6.7 HC_STANDBY AUTORIDAD
+ * - Se elimina el fallback operativo de STATUS para INCAPACIDAD/VACACIONES.
+ * - Si no existe intervalo de hc_standby que cruce el período, el vendedor
+ *   ocupado queda disponible en el período aunque el STATUS semanal conserve
+ *   INCAPACIDAD/VACACIONES como dato de auditoría.
+ * - VACANTE conserva su regla estructural. La regla STANDBY TOTAL >40%,
+ *   Productividad por jornadas reales, HIC, atribución y jerarquía no cambian.
+ * - Motor requerido: 0.6.7-hc-standby-authority-all-channels.
  *
  * CAMBIO FUNCIONAL DOCUMENTADO 21-OCT-2026 · REGLA HC SIN INS >40% STANDBY
  * - STANDBY TOTAL = unión de INCAPACIDAD + VACACIONES dentro de los días operativos.
@@ -32,7 +41,7 @@
  * - Traslapes INCAPACIDAD/VACACIONES cuentan una sola vez.
  * - HC Activo/Vacante y Productividad por jornadas reales no cambian.
  * - La elegibilidad se resuelve mediante Motor HC; el Ranking sólo agrega/presenta.
- * - Motor requerido: 0.6.6-hc-standby40-all-channels.
+ * - Motor requerido histórico v0.6.6: 0.6.6-hc-standby40-all-channels.
  *
  * CAMBIO FUNCIONAL DOCUMENTADO 20-OCT-2026 · STANDBY POR FECHAS
  * - hc_standby es autoridad operativa precisa para VACACIONES/INCAPACIDAD.
@@ -40,7 +49,7 @@
  * - HC operativo = vendedor con al menos un día disponible en el período.
  * - Productividad usa jornadas-persona exactas disponibles, no HC × días completos
  *   cuando existe una ausencia parcial.
- * - STATUS INCAPACIDAD/VACACIONES queda como fallback si no existe intervalo preciso.
+ * - Regla histórica v0.6.5: existía fallback por STATUS; queda SUPERADA por v0.6.7.
  * - Solapamientos de standby descuentan cada fecha una sola vez; domingos/festivos
  *   no se descuentan nuevamente.
  * - En vendedor se muestran los intervalos reales que cruzan BASE/ACTUAL.
@@ -49,7 +58,7 @@
  * CAMBIO FUNCIONAL DOCUMENTADO 19-OCT-2026
  * - Motor requerido: 0.6.4-hc-status-vendedor-all-channels.
  * - La clasificación de STATUS ocurre en vendedor; Líder y Coach NO reciben STATUS propio.
- * - El efecto de STATUS sí se consolida hacia Líder/Coach mediante hc_operativo.
+ * - Regla histórica v0.6.4: STATUS afectaba hc_operativo; queda SUPERADA por v0.6.7.
  * - Se incorpora Antigüedad prom. equipo en niveles Líder y Coach.
  * - TOTAL de antigüedad es ponderado por vendedores con fecha_alta válida; nunca
  *   es promedio de promedios de Líderes/Coaches.
@@ -894,8 +903,8 @@ lideres_activos AS (
 
 
 /**
- * Ranking v0.6.5 - Fuente única de instalaciones certificadas:
- * RankingAtribucionServiceV06 / Motor HC v0.6.5 -> una fila por cuenta -> agrupaciones de vista.
+ * Ranking v0.6.7 - Fuente única de instalaciones certificadas:
+ * RankingAtribucionServiceV06 / Motor HC v0.6.7 -> una fila por cuenta -> agrupaciones de vista.
  * Las funciones siguientes no consultan instalaciones ni modifican fuentes.
  */
 function rank05_name_key($nombre): string {
@@ -970,8 +979,8 @@ function rank05_foto_hc(
             if ($talento==='' || $talento==='VACANTE') $vac=true;
             $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
 
-            // STATUS conserva la fotografía semanal de CH. Su impacto por período
-            // es fallback; cuando existe hc_standby, mandan los intervalos reales.
+            // STATUS conserva la fotografía semanal de CH sólo para auditoría.
+            // VACACIONES/INCAPACIDAD operativas provienen exclusivamente de hc_standby.
             $estadoVendedor=RankingAtribucionServiceV06::clasificarEstadoVendedor(
                 $h['status']??null,
                 $h['nombre_colaborador']??null
@@ -1037,13 +1046,14 @@ function rank05_disponibilidad_seat(array $seat): array {
     $diasPeriodo=max(1,(int)($seat['dias_periodo']??1));
     $sb=$seat['standby']??null;
 
+    // v0.6.7: hc_standby es la ÚNICA autoridad temporal para
+    // INCAPACIDAD/VACACIONES. STATUS queda exclusivamente para auditoría.
     if (is_array($sb) && !empty($sb['tiene_intervalo'])) {
         $diasStandby=max(0,min($diasPeriodo,(int)($sb['dias_standby']??0)));
         $diasIncapacidad=max(0,min($diasPeriodo,(int)($sb['dias_incapacidad']??0)));
         $diasVacaciones=max(0,min($diasPeriodo,(int)($sb['dias_vacaciones']??0)));
         $diasDisponibles=max(0,min($diasPeriodo,(int)($sb['dias_disponibles']??($diasPeriodo-$diasStandby))));
 
-        // Regla centralizada en Motor HC: >40% STANDBY TOTAL excluye de HC SIN INS.
         $regla=RankingAtribucionServiceV06::evaluarElegibilidadHcSinIns(
             $diasPeriodo,
             $diasStandby,
@@ -1066,34 +1076,35 @@ function rank05_disponibilidad_seat(array $seat): array {
         ];
     }
 
-    // Fallback histórico: sin intervalo preciso, STATUS conserva la regla anterior.
-    // INCAPACIDAD o VACACIONES implican el período completo para fines de fallback;
-    // por tanto STANDBY=100% y quedan excluidos de HC SIN INS.
-    $esOperativo=(int)($seat['hc_operativo']??1)===1;
+    // Sin intervalo real en hc_standby NO existe ausencia temporal.
+    // Para preservar únicamente controles estructurales ajenos a INCAPACIDAD/VACACIONES,
+    // se respeta hc_operativo salvo que el STATUS sea precisamente uno de esos dos estados,
+    // que desde v0.6.7 son sólo informativos/auditables.
     $estado=strtoupper(trim((string)($seat['estado_hc']??$seat['status']??'ACTIVO')));
-    $diasIncapacidad=$estado==='INCAPACIDAD' ? $diasPeriodo : 0;
-    $diasVacaciones=$estado==='VACACIONES' ? $diasPeriodo : 0;
+    $statusTemporalSoloAuditoria=in_array($estado,['INCAPACIDAD','VACACIONES'],true);
+    $esOperativo=$statusTemporalSoloAuditoria
+        ? true
+        : ((int)($seat['hc_operativo']??1)===1);
     $diasDisponibles=$esOperativo?$diasPeriodo:0;
-    $diasStandby=$esOperativo?0:$diasPeriodo;
 
     $regla=RankingAtribucionServiceV06::evaluarElegibilidadHcSinIns(
         $diasPeriodo,
-        $diasStandby,
+        0,
         $diasDisponibles
     );
 
     return [
         'dias_periodo'=>$diasPeriodo,
-        'dias_standby'=>$esOperativo?0:$diasPeriodo,
-        'dias_incapacidad'=>$diasIncapacidad,
-        'dias_vacaciones'=>$diasVacaciones,
+        'dias_standby'=>0,
+        'dias_incapacidad'=>0,
+        'dias_vacaciones'=>0,
         'dias_disponibles'=>$diasDisponibles,
-        'pct_incapacidad'=>$diasPeriodo>0 ? ($diasIncapacidad/$diasPeriodo)*100.0 : 0.0,
+        'pct_incapacidad'=>0.0,
         'pct_standby'=>(float)$regla['pct_standby'],
         'operativo'=>$esOperativo,
         'elegible_hc_sin_ins'=>(bool)$regla['elegible'],
         'motivo_exclusion_hc_sin_ins'=>(string)$regla['motivo'],
-        'fuente'=>in_array($estado,['INCAPACIDAD','VACACIONES'],true)?'STATUS_FALLBACK':'HC',
+        'fuente'=>'HC',
         'eventos'=>[],
     ];
 }
@@ -1162,7 +1173,7 @@ function rank05_resumen_hc(array $hc, string $lider, ?string $coach, array $even
     // - operativo = vendedor con al menos UN día operativo en el período.
     // - jornadas_operativas = suma exacta de días disponibles por vendedor.
     // - productividad = instalaciones / jornadas_operativas.
-    // - hc_standby manda sobre STATUS; STATUS queda como fallback histórico.
+    // - hc_standby es autoridad temporal; STATUS queda sólo para auditoría.
     $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
     $elegibleSinIns=0; $conInsElegible=0;
     $jornadasOperativas=0; $diasStandby=0; $personasStandby=0;
@@ -2561,10 +2572,10 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.5: ambos periodos deben provenir de la versión exacta
+        // CONTRATO v0.6.7: ambos periodos deben provenir de la versión exacta
         // desplegada de Motor HC. La verificación protege la comparación
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.6-hc-standby40-all-channels';
+        $versionMotorRequerida05 = '0.6.7-hc-standby-authority-all-channels';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
@@ -3335,8 +3346,6 @@ $dimensiones05 = [
                     $antig_meses = (int)($v['antiguedad_meses'] ?? 0);
                     $estado_hc_base_v = strtoupper(trim((string)($v['estado_hc_base'] ?? 'ACTIVO')));
                     $estado_hc_actual_v = strtoupper(trim((string)($v['estado_hc_actual'] ?? 'ACTIVO')));
-                    $fuente_disp_base_v = strtoupper(trim((string)($v['disponibilidad_fuente_base'] ?? 'HC')));
-                    $fuente_disp_actual_v = strtoupper(trim((string)($v['disponibilidad_fuente_actual'] ?? 'HC')));
                     $standby_base_v = array_values($v['standby_eventos_base'] ?? []);
                     $standby_actual_v = array_values($v['standby_eventos_actual'] ?? []);
                 ?>
@@ -3360,10 +3369,6 @@ $dimensiones05 = [
                             <span class="vendedor-status vendedor-status--base vendedor-status--<?= strtolower(h($tipo_sb)) ?>"
                                   title="<?= h($title_sb) ?>"><?= h($label_col_base) ?> · <?= h(rank05_standby_texto($ev_sb)) ?></span>
                         <?php endforeach; ?>
-                        <?php if (empty($standby_base_v) && $fuente_disp_base_v === 'STATUS_FALLBACK' && in_array($estado_hc_base_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
-                            <span class="vendedor-status vendedor-status--base vendedor-status--<?= strtolower(h($estado_hc_base_v)) ?>"
-                                  title="Sin intervalo preciso en hc_standby; se conserva STATUS semanal como fallback"><?= h($label_col_base) ?> · STATUS · <?= h($estado_hc_base_v) ?></span>
-                        <?php endif; ?>
 
                         <?php foreach ($standby_actual_v as $ev_sb):
                             $tipo_sb = strtoupper(trim((string)($ev_sb['tipo_standby'] ?? 'STANDBY')));
@@ -3372,10 +3377,6 @@ $dimensiones05 = [
                             <span class="vendedor-status vendedor-status--actual vendedor-status--<?= strtolower(h($tipo_sb)) ?>"
                                   title="<?= h($title_sb) ?>"><?= h($label_col_actual) ?> · <?= h(rank05_standby_texto($ev_sb)) ?></span>
                         <?php endforeach; ?>
-                        <?php if (empty($standby_actual_v) && $fuente_disp_actual_v === 'STATUS_FALLBACK' && in_array($estado_hc_actual_v, ['INCAPACIDAD','VACACIONES'], true)): ?>
-                            <span class="vendedor-status vendedor-status--actual vendedor-status--<?= strtolower(h($estado_hc_actual_v)) ?>"
-                                  title="Sin intervalo preciso en hc_standby; se conserva STATUS semanal como fallback"><?= h($label_col_actual) ?> · STATUS · <?= h($estado_hc_actual_v) ?></span>
-                        <?php endif; ?>
 
                         <?php if (str_starts_with($estado_hc_actual_v, 'INCONSISTENTE')): ?>
                             <span class="vendedor-status vendedor-status--alerta">REVISAR HC · <?= h($estado_hc_actual_v) ?></span>
