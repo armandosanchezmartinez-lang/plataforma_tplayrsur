@@ -3,7 +3,7 @@
  * TalIA / TotalXpedient · RANKING DE PRODUCTIVIDAD · PRODUCCIÓN
  * ============================================================================
  * Ubicación: /plataforma/detalle/ranking_productividad.php
- * Dependencias: /plataforma/includes/motor_hc.php (PRODUCCIÓN v0.6.7)
+ * Dependencias: /plataforma/includes/motor_hc.php (PRODUCCIÓN v0.6.8)
  *               /plataforma/includes/motor_comercial.php (v0.2.1)
  * Escritura en BD: ninguna; vista de consulta.
  *
@@ -24,6 +24,14 @@
  *   STATUS ya no genera fallback, jornadas ni exclusiones temporales.
  * - HC Activo/Total conserva plazas ocupadas. Productividad descuenta únicamente
  *   las jornadas-persona realmente no disponibles dentro del rango consultado.
+ *
+ * CAMBIO FUNCIONAL DOCUMENTADO 21-OCT-2026 · v0.6.8 IDENTIDAD HISTÓRICA
+ * - Motor HC expone vendedor_nombre desde la misma fotografía histórica que certifica
+ *   cada instalación. El drill-down ya no depende sólo de las fotos BASE/ACTUAL de cierre.
+ * - Prioridad visual: nombre histórico certificado -> nombre HC BASE/ACTUAL ->
+ *   VENDEDOR NO IDENTIFICADO. El folio permanece interno para trazabilidad.
+ * - Corrige el caso Crusita SEP 1-20 vs OCT 1-20 sin alterar instalaciones ni totales.
+ * - Motor requerido: 0.6.8-hc-historical-seller-name-all-channels.
  *
  * CAMBIO FUNCIONAL DOCUMENTADO 21-OCT-2026 · v0.6.7 HC_STANDBY AUTORIDAD
  * - Se elimina el fallback operativo de STATUS para INCAPACIDAD/VACACIONES.
@@ -1354,12 +1362,23 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
     } elseif ($view==='vendedores') {
         if ($coachPos==='') throw new RuntimeException('Falta ID de coach en la navegación canónica (coach_pos)');
         $lid=$seleccion;
-        $ventas=[];
+        $ventas=[];$nombresHistoricos=[];$fechasAltaHistoricas=[];
         foreach (['base'=>$base,'actual'=>$actual] as $lado=>$es) foreach ($es as $r) {
             if (($r['lider_id']??null)!==$lid || (string)($r['coach_id']??'SIN_COACH')!==$coachPos) continue;
             $v=(string)($r['vendedor_id']??'SIN_VENDEDOR');
             $ventas[$v] ??= ['base'=>0,'actual'=>0];
             $ventas[$v][$lado]++;
+
+            // v0.6.8: identidad visible certificada por la MISMA foto histórica
+            // que atribuyó la cuenta en Motor HC. El folio nunca se usa como nombre.
+            $nombreHist=RankingAtribucionServiceV06::norm((string)($r['vendedor_nombre']??''));
+            if ($nombreHist!=='' && !in_array($nombreHist,['VACANTE','VENDEDOR NO IDENTIFICADO'],true)) {
+                $nombresHistoricos[$v][$nombreHist]=true;
+            }
+            $fechaAltaHist=substr(trim((string)($r['vendedor_fecha_alta']??'')),0,10);
+            if ($fechaAltaHist!=='' && $fechaAltaHist!=='0000-00-00') {
+                $fechasAltaHistoricas[$v][$fechaAltaHist]=true;
+            }
         }
         $nombres=[];$metaVendedores=[];
         foreach (['base'=>$fotoBase,'actual'=>$fotoActual] as $ladoFoto=>$h) {
@@ -1372,10 +1391,18 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
             }
         }
         foreach ($ventas as $v=>$vcts) {
-            $nombre=$nombres[$v]??($v==='SIN_VENDEDOR'?'VENDEDOR NO IDENTIFICADO':'FOLIO '.$v);
+            $histNombres=array_keys($nombresHistoricos[$v]??[]);
+            $nombre=count($histNombres)===1
+                ? (string)$histNombres[0]
+                : (string)($nombres[$v]??'VENDEDOR NO IDENTIFICADO');
+            if ($nombre==='' || $v==='SIN_VENDEDOR') $nombre='VENDEDOR NO IDENTIFICADO';
+
             $metaActual=$metaVendedores[$v]['actual']??[];
             $metaBase=$metaVendedores[$v]['base']??[];
-            $fechaAlta=(string)($metaActual['fecha_alta']??($metaBase['fecha_alta']??''));
+            $fechasHist=array_keys($fechasAltaHistoricas[$v]??[]);
+            sort($fechasHist,SORT_STRING);
+            $fechaAltaHist=$fechasHist ? (string)$fechasHist[0] : '';
+            $fechaAlta=(string)($metaActual['fecha_alta']??($metaBase['fecha_alta']??$fechaAltaHist));
             $corteAntig=$corteActual!==''?$corteActual:date('Y-m-d');
             $antig=rank05_antiguedad_corte($fechaAlta,$corteAntig);
             $dispBase=rank05_disponibilidad_seat($metaBase);
@@ -2572,10 +2599,10 @@ if ($view !== 'ventas') {
         $dias05=$periodo==='semanal' ? array_values(array_map('intval',$dias_semana_seleccionados)) : [];
         $resBase05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_base_calc,$fecha_fin_base_calc,null,null,null,$dias05);
         $resActual05=$motor05->obtenerInstalacionesJerarquia($fecha_inicio_actual_calc,$fecha_fin_actual_calc,null,null,null,$dias05);
-        // CONTRATO v0.6.7: ambos periodos deben provenir de la versión exacta
+        // CONTRATO v0.6.8: ambos periodos deben provenir de la versión exacta
         // desplegada de Motor HC. La verificación protege la comparación
         // BASE/ACTUAL de mezclar reglas entre versiones distintas del motor.
-        $versionMotorRequerida05 = '0.6.7-hc-standby-authority-all-channels';
+        $versionMotorRequerida05 = '0.6.8-hc-historical-seller-name-all-channels';
         if (($resBase05['version'] ?? '') !== $versionMotorRequerida05 || ($resActual05['version'] ?? '') !== $versionMotorRequerida05) {
             throw new RuntimeException(
                 'Version de Motor HC incompatible. Ranking requiere '.$versionMotorRequerida05.
