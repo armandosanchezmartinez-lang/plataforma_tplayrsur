@@ -25,6 +25,13 @@
  * - HC Activo/Total conserva plazas ocupadas. Productividad descuenta únicamente
  *   las jornadas-persona realmente no disponibles dentro del rango consultado.
  *
+ * CAMBIO FUNCIONAL DOCUMENTADO 22-OCT-2026 · ANTIGÜEDAD PROMEDIO EN NIVEL VENDEDOR
+ * - En drill-down Coach > Vendedor se restaura la visualización de la Antigüedad prom. equipo.
+ * - Se calcula sobre la fotografía HC ACTUAL del Coach mediante rank05_resumen_hc():
+ *   sólo vendedores ocupados con fecha_alta válida al corte; VACANTES quedan excluidas.
+ * - Vendedores históricos presentes únicamente en BASE no alteran el promedio del equipo ACTUAL.
+ * - No cambia identidad, atribución, instalaciones, STANDBY, Productividad ni métricas comerciales.
+ *
  * CAMBIO FUNCIONAL DOCUMENTADO 21-OCT-2026 · v0.6.8 IDENTIDAD HISTÓRICA
  * - Motor HC expone vendedor_nombre desde la misma fotografía histórica que certifica
  *   cada instalación. El drill-down ya no depende sólo de las fotos BASE/ACTUAL de cierre.
@@ -1327,7 +1334,7 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
         }
         $ids=[$seleccion];
     }
-    $rows=[];$matrix=[];
+    $rows=[];$matrix=[];$resumenEquipoActual=null;
     if (in_array($view,['lideres','ranking_coach','coaches'],true)) {
         foreach ($ids as $lid) {
             if ($view==='lideres') {
@@ -1362,6 +1369,9 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
     } elseif ($view==='vendedores') {
         if ($coachPos==='') throw new RuntimeException('Falta ID de coach en la navegación canónica (coach_pos)');
         $lid=$seleccion;
+        // Promedio de antigüedad del equipo ACTUAL del Coach.
+        // Se reutiliza la misma regla canónica de Líder/Coach: ocupados, no VACANTES, fecha_alta válida.
+        $resumenEquipoActual=rank05_resumen_hc($fotoActual,$lid,$coachPos,$actual,$corteActual);
         $ventas=[];$nombresHistoricos=[];$fechasAltaHistoricas=[];
         foreach (['base'=>$base,'actual'=>$actual] as $lado=>$es) foreach ($es as $r) {
             if (($r['lider_id']??null)!==$lid || (string)($r['coach_id']??'SIN_COACH')!==$coachPos) continue;
@@ -1473,7 +1483,7 @@ function rank05_build(array $base, array $actual, array $fotoBase, array $fotoAc
     if ($view==='vendedores') {
         if (array_sum(array_column($matrix,'ins_base'))!==rank05_num_cuentas($base,$seleccion,$coachPos) || array_sum(array_column($matrix,'ins_actual'))!==rank05_num_cuentas($actual,$seleccion,$coachPos)) throw new LogicException('Ranking vendedor no conserva universo coach');
     }
-    return ['rows'=>$rows,'matrix'=>$matrix,'total_base'=>count($base),'total_actual'=>count($actual)];
+    return ['rows'=>$rows,'matrix'=>$matrix,'total_base'=>count($base),'total_actual'=>count($actual),'resumen_equipo_actual'=>$resumenEquipoActual];
 }
 
 $query_error = '';
@@ -2585,6 +2595,7 @@ ORDER BY semana ASC
 }
 
 $coach_matrix = [];
+$coach_resumen_actual = [];
 $rank05_estado='';
 $rank05_fotografias=[];
 $rank05_auditoria=[];
@@ -2617,6 +2628,7 @@ if ($view !== 'ventas') {
         $datos05=rank05_build($resBase05['cuentas'],$resActual05['cuentas'],$fotoBase05,$fotoActual05,$catalogo05,$view,$lider_param,(string)$coach_pos_param,$dias_habiles_base,$dias_habiles_actual,(string)$distrito_param,(string)$lider_id_param,$fecha_fin_base_calc,$fecha_fin_actual_calc);
         $rows=$datos05['rows'];
         $coach_matrix=$datos05['matrix'];
+        $coach_resumen_actual=$datos05['resumen_equipo_actual']??[];
         $rank05_estado='CERTIFICADO_HC|'.count($resBase05['cuentas']).'|'.count($resActual05['cuentas']);
         $rank05_auditoria=['base'=>$resBase05['conciliacion_comercial'],'actual'=>$resActual05['conciliacion_comercial']];
         /*
@@ -3306,10 +3318,13 @@ $dimensiones05 = [
     ['campo'=>'no_bundle', 'rotulo'=>'% NO BUNDLE'],
     ['campo'=>'bundle', 'rotulo'=>'% BUNDLE'],
 ];
+$antiguedad_prom_equipo = rank05_antiguedad_texto_meses($coach_resumen_actual['antiguedad_promedio_meses'] ?? null);
+$antiguedad_validos_equipo = (int)($coach_resumen_actual['antiguedad_con_fecha'] ?? 0);
+$antiguedad_ocupados_equipo = (int)($coach_resumen_actual['antiguedad_ocupados'] ?? 0);
 ?>
 <section class="cards">
     <div class="card"><div class="label">Instalaciones del coach <?= h($label_col_actual) ?></div><div class="value"><?= fmt_num($total_coach) ?></div><div class="hint">Periodo actual: <?= h($label_periodo_actual) ?></div></div>
-    <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint">Estructura <?= h($label_col_base) ?> o <?= h($label_col_actual) ?></div></div>
+    <div class="card"><div class="label">Vendedores considerados</div><div class="value"><?= fmt_num(count($coach_matrix)) ?></div><div class="hint" title="<?= h($antiguedad_validos_equipo.' de '.$antiguedad_ocupados_equipo.' vendedores ocupados con fecha de alta válida') ?>">Estructura <?= h($label_col_base) ?> o <?= h($label_col_actual) ?><br><strong>Antigüedad prom. equipo: <?= h($antiguedad_prom_equipo) ?></strong></div></div>
     <div class="card"><div class="label">Mejor vendedor</div><div class="value" style="font-size:1.05rem"><?= h($mejor_vendedor ?: '-') ?></div><div class="hint"><?= fmt_num(max(0,$mejor_total)) ?> instalaciones</div></div>
     <div class="card"><div class="label">Coach</div><div class="value" style="font-size:1.05rem"><?= h($coach_param) ?></div><div class="hint">Líder: <?= h($lider_param) ?></div></div>
 </section>
