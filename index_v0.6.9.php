@@ -3507,6 +3507,26 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
 }
 
 
+/** Antigüedad de la plaza HC a la fecha del corte, en meses completos. */
+function tx_antiguedad_meses_hc_index(?string $fechaAlta, string $corte): ?int {
+    $fechaAlta = trim((string)$fechaAlta);
+    if ($fechaAlta === '' || $fechaAlta === '0000-00-00') return null;
+    $alta = DateTimeImmutable::createFromFormat('!Y-m-d', $fechaAlta);
+    $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $corte);
+    if (!$alta || !$fin || $alta->format('Y-m-d') !== $fechaAlta || $alta > $fin) return null;
+    $dif = $alta->diff($fin);
+    return ((int)$dif->y * 12) + (int)$dif->m;
+}
+
+/** Etiqueta legible para la misma antigüedad en coaches y vendedores. */
+function tx_antiguedad_texto_hc_index(?int $meses, bool $compacto = false): string {
+    if ($meses === null || $meses < 0) return '—';
+    $anios = intdiv($meses, 12);
+    $resto = $meses % 12;
+    if ($compacto) return $anios > 0 ? $anios.'a '.$resto.'m' : $resto.'m';
+    return $anios > 0 ? $anios.' años '.$resto.' meses' : $resto.' meses';
+}
+
 // ── TOP REGIONAL PRODUCTIVIDAD COACHES ──────────────────────────────────────
 // Se muestra antes del Top de vendedores y es regional para todos los niveles.
 // Productividad Coach = instalaciones HC / jornadas-persona disponibles (STANDBY).
@@ -3546,6 +3566,7 @@ function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, st
             'id_posicion'=>$id,'coach'=>$nombre,'distrito'=>$d,
             'lider'=>(string)($catalogo[$lider]['nombre']??'VACANTE'),'lider_id'=>$lider,
             'hc_activo'=>0,'jornadas_operativas'=>0,'dias_standby'=>0,
+            'antiguedad_meses'=>null,'antiguedad_con_fecha'=>0,'antiguedad_ocupados'=>0,
             'instalaciones'=>0,'productividad'=>null,'arpu'=>0.0,
             'spark'=>array_fill(0,6,0),'_ingreso_neto'=>0.0,'_arpu_cuentas'=>0,
         ];
@@ -3688,6 +3709,10 @@ function tx_build_coaches_motor_hc_staging(
         $coach['hc_activo']=$prod['hc_activo'];
         $coach['jornadas_operativas']=$prod['jornadas_operativas'];
         $coach['dias_standby']=$prod['dias_standby'];
+        // Edad promedio de vendedores ocupados del equipo, sin consultas adicionales.
+        $coach['antiguedad_meses']=$resumen['antiguedad_promedio_meses'];
+        $coach['antiguedad_con_fecha']=(int)$resumen['antiguedad_con_fecha'];
+        $coach['antiguedad_ocupados']=(int)$resumen['antiguedad_ocupados'];
         $coach['productividad']=$prod['productividad'];
         $coach['arpu'] = (int)$coach['_arpu_cuentas'] > 0
             ? round($coach['_ingreso_neto'] / $coach['_arpu_cuentas'], 2) : 0.0;
@@ -3702,6 +3727,8 @@ function tx_build_coaches_motor_hc_staging(
         $r = $b['productividad'] <=> $a['productividad'];
         if ($r !== 0) return $r;
         $r = $b['instalaciones'] <=> $a['instalaciones'];
+        if ($r !== 0) return $r;
+        $r = (float)$b['arpu'] <=> (float)$a['arpu'];
         return $r !== 0 ? $r : strcmp((string)$a['coach'], (string)$b['coach']);
     });
     $bottom = array_values(array_filter($lista, static fn($c)=>$c['productividad'] !== null));
@@ -3709,6 +3736,8 @@ function tx_build_coaches_motor_hc_staging(
         $r = $a['productividad'] <=> $b['productividad'];
         if ($r !== 0) return $r;
         $r = $a['instalaciones'] <=> $b['instalaciones'];
+        if ($r !== 0) return $r;
+        $r = (float)$a['arpu'] <=> (float)$b['arpu'];
         return $r !== 0 ? $r : strcmp((string)$a['coach'], (string)$b['coach']);
     });
     return [array_slice($top,0,5), array_slice($bottom,0,5),
@@ -3722,7 +3751,8 @@ function tx_build_coaches_motor_hc_staging(
 
 /**
  * TOP/BOTTOM Vendedores — idénticas cuentas y disponibilidades que Motor HC.
- * Conserva la regla BOTTOM: vendedores con 0 INS primero; el 3M sólo desempata.
+ * TOP: volumen DESC, productividad DESC, ARPU DESC.
+ * BOTTOM: volumen ASC, productividad ASC, ARPU ASC (incluye ceros).
  * La productividad publicada NUNCA se reconstruye por folio bruto ni HC*días.
  */
 function tx_build_vendedores_regional_hc_dashboard(
@@ -3754,7 +3784,8 @@ function tx_build_vendedores_regional_hc_dashboard(
                 'distrito'=>$d,'coach'=>$coachNombre,'lider_id'=>$liderId,
                 'coach_id'=>$coachPos,'instalaciones'=>0,'productividad'=>null,
                 'jornadas_operativas'=>0,'dias_standby'=>0,
-                'arpu'=>0.0,'spark'=>array_fill(0,6,0),'prod3m'=>0.0,
+                'arpu'=>0.0,'spark'=>array_fill(0,6,0),
+                'antiguedad_meses'=>tx_antiguedad_meses_hc_index($seat['fecha_alta']??null,$hasta),
                 '_seat'=>$seat,
             ];
         }
@@ -3788,63 +3819,32 @@ function tx_build_vendedores_regional_hc_dashboard(
         $v['dias_standby']=$p['dias_standby'];
         $v['productividad']=$p['productividad'];
         $com=$arpu[$key]??[];
-        $v['arpu']=round((float)($com['arpu']??0),0);
+        $v['arpu']=round((float)($com['arpu']??0),2); // Desempate exacto; la tabla sigue mostrando pesos enteros.
         unset($v['_seat']);
     }
     unset($v);
-    // Clasificación por 3 meses se conserva como desempate SOLO para vendedores con 0.
-    // Para no ejecutar Motor HC 3 veces adicionales, consulta agregada única;
-    // no afecta INST ni productividad del período ni la selección TOP.
-    $inicio3m=date('Y-m-01',strtotime('first day of -3 month',$fechaCorteTs));
-    $fin3m=date('Y-m-t',strtotime('last day of -1 month',$fechaCorteTs));
-    $dias3m=tx_dias_habiles_ultimos_3_meses_dashboard($conexion,$fechaCorteTs);
-    $hic=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic());
-    $canonicos=$hic['canonicos'];
-    $foliosPermitidos=[];
-    foreach ($vend as $v) {
-        $id=(string)$v['folio'];
-        $foliosPermitidos[$id]=true;
-        foreach (($hic['equivalencias'][$id]??[]) as $alias) $foliosPermitidos[(string)$alias]=true;
-    }
-    $cant3m=[];
-    if ($foliosPermitidos) {
-        // Un único SELECT filtrado por fechas y folios, sin buscar a otros colaboradores.
-        $folios=array_keys($foliosPermitidos);
-        $placeholders=implode(',',array_fill(0,count($folios),'?'));
-        $sql="SELECT folio_empleado,COUNT(cuenta) AS n FROM instalaciones
-              WHERE fecha >= ? AND fecha <= ? AND origen_prospecto <> '-'
-                AND folio_empleado IN ($placeholders)
-              GROUP BY folio_empleado";
-        $stmt=$conexion->prepare($sql);
-        if (!$stmt) throw new RuntimeException('No se pudo preparar desempate 3M');
-        $types='ss'.str_repeat('s',count($folios));
-        $bind=array_merge([$inicio3m,$fin3m],$folios);
-        $stmt->bind_param($types,...$bind);
-        $stmt->execute();
-        $res=$stmt->get_result();
-        while ($r=$res->fetch_assoc()) {
-            $f=(string)$r['folio_empleado'];
-            if ($f==='') continue;
-            $c=(string)($canonicos[$f]??$f);
-            $cant3m[$c]=($cant3m[$c]??0)+(int)$r['n'];
-        }
-        $stmt->close();
-    }
-    foreach($vend as &$v) $v['prod3m']=$dias3m>0?round(($cant3m[(string)$v['folio']]??0)/$dias3m,2):0.0;
-    unset($v);
+    // El desempate histórico 3M deja de intervenir: ahora manda VOLUMEN del corte.
+    // Al no necesitar 3M, eliminamos su SELECT y el reprocesamiento HIC adicional.
+    // Todos los candidatos conservan productividad verificable por jornadas Motor HC.
     $lista=array_values(array_filter($vend,static fn($v)=>$v['productividad']!==null));
     $top=$lista;
-    usort($top,static fn($a,$b)=>($b['productividad']<=>$a['productividad']) ?: ($b['instalaciones']<=>$a['instalaciones']) ?: strcmp($a['vendedor'],$b['vendedor']));
+    usort($top,static function($a,$b) {
+        return ((int)$b['instalaciones'] <=> (int)$a['instalaciones'])
+            ?: ((float)$b['productividad'] <=> (float)$a['productividad'])
+            ?: ((float)$b['arpu'] <=> (float)$a['arpu'])
+            ?: strcmp((string)$a['vendedor'],(string)$b['vendedor'])
+            ?: strcmp((string)$a['folio'],(string)$b['folio']);
+    });
     $top=array_slice($top,0,10);
-    $zeros=array_values(array_filter($lista,static fn($v)=>(int)$v['instalaciones']===0));
-    usort($zeros,static fn($a,$b)=>($a['prod3m']<=>$b['prod3m']) ?: strcmp($a['vendedor'],$b['vendedor']));
-    $bottom=array_slice($zeros,0,10);
-    if (count($bottom)<10) {
-        $incluidos=array_fill_keys(array_map(static fn($v)=>$v['lider_id'].'|'.$v['coach_id'].'|'.$v['folio'],$bottom),true);
-        $resto=array_values(array_filter($lista,static fn($v)=>!isset($incluidos[$v['lider_id'].'|'.$v['coach_id'].'|'.$v['folio']])));
-        usort($resto,static fn($a,$b)=>($a['productividad']<=>$b['productividad']) ?: ($a['prod3m']<=>$b['prod3m']) ?: strcmp($a['vendedor'],$b['vendedor']));
-        $bottom=array_merge($bottom,array_slice($resto,0,10-count($bottom)));
-    }
+    $bottom=$lista;
+    usort($bottom,static function($a,$b) {
+        return ((int)$a['instalaciones'] <=> (int)$b['instalaciones'])
+            ?: ((float)$a['productividad'] <=> (float)$b['productividad'])
+            ?: ((float)$a['arpu'] <=> (float)$b['arpu'])
+            ?: strcmp((string)$a['vendedor'],(string)$b['vendedor'])
+            ?: strcmp((string)$a['folio'],(string)$b['folio']);
+    });
+    $bottom=array_slice($bottom,0,10);
     return [$top,$bottom,['vendedores'=>count($vend),'fuera_foto'=>$fueraFoto]];
 }
 
@@ -4613,19 +4613,31 @@ if ($tx_geo_sum_count > 0) {
             overflow-x:hidden;
         }
         .top-productividad-table th:nth-child(1),
-        .top-productividad-table td:nth-child(1){width:34px;}
+        .top-productividad-table td:nth-child(1){width:4%;}
         .top-productividad-table th:nth-child(2),
-        .top-productividad-table td:nth-child(2){width:31%;}
+        .top-productividad-table td:nth-child(2){width:25%;}
         .top-productividad-table th:nth-child(3),
-        .top-productividad-table td:nth-child(3){width:14%;}
+        .top-productividad-table td:nth-child(3){width:12%;}
         .top-productividad-table th:nth-child(4),
-        .top-productividad-table td:nth-child(4){width:23%;}
+        .top-productividad-table td:nth-child(4){width:18%;}
         .top-productividad-table th:nth-child(5),
-        .top-productividad-table td:nth-child(5){width:12%;}
+        .top-productividad-table td:nth-child(5){width:11%;}
         .top-productividad-table th:nth-child(6),
-        .top-productividad-table td:nth-child(6){width:12%;}
+        .top-productividad-table td:nth-child(6){width:11%;}
         .top-productividad-table th:nth-child(7),
-        .top-productividad-table td:nth-child(7){width:8%;}
+        .top-productividad-table td:nth-child(7){width:11%;}
+        .top-productividad-table th:nth-child(8),
+        .top-productividad-table td:nth-child(8){width:8%;}
+        .top-productividad-table .seller-antiguedad{
+            white-space:nowrap;
+            color:#516381;
+            font-size:.69rem;
+            font-weight:800;
+        }
+        @media(max-width:1100px){
+            .top-productividad-table-wrap{overflow-x:auto;}
+            .top-productividad-table{min-width:640px;}
+        }
 
 .top-productividad-table tr:last-child td{
             border-bottom:0;
@@ -6029,6 +6041,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <th>Nombre Coach</th>
                             <th>Distrito</th>
                             <th>Líder</th>
+                            <th title="Antigüedad promedio de vendedores ocupados del equipo (HC.fecha_alta)">Antig. equipo</th>
                             <th style="text-align:right;">Ventas instaladas</th>
                             <th style="text-align:right;">Prod.</th>
                             <th style="text-align:right;">ARPU</th>
@@ -6045,10 +6058,11 @@ include __DIR__ . '/includes/sidebar.php';
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
                             <td><div class="seller-small" title="<?= htmlspecialchars($row['lider'] ?? '') ?>"><?= htmlspecialchars($row['lider'] ?? '') ?></div></td>
+                            <td class="seller-antiguedad" title="<?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null).' · '.$row['antiguedad_con_fecha'].' de '.$row['antiguedad_ocupados'].' vendedores con fecha de alta válida',ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null,true),ENT_QUOTES,'UTF-8') ?></td>
                             <td class="seller-num" title="Cuentas certificadas por Motor HC v0.6.2"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
                             <td class="seller-num">
                                 <div class="seller-prod">
-                                    <strong title="<?= htmlspecialchars(number_format((int)($row['instalaciones'] ?? 0)).' INS / '.number_format((int)($row['hc_activo'] ?? 0)).' HC activo / '.(int)$GLOBALS['dias_productividad_vendedor'].' días hábiles', ENT_QUOTES, 'UTF-8') ?>"><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
+                                    <strong title="<?= htmlspecialchars(number_format((int)($row['instalaciones'] ?? 0)).' INS / '.number_format((int)($row['jornadas_operativas'] ?? 0)).' jornadas-persona disponibles (STANDBY descontado)', ENT_QUOTES, 'UTF-8') ?>"><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
                                     <div class="sparkline" title="Tendencia últimas 6 semanas">
                                         <?php foreach ($spark as $sv): ?>
                                             <span style="height:<?= max(3, round(((int)$sv / $sparkMax) * 16)) ?>px;"></span>
@@ -6060,7 +6074,7 @@ include __DIR__ . '/includes/sidebar.php';
                         </tr>
                         <?php endforeach; ?>
                         <?php if (empty($items)): ?>
-                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($mensajeVacio, ENT_QUOTES, 'UTF-8') ?></td></tr>
+                        <tr><td colspan="8" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($mensajeVacio, ENT_QUOTES, 'UTF-8') ?></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -6070,12 +6084,12 @@ include __DIR__ . '/includes/sidebar.php';
 
         <?php $renderTopCoachTable(
             'TOP Five Coaches',
-            'Motor HC · Mejor PROD. · Piso mínimo '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días)',
+            'PROD. → INS → ARPU · Piso mínimo '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días)',
             $top_productividad_coaches,
             'top-productividad',
             ($tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Ningún coach cumple el piso mínimo de '.number_format($tx_piso_min_top_coaches).' instalaciones para este rango.')
         ); ?>
-        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Motor HC · Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender', $tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Sin coaches activos para este corte.'); ?>
+        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Menor PROD. → INS → ARPU · HC certificado', $top_offender_coaches, 'top-offender', $tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Sin coaches activos para este corte.'); ?>
     </div>
     <?php endif; ?>
 
@@ -6102,6 +6116,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <th>Nombre vendedor</th>
                             <th>Distrito</th>
                             <th>Coach</th>
+                            <th title="Antigüedad individual del vendedor al cierre del corte (HC.fecha_alta)">Antigüedad</th>
                             <th style="text-align:right;">Ventas instaladas</th>
                             <th style="text-align:right;">Prod.</th>
                             <th style="text-align:right;">ARPU</th>
@@ -6118,6 +6133,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['vendedor'] ?? '') ?>"><?= htmlspecialchars($row['vendedor'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
                             <td><div class="seller-small" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
+                            <td class="seller-antiguedad" title="<?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null),ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null,true),ENT_QUOTES,'UTF-8') ?></td>
                             <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
                             <td class="seller-num">
                                 <div class="seller-prod">
@@ -6133,7 +6149,7 @@ include __DIR__ . '/includes/sidebar.php';
                         </tr>
                         <?php endforeach; ?>
                         <?php if (empty($items)): ?>
-                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($GLOBALS['tx_vendedores_motor_error'] !== null ? 'Datos HC no disponibles: revisar log de Motor HC.' : 'Sin datos para el rango seleccionado.', ENT_QUOTES, 'UTF-8') ?></td></tr>
+                        <tr><td colspan="8" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($GLOBALS['tx_vendedores_motor_error'] !== null ? 'Datos HC no disponibles: revisar log de Motor HC.' : 'Sin datos para el rango seleccionado.', ENT_QUOTES, 'UTF-8') ?></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -6141,8 +6157,8 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('TOP Regional Vendedor', 'Mejor PROD. HC / jornadas disponibles del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('BOTTOM Regional Vendedor', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor volumen INS → PROD. → ARPU · HC certificado', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('BOTTOM Regional Vendedor', 'Menor volumen INS → PROD. → ARPU · HC certificado', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
