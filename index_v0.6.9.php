@@ -3518,6 +3518,24 @@ function tx_antiguedad_meses_hc_index(?string $fechaAlta, string $corte): ?int {
     return ((int)$dif->y * 12) + (int)$dif->m;
 }
 
+/**
+ * Elegibilidad ejecutiva TOP/BOTTOM vendedor: antigüedad ESTRICTAMENTE mayor
+ * a 3 meses calendario al cierre del rango. No basta con truncar los meses
+ * porque 3 meses y 1 día se muestra como "3m", pero SÍ cumple >3 meses.
+ * Sin fecha de alta HC verificable => no se clasifica (no se presume antigüedad).
+ * No modifica la antigüedad presentada ni la clasificación de Coaches.
+ */
+function tx_vendedor_mayor_3m_hc_index(?string $fechaAlta, string $corte): bool {
+    $fechaAlta = trim((string)$fechaAlta);
+    $alta = DateTimeImmutable::createFromFormat('!Y-m-d', $fechaAlta);
+    $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $corte);
+    if (!$alta || !$fin || $alta->format('Y-m-d') !== $fechaAlta
+        || $fin->format('Y-m-d') !== $corte || $alta > $fin) return false;
+    $dif = $alta->diff($fin);
+    $meses = ((int)$dif->y * 12) + (int)$dif->m;
+    return $meses > 3 || ($meses === 3 && (int)$dif->d > 0);
+}
+
 /** Etiqueta legible para la misma antigüedad en coaches y vendedores. */
 function tx_antiguedad_texto_hc_index(?int $meses, bool $compacto = false): string {
     if ($meses === null || $meses < 0) return '—';
@@ -3754,6 +3772,10 @@ function tx_build_coaches_motor_hc_staging(
  * TOP: volumen DESC, productividad DESC, ARPU DESC.
  * BOTTOM: volumen ASC, productividad ASC, ARPU ASC (incluye ceros).
  * La productividad publicada NUNCA se reconstruye por folio bruto ni HC*días.
+ * Elegibilidad ejecutiva en AMBAS listas, sin alterar Motor HC ni rankings:
+ * - antigüedad > 3 meses reales al cierre del rango (HC.fecha_alta)
+ * - STANDBY total <= 40% de las jornadas del rango (motor_hc_v0.6.9)
+ * - jornadas disponibles > 0; dato de alta faltante no se presupone.
  */
 function tx_build_vendedores_regional_hc_dashboard(
     mysqli $conexion, RankingAtribucionServiceV06 $motor, array $ctx, int $fechaCorteTs
@@ -3786,6 +3808,7 @@ function tx_build_vendedores_regional_hc_dashboard(
                 'jornadas_operativas'=>0,'dias_standby'=>0,
                 'arpu'=>0.0,'spark'=>array_fill(0,6,0),
                 'antiguedad_meses'=>tx_antiguedad_meses_hc_index($seat['fecha_alta']??null,$hasta),
+                'cumple_antiguedad'=>tx_vendedor_mayor_3m_hc_index($seat['fecha_alta']??null,$hasta),
                 '_seat'=>$seat,
             ];
         }
@@ -3818,6 +3841,10 @@ function tx_build_vendedores_regional_hc_dashboard(
         $v['jornadas_operativas']=$p['jornadas_operativas'];
         $v['dias_standby']=$p['dias_standby'];
         $v['productividad']=$p['productividad'];
+        // Mismo dictamen del Motor HC que usa HC SIN INS: >40% STANDBY
+        // excluye, 40% exacto NO excluye. Fuente exclusiva: hc_standby.
+        $v['pct_standby']=(float)($p['disponibilidad']['pct_standby']??0.0);
+        $v['cumple_standby']=(bool)($p['disponibilidad']['elegible_hc_sin_ins']??false);
         $com=$arpu[$key]??[];
         $v['arpu']=round((float)($com['arpu']??0),2); // Desempate exacto; la tabla sigue mostrando pesos enteros.
         unset($v['_seat']);
@@ -3825,8 +3852,19 @@ function tx_build_vendedores_regional_hc_dashboard(
     unset($v);
     // El desempate histórico 3M deja de intervenir: ahora manda VOLUMEN del corte.
     // Al no necesitar 3M, eliminamos su SELECT y el reprocesamiento HIC adicional.
-    // Todos los candidatos conservan productividad verificable por jornadas Motor HC.
-    $lista=array_values(array_filter($vend,static fn($v)=>$v['productividad']!==null));
+    // Filtros sólo de exhibición ejecutiva: no recalcular PROD ni cambiar cuentas,
+    // HC SIN INS, fotografía de plantilla, ni Ranking Productividad.
+    $excluidosAntiguedad=0; $excluidosStandby=0; $excluidosSinJornadas=0;
+    foreach ($vend as $candidato) {
+        if (empty($candidato['cumple_antiguedad'])) ++$excluidosAntiguedad;
+        if (empty($candidato['cumple_standby'])) ++$excluidosStandby;
+        if ($candidato['productividad']===null) ++$excluidosSinJornadas;
+    }
+    $lista=array_values(array_filter($vend,static function($v): bool {
+        return $v['productividad']!==null
+            && !empty($v['cumple_antiguedad'])
+            && !empty($v['cumple_standby']);
+    }));
     $top=$lista;
     usort($top,static function($a,$b) {
         return ((int)$b['instalaciones'] <=> (int)$a['instalaciones'])
@@ -3845,7 +3883,13 @@ function tx_build_vendedores_regional_hc_dashboard(
             ?: strcmp((string)$a['folio'],(string)$b['folio']);
     });
     $bottom=array_slice($bottom,0,10);
-    return [$top,$bottom,['vendedores'=>count($vend),'fuera_foto'=>$fueraFoto]];
+    return [$top,$bottom,[
+        'vendedores'=>count($vend), 'elegibles'=>count($lista),
+        'excluidos_antiguedad'=>$excluidosAntiguedad,
+        'excluidos_standby'=>$excluidosStandby,
+        'excluidos_sin_jornadas'=>$excluidosSinJornadas,
+        'fuera_foto'=>$fueraFoto,
+    ]];
 }
 
 // Días operativos del período: sólo referencia visual y cálculos heredados.
@@ -6157,8 +6201,8 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor volumen INS → PROD. → ARPU · HC certificado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('BOTTOM Regional Vendedor', 'Menor volumen INS → PROD. → ARPU · HC certificado', $top_offender_vendedores, 'top-offender'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('BOTTOM Regional Vendedor', 'Menor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
