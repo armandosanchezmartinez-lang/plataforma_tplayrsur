@@ -3208,7 +3208,9 @@ $antiguedad_ocupados_equipo = (int)($coach_resumen_actual['antiguedad_ocupados']
                     $difTot05=$pct_mc05($sum05['ins_actual']-$sum05['ins_base'],$sum05['ins_base']);
                 ?>
                 <tr class="total-row">
-                    <td>TOTAL</td><td></td>
+                    <td>TOTAL</td>
+                    <?php // Antigüedad promedio del HC ACTUAL; evita promediar vendedores históricos de BASE. ?>
+                    <td class="center" title="<?= h($antiguedad_validos_equipo.' de '.$antiguedad_ocupados_equipo.' vendedores ocupados con fecha de alta válida') ?>"><?= h($antiguedad_prom_equipo) ?></td>
                     <td class="num"><?= fmt_num($sum05['ins_base']) ?></td>
                     <td class="num"><?= fmt_num($sum05['ins_actual']) ?></td>
                     <td class="num"><?= fmt_num($sum05['ins_actual']-$sum05['ins_base']) ?></td>
