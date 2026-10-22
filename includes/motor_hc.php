@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR HC v0.6.7 · HC_STANDBY AUTORIDAD TEMPORAL
+ * TalIA / TotalXpedient · MOTOR HC v0.6.8 · IDENTIDAD HISTÓRICA DE VENDEDOR
  * ============================================================================
  * Ubicación: /plataforma/includes/motor_hc.php
  * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
@@ -24,6 +24,15 @@ declare(strict_types=1);
  *   controlada de autorreferencias de coach de v0.6.2.
  * - Los campos de coach/líder registrados en instalaciones son diagnósticos,
  *   no sustituyen la autoridad jerárquica de Capital Humano.
+ *
+ * CAMBIO v0.6.8 (21-OCT-2026)
+ * - Cada cuenta certificada expone vendedor_nombre y vendedor_fecha_alta tomados
+ *   de la MISMA fotografía HC histórica que certificó vendedor -> coach -> líder.
+ * - Los Rankings ya no dependen de la foto BASE/ACTUAL de cierre para nombrar
+ *   vendedores que cambiaron de Coach o salieron de la estructura durante el período.
+ * - Si la identidad histórica no puede resolverse de forma unívoca, el ID/folio se
+ *   conserva para auditoría pero la presentación debe usar VENDEDOR NO IDENTIFICADO.
+ * - No cambia atribución, HIC, jerarquía, STANDBY, Productividad ni totales.
  *
  * CAMBIO v0.6.7 (21-OCT-2026)
  * - hc_standby es la ÚNICA autoridad operativa para VACACIONES/INCAPACIDAD.
@@ -705,13 +714,35 @@ final class RankingAtribucionServiceV06
                     $coach=$indices[$fotoKey]['coaches'][$district][$coachPos]??null;
                     if (!$coach) continue;
                     $key=$coach['lider_id'].'|'.$coachPos;
-                    $candidatos[$key]=$coach;
+
+                    // v0.6.8: conservar identidad visible desde la MISMA foto histórica
+                    // que certifica la jerarquía. Nunca buscar el nombre sólo en la foto
+                    // de cierre BASE/ACTUAL porque el vendedor pudo cambiar de Coach.
+                    if (!isset($candidatos[$key])) {
+                        $candidatos[$key]=$coach;
+                        $candidatos[$key]['vendedor_nombres']=[];
+                        $candidatos[$key]['vendedor_fechas_alta']=[];
+                    }
+                    $nombreHist=self::norm($h['nombre_colaborador']??'');
+                    if (self::isValidName($nombreHist)) {
+                        $candidatos[$key]['vendedor_nombres'][$nombreHist]=true;
+                    }
+                    $fechaAltaHist=substr(trim((string)($h['fecha_alta']??'')),0,10);
+                    if ($fechaAltaHist!=='' && $fechaAltaHist!=='0000-00-00') {
+                        $candidatos[$key]['vendedor_fechas_alta'][$fechaAltaHist]=true;
+                    }
                 }
             }
             $estado='OK'; $fuente='HC_FOTO'; $lid=null; $coachId=null; $coachNombre=null;
+            $vendedorNombre=null; $vendedorFechaAlta=null;
             if (count($candidatos)===1) {
                 $c=array_values($candidatos)[0];
                 $lid=$c['lider_id']; $coachId=$c['coach_id']; $coachNombre=$c['coach_nombre'];
+                $nombresHist=array_keys($c['vendedor_nombres']??[]);
+                if (count($nombresHist)===1) $vendedorNombre=(string)$nombresHist[0];
+                $fechasAltaHist=array_keys($c['vendedor_fechas_alta']??[]);
+                sort($fechasAltaHist,SORT_STRING);
+                if ($fechasAltaHist) $vendedorFechaAlta=(string)$fechasAltaHist[0];
                 // Evento líder es informativo: una posición nunca se invalida por nombre.
                 if ($coachOriginal!==null && self::nameKey($coachNombre)!==$coachOriginal) $estado='CAMBIO_ESTRUCTURA_COACH';
             } else {
@@ -731,6 +762,8 @@ final class RankingAtribucionServiceV06
                 'lider_evento_original'=>$evs[0]['lider']??'',
                 'coach_evento_texto'=>$evs[0]['coach']??'',
                 'lider_id'=>$lid,'lider_posicion'=>($lid!==null?substr($lid,strpos($lid,'|')+1):null),'coach_id'=>$coachId,'vendedor_id'=>$seller,
+                'vendedor_nombre'=>$vendedorNombre,
+                'vendedor_fecha_alta'=>$vendedorFechaAlta,
                 'vendedor_folio_original'=>$original,
                 'identidad_hic'=>$hicAmbiguo?'HIC_AMBIGUA':($seller!==null && $seller!==$original?'HIC_VERIFICABLE':'DIRECTA_O_SIN_HIC'),
                 'coach_evento'=>$coachNombre,'lider_evento_id'=>$liderOriginal,
@@ -781,7 +814,7 @@ final class RankingAtribucionServiceV06
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.7-hc-standby-authority-all-channels',
+            'version'=>'0.6.8-hc-historical-seller-name-all-channels',
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),
