@@ -3637,10 +3637,12 @@ function tx_antiguedad_meses_hc_index(?string $fechaAlta, string $corte): ?int {
 }
 
 /**
- * Elegibilidad ejecutiva TOP/BOTTOM vendedor: antigüedad ESTRICTAMENTE mayor
- * a 3 meses calendario al cierre del rango. No basta con truncar los meses
- * porque 3 meses y 1 día se muestra como "3m", pero SÍ cumple >3 meses.
- * Sin fecha de alta HC verificable => no se clasifica (no se presume antigüedad).
+ * Elegibilidad de antigüedad EXCLUSIVA DEL BOTTOM Regional Vendedor:
+ * mayor de 3 meses calendario al cierre del rango. No basta con truncar
+ * meses: 3 meses y 1 día puede mostrarse como "3m" y SÍ cumple >3 meses.
+ * Sin fecha de alta HC verificable => se excluye SOLO del BOTTOM.
+ * TOP Regional Vendedor admite nuevos ingresos, sin importar antigüedad,
+ * siempre que cumplan la regla vigente de STANDBY y tengan productividad.
  * No modifica la antigüedad presentada ni la clasificación de Coaches.
  */
 function tx_vendedor_mayor_3m_hc_index(?string $fechaAlta, string $corte): bool {
@@ -3890,10 +3892,12 @@ function tx_build_coaches_motor_hc_staging(
  * TOP: volumen DESC, productividad DESC, ARPU DESC.
  * BOTTOM: volumen ASC, productividad ASC, ARPU ASC (incluye ceros).
  * La productividad publicada NUNCA se reconstruye por folio bruto ni HC*días.
- * Elegibilidad ejecutiva en AMBAS listas, sin alterar Motor HC ni rankings:
- * - antigüedad > 3 meses reales al cierre del rango (HC.fecha_alta)
- * - STANDBY total <= 40% de las jornadas del rango (motor_hc.php, v0.6.9)
- * - jornadas disponibles > 0; dato de alta faltante no se presupone.
+ * Elegibilidad ejecutiva, sin alterar Motor HC ni rankings:
+ * - TOP: sin restricción de antigüedad; nuevos ingresos pueden destacar.
+ * - BOTTOM: antigüedad estrictamente > 3 meses (HC.fecha_alta verificable).
+ * - AMBOS: STANDBY total <= 40% del rango (motor_hc.php v0.6.9)
+ *          y jornadas disponibles > 0.
+ * - Sin fecha de alta válida: puede entrar al TOP, NUNCA al BOTTOM.
  */
 function tx_build_vendedores_regional_hc_dashboard(
     mysqli $conexion, RankingAtribucionServiceV06 $motor, array $ctx, int $fechaCorteTs
@@ -3978,12 +3982,17 @@ function tx_build_vendedores_regional_hc_dashboard(
         if (empty($candidato['cumple_standby'])) ++$excluidosStandby;
         if ($candidato['productividad']===null) ++$excluidosSinJornadas;
     }
-    $lista=array_values(array_filter($vend,static function($v): bool {
+    // TOP reconoce resultados sobresalientes incluso si el vendedor es nuevo.
+    // BOTTOM protege nuevos ingresos (<=3 meses) y registros sin alta comprobable.
+    // Ambas listas mantienen el mismo filtro de STANDBY y disponibilidad HC.
+    $listaTop=array_values(array_filter($vend,static function($v): bool {
         return $v['productividad']!==null
-            && !empty($v['cumple_antiguedad'])
             && !empty($v['cumple_standby']);
     }));
-    $top=$lista;
+    $listaBottom=array_values(array_filter($listaTop,static function($v): bool {
+        return !empty($v['cumple_antiguedad']);
+    }));
+    $top=$listaTop;
     usort($top,static function($a,$b) {
         return ((int)$b['instalaciones'] <=> (int)$a['instalaciones'])
             ?: ((float)$b['productividad'] <=> (float)$a['productividad'])
@@ -3992,7 +4001,7 @@ function tx_build_vendedores_regional_hc_dashboard(
             ?: strcmp((string)$a['folio'],(string)$b['folio']);
     });
     $top=array_slice($top,0,10);
-    $bottom=$lista;
+    $bottom=$listaBottom;
     usort($bottom,static function($a,$b) {
         return ((int)$a['instalaciones'] <=> (int)$b['instalaciones'])
             ?: ((float)$a['productividad'] <=> (float)$b['productividad'])
@@ -4002,8 +4011,11 @@ function tx_build_vendedores_regional_hc_dashboard(
     });
     $bottom=array_slice($bottom,0,10);
     return [$top,$bottom,[
-        'vendedores'=>count($vend), 'elegibles'=>count($lista),
-        'excluidos_antiguedad'=>$excluidosAntiguedad,
+        'vendedores'=>count($vend),
+        'elegibles'=>count($listaBottom), // compatibilidad: universo elegible del BOTTOM
+        'elegibles_top'=>count($listaTop),
+        'elegibles_bottom'=>count($listaBottom),
+        'excluidos_antiguedad'=>$excluidosAntiguedad, // aplica exclusivamente al BOTTOM
         'excluidos_standby'=>$excluidosStandby,
         'excluidos_sin_jornadas'=>$excluidosSinJornadas,
         'fuera_foto'=>$fueraFoto,
@@ -6432,7 +6444,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor INS → PROD. → ARPU · Nuevos incluidos · STANDBY ≤40%', $top_productividad_vendedores, 'top-productividad'); ?>
         <?php $renderTopTable('BOTTOM Regional Vendedor', 'Menor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
