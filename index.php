@@ -671,6 +671,124 @@ if ($rol_consulta === 'admin') {
 $kpi_vent = $r_vent ? (mysqli_fetch_assoc($r_vent)['total'] ?? 0) : 0;
 $kpi_conv = ($kpi_vent > 0) ? round(($kpi_inst / $kpi_vent) * 100, 1) : 0;
 
+// ── KPI COMPARATIVO VS PERÍODO ANTERIOR · INDEX 2026-10-23 ────────────────
+// Mensual: mismo rango de días en el mes anterior, topando al último día real.
+// Semanal: semana ISO anterior y exactamente los mismos días ISO elegidos.
+// No altera el valor ACTUAL de los KPIs, ni la atribución, ni Motor HC/Comercial.
+function tx_index_mes_previo_fecha(string $ymd): string {
+    $f = new DateTimeImmutable($ymd);
+    $ancla = $f->modify('first day of this month')->modify('-1 month');
+    $dia = min((int)$f->format('j'), (int)$ancla->format('t'));
+    return $ancla->setDate((int)$ancla->format('Y'), (int)$ancla->format('n'), $dia)->format('Y-m-d');
+}
+function tx_index_etiqueta_periodo(string $inicio, string $fin): string {
+    $a = new DateTimeImmutable($inicio); $b = new DateTimeImmutable($fin);
+    $meses=[1=>'ene',2=>'feb',3=>'mar',4=>'abr',5=>'may',6=>'jun',
+            7=>'jul',8=>'ago',9=>'sep',10=>'oct',11=>'nov',12=>'dic'];
+    if ($a->format('Y-m') === $b->format('Y-m')) {
+        return sprintf('%02d–%02d %s %s',(int)$a->format('j'),(int)$b->format('j'),
+            $meses[(int)$a->format('n')],$a->format('Y'));
+    }
+    return sprintf('%02d %s %s – %02d %s %s',(int)$a->format('j'),
+        $meses[(int)$a->format('n')],$a->format('Y'),(int)$b->format('j'),
+        $meses[(int)$b->format('n')],$b->format('Y'));
+}
+function tx_index_kpi_previo(
+    mysqli $conexion, string $tipo, string $desde, string $hasta,
+    array $diasIso, string $rolConsulta, bool $scopeDistrito, string $scopeDistritos,
+    bool $porDistrito, string $distritos, array $folios
+): ?int {
+    $esInst = $tipo === 'instalaciones';
+    $tabla = $esInst ? 'instalaciones' : 'ventas';
+    $colFecha = $esInst ? 'fecha' : 'fecha_cierre';
+    $contar = $esInst ? 'COUNT(cuenta)' : 'COUNT(*)';
+    $where = "$colFecha BETWEEN ? AND ?";
+    // Mismos días elegidos que el período semanal original (incluye domingo si se seleccionó).
+    if ($diasIso) {
+        $diasMysql = array_map(static fn($d) => $d === 7 ? 1 : $d+1, $diasIso);
+        $where .= ' AND DAYOFWEEK('.$colFecha.') IN ('.implode(',',array_map('intval',$diasMysql)).')';
+    }
+    if ($esInst) $where .= " AND origen_prospecto <> '-'";
+    $withFolios = false;
+    if ($rolConsulta === 'admin') {
+        // Admin: toda Región SUR (misma consulta que KPI vigente).
+    } elseif ($scopeDistrito) {
+        $where .= " AND distrito IN ($scopeDistritos)";
+    } elseif ($porDistrito) {
+        $where .= " AND distrito IN ($distritos)";
+    } else {
+        $folios = array_values(array_unique(array_filter($folios,static fn($f) => trim((string)$f)!=='')));
+        if (!$folios) return 0;
+        $where .= ' AND folio_empleado IN ('.implode(',',array_fill(0,count($folios),'?')).')';
+        $withFolios = true;
+    }
+    $stmt = mysqli_prepare($conexion,"SELECT $contar AS total FROM $tabla WHERE $where");
+    if (!$stmt) { error_log('TalIA INDEX comparativo: error preparando KPI '.$tipo); return null; }
+    $params = [$desde,$hasta];
+    if ($withFolios) $params = array_merge($params,$folios);
+    $types = str_repeat('s',count($params));
+    mysqli_stmt_bind_param($stmt,$types,...$params);
+    if (!mysqli_stmt_execute($stmt)) {
+        error_log('TalIA INDEX comparativo: error ejecutando KPI '.$tipo);
+        mysqli_stmt_close($stmt);
+        return null;
+    }
+    $res = mysqli_stmt_get_result($stmt);
+    $row = $res ? mysqli_fetch_assoc($res) : null;
+    mysqli_stmt_close($stmt);
+    return $row === null ? null : (int)$row['total'];
+}
+function tx_index_kpi_variacion(?float $actual, ?float $anterior, bool $conversion=false): array {
+    if ($actual === null || $anterior === null) {
+        return ['estado'=>'na','icono'=>'—','dif'=>'N/D','pct'=>'N/D'];
+    }
+    $dif = $conversion ? round($actual-$anterior,1) : (int)($actual-$anterior);
+    $estado = $dif > 0 ? 'up' : ($dif < 0 ? 'down' : 'flat');
+    $icono = $dif > 0 ? '↑' : ($dif < 0 ? '↓' : '→');
+    $signo = $dif > 0 ? '+' : ($dif < 0 ? '−' : '');
+    $formatoDif = $conversion
+        ? $signo.number_format(abs($dif),1). ' pp'
+        : $signo.number_format(abs((int)$dif));
+    if ($anterior == 0.0) {
+        $formatoPct = ($actual == 0.0) ? '0.0%' : 'N/D';
+    } else {
+        $porcentaje = round(($actual-$anterior)/$anterior*100,1);
+        $formatoPct = ($porcentaje > 0 ? '+' : ($porcentaje < 0 ? '−' : ''))
+            .number_format(abs($porcentaje),1).'%';
+    }
+    return ['estado'=>$estado,'icono'=>$icono,'dif'=>$formatoDif,'pct'=>$formatoPct];
+}
+if ($periodo === 'semanal') {
+    $tx_cmp_inicio = (new DateTimeImmutable($fecha_inicio_dashboard))->modify('-7 days')->format('Y-m-d');
+    $tx_cmp_fin = (new DateTimeImmutable($fecha_fin_dashboard))->modify('-7 days')->format('Y-m-d');
+    $tx_cmp_dias_iso = $tx_dashboard_dias_iso;
+} else {
+    $tx_cmp_inicio = tx_index_mes_previo_fecha($fecha_inicio_dashboard);
+    $tx_cmp_fin = tx_index_mes_previo_fecha($fecha_fin_dashboard);
+    $tx_cmp_dias_iso = [];
+}
+$tx_cmp_periodo = tx_index_etiqueta_periodo($tx_cmp_inicio,$tx_cmp_fin);
+$tx_cmp_inst = tx_index_kpi_previo($conexion,'instalaciones',$tx_cmp_inicio,$tx_cmp_fin,
+    $tx_cmp_dias_iso,$rol_consulta,(bool)$scope_filtrar_por_distrito,(string)$scope_distritos_sql,
+    (bool)$por_distrito,(string)$distritos_sql,$folio_ids);
+$tx_cmp_vent = tx_index_kpi_previo($conexion,'ventas',$tx_cmp_inicio,$tx_cmp_fin,
+    $tx_cmp_dias_iso,$rol_consulta,(bool)$scope_filtrar_por_distrito,(string)$scope_distritos_sql,
+    (bool)$por_distrito,(string)$distritos_sql,$folio_ids);
+$tx_cmp_conv = ($tx_cmp_inst !== null && $tx_cmp_vent !== null)
+    ? ($tx_cmp_vent > 0 ? round($tx_cmp_inst/$tx_cmp_vent*100,1) : 0.0) : null;
+$tx_cmp_kpis = [
+    'inst'=>tx_index_kpi_variacion((float)$kpi_inst,$tx_cmp_inst !== null ? (float)$tx_cmp_inst : null),
+    'vent'=>tx_index_kpi_variacion((float)$kpi_vent,$tx_cmp_vent !== null ? (float)$tx_cmp_vent : null),
+    'conv'=>tx_index_kpi_variacion((float)$kpi_conv,$tx_cmp_conv,true),
+];
+// Etiqueta accesible con base real (sin tercer campo en cada tarjeta).
+$tx_cmp_base = [
+    'inst'=>$tx_cmp_inst !== null ? number_format($tx_cmp_inst) : 'N/D',
+    'vent'=>$tx_cmp_vent !== null ? number_format($tx_cmp_vent) : 'N/D',
+    'conv'=>$tx_cmp_conv !== null ? number_format($tx_cmp_conv,1).'%' : 'N/D',
+];
+
+
 // ── HC ───────────────────────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
 if ($semana_actual && $anio_actual) {
@@ -4628,6 +4746,34 @@ if ($tx_geo_sum_count > 0) {
             color:#6b7a99;
             margin-top:4px;
         }
+
+        /* INDEX: comparativos KPI compactos, no afectan otros módulos. */
+        .kpi-grid-main .kpi-card:has(.tx-kpi-compare){display:flex;flex-direction:column;}
+        .kpi-grid-main .kpi-card .tx-kpi-compare{width:100%;box-sizing:border-box;
+            margin-top:auto;padding:7px 9px 5px;background:#f7f9ff;
+            border:1px solid #e5eafd;border-radius:12px;
+            font-variant-numeric:tabular-nums;min-width:0;}
+        .tx-kpi-compare-row{display:flex;justify-content:space-between;align-items:center;
+            flex-wrap:wrap;gap:2px 5px;margin:3px 0;}
+        .tx-kpi-compare-row span{font-size:.62rem;color:#60718f;font-weight:800;white-space:nowrap;}
+        .tx-kpi-compare-row strong{font-size:.78rem;font-weight:950;white-space:nowrap;}
+        .tx-kpi-change-up{color:#047857;}.tx-kpi-change-flat{color:#b7791f;}
+        .tx-kpi-change-down{color:#dc2626;}.tx-kpi-change-na{color:#64748b;}
+        .tx-kpi-compare-period{font-size:.56rem;line-height:1.35;color:#71819c;
+            border-top:1px solid #e5eafd;margin-top:5px;padding-top:5px;overflow-wrap:anywhere;}
+        /* Ordenación local de las 4 tablas: encabezados accesibles; badge no se renumera. */
+        .top-productividad-table .tx-index-sort{display:inline-flex;gap:3px;align-items:center;
+            width:100%;max-width:100%;border:0;background:transparent;color:inherit;
+            text-align:inherit;justify-content:flex-start;padding:0;font:inherit;font-weight:inherit;
+            text-transform:inherit;letter-spacing:inherit;cursor:pointer;line-height:1.2;}
+        .top-productividad-table th:nth-child(n+6) .tx-index-sort{justify-content:flex-end;text-align:right;}
+        .top-productividad-table .tx-index-sort:hover{color:#7a2bff;}
+        .top-productividad-table .tx-index-sort:focus-visible{outline:2px solid #7a2bff;outline-offset:2px;border-radius:3px;}
+        .top-productividad-table .tx-index-sort-arrow{font-size:.70rem;color:#7a2bff;opacity:.65;flex:0 0 auto;}
+        .top-productividad-table th[aria-sort="ascending"] .tx-index-sort-arrow,
+        .top-productividad-table th[aria-sort="descending"] .tx-index-sort-arrow{opacity:1;}
+        @media(max-width:1250px){.tx-kpi-compare-row strong{font-size:.70rem;}}
+
         .top-productividad-table{
             width:100%;
             border-collapse:collapse;
@@ -4657,21 +4803,21 @@ if ($tx_geo_sum_count > 0) {
             overflow-x:hidden;
         }
         .top-productividad-table th:nth-child(1),
-        .top-productividad-table td:nth-child(1){width:4%;}
+        .top-productividad-table td:nth-child(1){width:6%;}
         .top-productividad-table th:nth-child(2),
-        .top-productividad-table td:nth-child(2){width:25%;}
+        .top-productividad-table td:nth-child(2){width:29%;}
         .top-productividad-table th:nth-child(3),
-        .top-productividad-table td:nth-child(3){width:12%;}
+        .top-productividad-table td:nth-child(3){width:10%;}
         .top-productividad-table th:nth-child(4),
-        .top-productividad-table td:nth-child(4){width:18%;}
+        .top-productividad-table td:nth-child(4){width:19%;}
         .top-productividad-table th:nth-child(5),
-        .top-productividad-table td:nth-child(5){width:11%;}
+        .top-productividad-table td:nth-child(5){width:10%;}
         .top-productividad-table th:nth-child(6),
-        .top-productividad-table td:nth-child(6){width:11%;}
+        .top-productividad-table td:nth-child(6){width:10%;}
         .top-productividad-table th:nth-child(7),
-        .top-productividad-table td:nth-child(7){width:11%;}
+        .top-productividad-table td:nth-child(7){width:9%;}
         .top-productividad-table th:nth-child(8),
-        .top-productividad-table td:nth-child(8){width:8%;}
+        .top-productividad-table td:nth-child(8){width:7%;}
         .top-productividad-table .seller-antiguedad{
             white-space:nowrap;
             color:#516381;
@@ -4752,6 +4898,55 @@ if ($tx_geo_sum_count > 0) {
             .top-productividad-grid{
                 grid-template-columns:1fr;
             }
+        }
+
+
+        /* INDEX 2026-10-23 · Reconocimiento visible: nombres COMPLETOS.
+         * Nunca recortar con puntos suspensivos nombres de coach, vendedor ni
+         * responsables. Celdas multilínea de alto automático; tablas ordenables.
+         * No se modifica ninguna consulta, filtro, productividad ni posición #.
+         */
+        .top-productividad-card .top-productividad-table .seller-name,
+        .top-productividad-card .top-productividad-table .seller-small{
+            display:block;
+            width:100%;
+            max-width:none;
+            white-space:normal;
+            overflow:visible;
+            text-overflow:clip;
+            overflow-wrap:anywhere;
+            word-break:normal;
+            line-height:1.35;
+        }
+        .top-productividad-card .top-productividad-table .seller-name{
+            font-size:.75rem;
+            font-weight:950;
+        }
+        .top-productividad-card .top-productividad-table .seller-small{
+            font-size:.70rem;
+            font-weight:850;
+        }
+        .top-productividad-card .top-productividad-table .seller-district{
+            display:block;
+            white-space:normal;
+            overflow-wrap:anywhere;
+            line-height:1.32;
+        }
+        .top-productividad-card .top-productividad-table th,
+        .top-productividad-card .top-productividad-table td{
+            overflow-wrap:anywhere;
+        }
+        .top-productividad-card .top-productividad-table th .tx-index-sort{
+            white-space:normal;
+            flex-wrap:wrap;
+        }
+        .top-productividad-card .top-productividad-table td{
+            padding-top:10px;
+            padding-bottom:10px;
+        }
+        /* En pantallas intermedias no comprimir ocho columnas en media tarjeta. */
+        @media (max-width:1450px){
+            .top-productividad-grid{grid-template-columns:minmax(0,1fr);}
         }
 
 .dashboard-analytics-grid{
@@ -5578,6 +5773,23 @@ include __DIR__ . '/includes/sidebar.php';
         </form>
     </section>
 
+
+<?php
+$tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_kpis,$tx_cmp_periodo,$tx_cmp_base): void {
+    $k = $tx_cmp_kpis[$codigo];
+    $estado = htmlspecialchars($k['estado'], ENT_QUOTES,'UTF-8');
+    $dif = htmlspecialchars($k['dif'], ENT_QUOTES,'UTF-8');
+    $pct = htmlspecialchars($k['pct'], ENT_QUOTES,'UTF-8');
+    $icono = htmlspecialchars($k['icono'], ENT_QUOTES,'UTF-8');
+    $periodo = htmlspecialchars($tx_cmp_periodo, ENT_QUOTES,'UTF-8');
+    $base = htmlspecialchars($tx_cmp_base[$codigo], ENT_QUOTES,'UTF-8');
+    echo '<div class="tx-kpi-compare" title="Base anterior: '.$base.' · '.$periodo.'">';
+    echo '<div class="tx-kpi-compare-row"><span>Dif. vs anterior</span><strong class="tx-kpi-change-'.$estado.'">'.$icono.' '.$dif.'</strong></div>';
+    echo '<div class="tx-kpi-compare-row"><span>% Dif.</span><strong class="tx-kpi-change-'.$estado.'">'.$icono.' '.$pct.'</strong></div>';
+    echo '<div class="tx-kpi-compare-period">vs '.$periodo.' · base '.$base.'</div>';
+    echo '</div>';
+};
+?>
     <div class="kpi-grid-main <?= $layout_hc_top ? 'with-hc' : 'without-hc' ?>">
 
         <?php if ($mostrar_meta): 
@@ -5623,9 +5835,10 @@ include __DIR__ . '/includes/sidebar.php';
             <div class="kpi-numbers">
                 <div class="kpi-num">
                     <span class="kpi-val blue"><?= number_format($kpi_inst) ?></span>
-                    <span class="kpi-sub">del mes</span>
+                    <span class="kpi-sub">del período</span>
                 </div>
             </div>
+            <?php $tx_index_render_kpi_comparativo('inst'); ?>
         </div>
         
         <div class="kpi-card">
@@ -5636,9 +5849,10 @@ include __DIR__ . '/includes/sidebar.php';
             <div class="kpi-numbers">
                 <div class="kpi-num">
                     <span class="kpi-val green"><?= number_format($kpi_vent) ?></span>
-                    <span class="kpi-sub">del mes</span>
+                    <span class="kpi-sub">del período</span>
                 </div>
             </div>
+            <?php $tx_index_render_kpi_comparativo('vent'); ?>
         </div>
         
         <div class="kpi-card">
@@ -5649,9 +5863,10 @@ include __DIR__ . '/includes/sidebar.php';
             <div class="kpi-numbers">
                 <div class="kpi-num">
                     <span class="kpi-val green"><?= number_format($kpi_conv, 1) ?>%</span>
-                    <span class="kpi-sub">del mes</span>
+                    <span class="kpi-sub">del período</span>
                 </div>
             </div>
+            <?php $tx_index_render_kpi_comparativo('conv'); ?>
         </div>
 
 
@@ -6081,14 +6296,14 @@ include __DIR__ . '/includes/sidebar.php';
                 <table class="top-productividad-table">
                     <thead>
                         <tr>
-                            <th style="width:34px;">#</th>
-                            <th>Nombre Coach</th>
-                            <th>Distrito</th>
-                            <th>Líder</th>
-                            <th title="Antigüedad promedio de vendedores ocupados del equipo (HC.fecha_alta)">Antig. equipo</th>
-                            <th style="text-align:right;">Ventas instaladas</th>
-                            <th style="text-align:right;">Prod.</th>
-                            <th style="text-align:right;">ARPU</th>
+                            <th style="width:34px;"><button type="button" class="tx-index-sort" data-sort-key="rank" aria-label="Ordenar por #"># <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th><button type="button" class="tx-index-sort" data-sort-key="name" aria-label="Ordenar por Nombre Coach">Nombre Coach <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th><button type="button" class="tx-index-sort" data-sort-key="district" aria-label="Ordenar por Distrito">Distrito <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th><button type="button" class="tx-index-sort" data-sort-key="parent" aria-label="Ordenar por Líder">Líder <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th title="Antigüedad promedio de vendedores ocupados del equipo (HC.fecha_alta)"><button type="button" class="tx-index-sort" data-sort-key="tenure" aria-label="Ordenar por Antig. equipo">Antig. equipo <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th style="text-align:right;"><button type="button" class="tx-index-sort" data-sort-key="installed" aria-label="Ordenar por Ventas instaladas">Ventas instaladas <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th style="text-align:right;"><button type="button" class="tx-index-sort" data-sort-key="productivity" aria-label="Ordenar por Prod.">Prod. <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th style="text-align:right;"><button type="button" class="tx-index-sort" data-sort-key="arpu" aria-label="Ordenar por ARPU">ARPU <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -6097,7 +6312,15 @@ include __DIR__ . '/includes/sidebar.php';
                             $spark = $row['spark'] ?? [];
                             $sparkMax = max(1, !empty($spark) ? max($spark) : 1);
                         ?>
-                        <tr>
+                        <tr class="tx-index-rank-row"
+                            data-sort-rank="<?= (int)($i+1) ?>"
+                            data-sort-name="<?= htmlspecialchars((string)($row['coach']??''),ENT_QUOTES,'UTF-8') ?>"
+                            data-sort-district="<?= htmlspecialchars((string)($row['distrito']??''),ENT_QUOTES,'UTF-8') ?>"
+                            data-sort-parent="<?= htmlspecialchars((string)($row['lider']??''),ENT_QUOTES,'UTF-8') ?>"
+                            data-sort-tenure="<?= $row['antiguedad_meses']===null ? '-1' : (float)$row['antiguedad_meses'] ?>"
+                            data-sort-installed="<?= (int)($row['instalaciones']??0) ?>"
+                            data-sort-productivity="<?= (float)($row['productividad']??0) ?>"
+                            data-sort-arpu="<?= (float)($row['arpu']??0) ?>">
                             <td><span class="rank-badge"><?= $i + 1 ?></span></td>
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
@@ -6156,14 +6379,14 @@ include __DIR__ . '/includes/sidebar.php';
                 <table class="top-productividad-table">
                     <thead>
                         <tr>
-                            <th style="width:34px;">#</th>
-                            <th>Nombre vendedor</th>
-                            <th>Distrito</th>
-                            <th>Coach</th>
-                            <th title="Antigüedad individual del vendedor al cierre del corte (HC.fecha_alta)">Antigüedad</th>
-                            <th style="text-align:right;">Ventas instaladas</th>
-                            <th style="text-align:right;">Prod.</th>
-                            <th style="text-align:right;">ARPU</th>
+                            <th style="width:34px;"><button type="button" class="tx-index-sort" data-sort-key="rank" aria-label="Ordenar por #"># <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th><button type="button" class="tx-index-sort" data-sort-key="name" aria-label="Ordenar por Nombre vendedor">Nombre vendedor <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th><button type="button" class="tx-index-sort" data-sort-key="district" aria-label="Ordenar por Distrito">Distrito <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th><button type="button" class="tx-index-sort" data-sort-key="parent" aria-label="Ordenar por Coach">Coach <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th title="Antigüedad individual del vendedor al cierre del corte (HC.fecha_alta)"><button type="button" class="tx-index-sort" data-sort-key="tenure" aria-label="Ordenar por Antigüedad">Antigüedad <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th style="text-align:right;"><button type="button" class="tx-index-sort" data-sort-key="installed" aria-label="Ordenar por Ventas instaladas">Ventas instaladas <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th style="text-align:right;"><button type="button" class="tx-index-sort" data-sort-key="productivity" aria-label="Ordenar por Prod.">Prod. <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
+                            <th style="text-align:right;"><button type="button" class="tx-index-sort" data-sort-key="arpu" aria-label="Ordenar por ARPU">ARPU <span aria-hidden="true" class="tx-index-sort-arrow">⇅</span></button></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -6172,7 +6395,15 @@ include __DIR__ . '/includes/sidebar.php';
                             $spark = $row['spark'] ?? [];
                             $sparkMax = max(1, !empty($spark) ? max($spark) : 1);
                         ?>
-                        <tr>
+                        <tr class="tx-index-rank-row"
+                            data-sort-rank="<?= (int)($i+1) ?>"
+                            data-sort-name="<?= htmlspecialchars((string)($row['vendedor']??''),ENT_QUOTES,'UTF-8') ?>"
+                            data-sort-district="<?= htmlspecialchars((string)($row['distrito']??''),ENT_QUOTES,'UTF-8') ?>"
+                            data-sort-parent="<?= htmlspecialchars((string)($row['coach']??''),ENT_QUOTES,'UTF-8') ?>"
+                            data-sort-tenure="<?= $row['antiguedad_meses']===null ? '-1' : (float)$row['antiguedad_meses'] ?>"
+                            data-sort-installed="<?= (int)($row['instalaciones']??0) ?>"
+                            data-sort-productivity="<?= (float)($row['productividad']??0) ?>"
+                            data-sort-arpu="<?= (float)($row['arpu']??0) ?>">
                             <td><span class="rank-badge"><?= $i + 1 ?></span></td>
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['vendedor'] ?? '') ?>"><?= htmlspecialchars($row['vendedor'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
@@ -6207,6 +6438,51 @@ include __DIR__ . '/includes/sidebar.php';
     <?php endif; ?>
 
 
+
+
+<script>
+// Ordenación sin recarga: cada tarjeta TOP/BOTTOM conserva su universo oficial.
+// "#" es la posición original del ranking, no el orden temporal de presentación.
+(() => {
+    const strings = new Intl.Collator('es-MX',{numeric:true,sensitivity:'base'});
+    const numeros = new Set(['rank','tenure','installed','productivity','arpu']);
+    for (const table of document.querySelectorAll('.top-productividad-table')) {
+        const body = table.tBodies[0];
+        if (!body) continue;
+        const rows = Array.from(body.querySelectorAll('tr.tx-index-rank-row'));
+        if (!rows.length) continue;
+        const headers = Array.from(table.tHead?.rows[0]?.cells || []);
+        for (const header of headers) header.setAttribute('aria-sort','none');
+        for (const button of table.querySelectorAll('.tx-index-sort')) {
+            button.addEventListener('click', () => {
+                const key = button.dataset.sortKey;
+                if (!key) return;
+                const isActive = table.dataset.currentSort === key;
+                const previous = table.dataset.currentDir;
+                const dir = isActive ? (previous === 'desc' ? 'asc' : 'desc')
+                    : (numeros.has(key) ? 'desc' : 'asc');
+                table.dataset.currentSort=key;
+                table.dataset.currentDir=dir;
+                const sorted=rows.slice().sort((a,b) => {
+                    const x=a.dataset['sort'+key.charAt(0).toUpperCase()+key.slice(1)] ?? '';
+                    const y=b.dataset['sort'+key.charAt(0).toUpperCase()+key.slice(1)] ?? '';
+                    const comparison=numeros.has(key) ? (Number(x)-Number(y)) : strings.compare(x,y);
+                    return (dir === 'asc' ? comparison : -comparison)
+                        || (Number(a.dataset.sortRank)-Number(b.dataset.sortRank));
+                });
+                for (const tr of sorted) body.appendChild(tr);
+                table.querySelectorAll('.tx-index-sort').forEach(b => {
+                    const h=b.closest('th');
+                    const active = b === button;
+                    if (h) h.setAttribute('aria-sort', active ? (dir==='asc'?'ascending':'descending') : 'none');
+                    const arrow=b.querySelector('.tx-index-sort-arrow');
+                    if (arrow) arrow.textContent=active ? (dir === 'asc' ? '↑' : '↓') : '⇅';
+                });
+            });
+        }
+    }
+})();
+</script>
 
     <!-- GEORREFERENCIA TOTALXPEDIENT -->
     <section class="geo-card">
