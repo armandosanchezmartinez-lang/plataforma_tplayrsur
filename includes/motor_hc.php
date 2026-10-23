@@ -1,12 +1,16 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR HC v0.6.6 · STANDBY TOTAL + REGLA 40%
+ * TalIA / TotalXpedient · MOTOR HC v0.6.9 · HIC + PRODUCTIVIDAD CENTRALIZADA
  * ============================================================================
- * Ubicación: /plataforma/includes/motor_hc.php
+ * Ubicación QA: /plataforma/includes/motor_hc_v0.6.9.php
  * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
  * Fuentes: instalaciones, hc, hc_standby, historial_identidad_colaborador (HIC).
  * Escritura en BD: ninguna. Solo consultas de lectura.
+ *
+ * EXTENSIÓN ADITIVA 22-OCT-2026: construcción de fotografía productiva,
+ * jornadas-persona STANDBY y cálculo de productividad centralizados.
+ * `version` original permanece estable para consumidores legacy.
  *
  * REGLAS DE ATRIBUCIÓN
  * - Universo: todos los orígenes de instalaciones, sin exclusión por canal.
@@ -25,6 +29,23 @@ declare(strict_types=1);
  * - Los campos de coach/líder registrados en instalaciones son diagnósticos,
  *   no sustituyen la autoridad jerárquica de Capital Humano.
  *
+ * CAMBIO v0.6.8 (21-OCT-2026)
+ * - Cada cuenta certificada expone vendedor_nombre y vendedor_fecha_alta tomados
+ *   de la MISMA fotografía HC histórica que certificó vendedor -> coach -> líder.
+ * - Los Rankings ya no dependen de la foto BASE/ACTUAL de cierre para nombrar
+ *   vendedores que cambiaron de Coach o salieron de la estructura durante el período.
+ * - Si la identidad histórica no puede resolverse de forma unívoca, el ID/folio se
+ *   conserva para auditoría pero la presentación debe usar VENDEDOR NO IDENTIFICADO.
+ * - No cambia atribución, HIC, jerarquía, STANDBY, Productividad ni totales.
+ *
+ * CAMBIO v0.6.7 (21-OCT-2026)
+ * - hc_standby es la ÚNICA autoridad operativa para VACACIONES/INCAPACIDAD.
+ * - hc.status se conserva para auditoría de la fotografía CH, pero INCAPACIDAD/
+ *   VACACIONES ya NO modifican HC activo, HC operativo, jornadas, HC SIN INS
+ *   ni generan indisponibilidad fuera de los intervalos reales de hc_standby.
+ * - VACANTE mantiene su semántica estructural y sus controles de consistencia.
+ * - Se conserva íntegra la regla >40% sobre STANDBY TOTAL y toda la atribución HIC.
+ *
  * CAMBIO v0.6.6 (21-OCT-2026)
  * - Productividad conserva jornadas-persona reales disponibles por período.
  * - HC SIN INS incorpora elegibilidad centralizada: si STANDBY TOTAL (unión de
@@ -42,14 +63,14 @@ declare(strict_types=1);
  * - Domingos y días inhábiles no se descuentan de nuevo porque no forman parte
  *   de las jornadas operativas del período.
  * - HIC se aplica también al cruce con hc_standby para conservar identidad.
- * - STATUS permanece como fuente de auditoría/fallback cuando no existe intervalo
- *   preciso; no modifica atribución, identidad ni jerarquía.
+ * - STATUS se conserva en la fotografía HC sólo como dato de auditoría. Desde
+ *   v0.6.7 ya no existe fallback operativo para INCAPACIDAD/VACACIONES.
  *
  * CAMBIO v0.6.4 (17-OCT-2026)
  * - HC incorpora status y fecha_alta en el contrato de fotografía.
  * - Se agrega clasificación canónica de estado operativo SOLO para nivel vendedor.
- * - INCAPACIDAD/VACACIONES conservan HC total/ocupado; en v0.6.5 su impacto
- *   operativo exacto se resuelve por hc_standby y STATUS queda como fallback.
+ * - INCAPACIDAD/VACACIONES conservan HC total/ocupado. Su impacto temporal
+ *   se resuelve exclusivamente por hc_standby desde v0.6.7.
  *
  * CAMBIO v0.6.3 (13-OCT-2026)
  * - Atribución de todos los orígenes comerciales a la jerarquía HC certificada.
@@ -117,6 +138,323 @@ final class RankingAtribucionServiceV06
         ];
     }
 
+
+    /** Contrato aditivo: no altera `version` 0.6.8 exigida por Ranking Comercial. */
+    public const VERSION_PRODUCTIVIDAD = '0.6.9-hc-productividad-jornadas';
+
+    /** Calcula sin estimación ni división por HC teórico cuando existe STANDBY. */
+    public static function calcularProductividad(int $instalaciones, int $jornadasDisponibles): ?float
+    {
+        if ($instalaciones < 0 || $jornadasDisponibles < 0) throw new InvalidArgumentException('Productividad: negativos no permitidos');
+        return $jornadasDisponibles > 0 ? round($instalaciones / $jornadasDisponibles, 2) : null;
+    }
+
+    /** Nombre normalizado para resolver exclusivamente aliases HC no ambiguos. */
+    private static function claveNombreProductividad(string $nombre): string
+    {
+        $nombre = self::norm($nombre);
+        $parts = array_values(array_filter(explode(' ', $nombre), static fn($x) => $x!==''));
+        sort($parts, SORT_STRING);
+        return implode(' ', $parts);
+    }
+
+    /** Antigüedad de equipo: misma semántica del Ranking, respecto al corte histórico. */
+    private static function antiguedadProductividadCorte(?string $fechaAlta, string $corte): array
+    {
+        $fechaAlta=trim((string)$fechaAlta);
+        if ($fechaAlta==='' || $fechaAlta==='0000-00-00') return ['texto'=>'-','meses'=>0,'valido'=>false];
+        $alta=DateTimeImmutable::createFromFormat('!Y-m-d',$fechaAlta);
+        $fin=DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
+        if (!$alta || !$fin || $alta>$fin) return ['texto'=>'-','meses'=>0,'valido'=>false];
+        $dif=$alta->diff($fin);
+        $meses=(int)$dif->y*12+(int)$dif->m;
+        $texto=$meses<12 ? $meses.' meses' : intdiv($meses,12).' años '.($meses%12).' meses';
+        return ['texto'=>$texto,'meses'=>$meses,'valido'=>true];
+    }
+
+    /** Productividad individual sobre la plaza ocupada del corte, con standby HC/HIC. */
+    public static function productividadVendedor(int $instalaciones, array $plaza): array
+    {
+        $disp=self::disponibilidadPlazaProductividad($plaza);
+        $jornadas=(!empty($plaza['vacante']) || !empty($plaza['es_vacante_status'])) ? 0 : (int)$disp['dias_disponibles'];
+        return [
+            'instalaciones'=>$instalaciones,
+            'jornadas_operativas'=>$jornadas,
+            'dias_standby'=>(int)$disp['dias_standby'],
+            'productividad'=>self::calcularProductividad($instalaciones,$jornadas),
+            'disponibilidad'=>$disp,
+        ];
+    }
+
+    /** Productividad grupal desde LAS MISMAS cuentas certificadas por HC. */
+    public static function productividadEquipo(int $instalaciones, array $resumenHc): array
+    {
+        $jornadas=(int)($resumenHc['jornadas_operativas']??0);
+        return ['instalaciones'=>$instalaciones,'hc_activo'=>(int)($resumenHc['activo']??0),
+            'jornadas_operativas'=>$jornadas,
+            'dias_standby'=>(int)($resumenHc['dias_standby']??0),
+            'productividad'=>self::calcularProductividad($instalaciones,$jornadas)];
+    }
+
+    public function construirFotoProductividad(
+        string $desde,
+    string $hasta,
+    array $catalogo,
+    array $canonicos,
+    array $standbyPeriodo=[]
+): array {
+    $info=$this->cargarHc($desde,$hasta);
+    $photos=$info['fotos'];
+    $ultima=null;
+    foreach ($photos as $k=>$p) { if ($p !== null) $ultima=$p; }
+    if ($ultima===null) throw new RuntimeException('No hay fotografía HC histórica anterior al período seleccionado');
+    $fotoKey=implode('-',$ultima);
+    $hcs=$info['datos'][$fotoKey] ?? [];
+    if (!$hcs) throw new RuntimeException('Fotografía HC sin filas: '.$fotoKey);
+    $idsPorNombre=[];
+    foreach ($catalogo as $lid=>$l) {
+        foreach (array_unique(array_merge([(string)$l['nombre']], $l['aliases'])) as $alias) {
+            $idKey=self::claveNombreProductividad($alias);
+            $idsPorNombre[$idKey][$lid]=true;
+        }
+    }
+    $coaches=[];$sellerByCoach=[];
+    // La plaza identifica una posición, no una persona; HC da su ocupante en esta fotografía.
+    foreach ($hcs as $h) {
+        if (stripos((string)($h['puesto_lr']??''),'LIDER')===false) continue;
+        $nombreLineal=self::claveNombreProductividad($h['nombre_linea_reporte']??'');
+        $distrito=self::normalizarDistrito($h['distrito']??null);
+        if ($distrito===null) continue;
+        $candidates=[];
+        foreach ($idsPorNombre[$nombreLineal]??[] as $lid=>$_) {
+            if ($distrito===($catalogo[$lid]['hc']??'')) $candidates[$lid]=true;
+        }
+        foreach ($catalogo as $lid=>$l) {
+            if ($l['plaza']!==null && (string)($h['posicion_lr']??'')===(string)$l['plaza'] && $distrito===$l['hc']) $candidates[$lid]=true;
+        }
+        if (count($candidates)!==1) continue;
+        $lid=(string)array_key_first($candidates);
+        $pos=(string)($h['id_posicion']??'');
+        if ($pos==='') continue;
+        $k=$lid.'|'.$pos;
+        $coaches[$k]=['lider_id'=>$lid,'id'=>$pos,'nombre'=>self::norm($h['nombre_colaborador']??'VACANTE'),'distrito'=>$catalogo[$lid]['distrito']];
+    }
+    if (!$coaches) throw new RuntimeException('Ningún coach de Región SUR pudo relacionarse con HC '.$fotoKey);
+
+    foreach ($hcs as $h) {
+        if (stripos((string)($h['puesto_lr']??''),'COACH')===false) continue;
+        $posCoach=(string)($h['posicion_lr']??'');
+        $idPos=(string)($h['id_posicion']??'');
+        if ($posCoach==='' || $idPos==='') continue;
+        foreach ($catalogo as $lid=>$l) {
+            $coachKey=$lid.'|'.$posCoach;
+            if (!isset($coaches[$coachKey]) || self::normalizarDistrito($h['distrito']??null)!==$l['hc']) continue;
+            $nombreVendedor=self::norm($h['nombre_colaborador']??'');
+            $vac=$nombreVendedor==='VACANTE';
+            $talento=(string)($h['numero_talento_gs']??'');
+            if ($talento==='' || $talento==='VACANTE') $vac=true;
+            $persona=(!$vac) ? (string)($canonicos[$talento]??$talento) : null;
+
+            // STATUS conserva la fotografía semanal de CH sólo para auditoría.
+            // VACACIONES/INCAPACIDAD operativas provienen exclusivamente de hc_standby.
+            $estadoVendedor=self::clasificarEstadoVendedor(
+                $h['status']??null,
+                $h['nombre_colaborador']??null
+            );
+            $standbyPersona=(!$vac && $persona!==null)
+                ? ($standbyPeriodo['por_talento'][$persona]??null)
+                : null;
+
+            // La ocupación se deduplica por posición en la fotografía, nunca por nombre.
+            $sellerByCoach[$coachKey][$idPos]=[
+                'id_posicion'=>$idPos,
+                'persona'=>$persona,
+                'nombre'=>$nombreVendedor,
+                'vacante'=>$vac,
+                'status'=>(string)($h['status']??''),
+                'estado_hc'=>$estadoVendedor['estado_hc'],
+                'hc_total'=>$estadoVendedor['hc_total'],
+                'hc_ocupado'=>$estadoVendedor['hc_ocupado'],
+                'hc_activo'=>$estadoVendedor['hc_activo'],
+                'hc_operativo'=>$estadoVendedor['hc_operativo'],
+                'es_vacante_status'=>$estadoVendedor['es_vacante'],
+                'estado_valido'=>$estadoVendedor['valido'],
+                'fecha_alta'=>$h['fecha_alta']??null,
+                'dias_periodo'=>max(1,(int)($standbyPeriodo['dias_periodo']??1)),
+                'standby'=>$standbyPersona,
+            ];
+        }
+    }
+    return [
+        'foto'=>$fotoKey,
+        'coaches'=>$coaches,
+        'vendedores'=>$sellerByCoach,
+        'standby'=>$standbyPeriodo,
+    ];
+}
+    public static function disponibilidadPlazaProductividad(array $seat): array {
+    if (empty($seat)) {
+        return [
+            'dias_periodo'=>0,
+            'dias_standby'=>0,
+            'dias_incapacidad'=>0,
+            'dias_vacaciones'=>0,
+            'dias_disponibles'=>0,
+            'pct_incapacidad'=>0.0,
+            'pct_standby'=>0.0,
+            'operativo'=>false,
+            'elegible_hc_sin_ins'=>false,
+            'motivo_exclusion_hc_sin_ins'=>'AUSENTE_HC',
+            'fuente'=>'AUSENTE_HC',
+            'eventos'=>[],
+        ];
+    }
+
+    $diasPeriodo=max(1,(int)($seat['dias_periodo']??1));
+    $sb=$seat['standby']??null;
+
+    // v0.6.7: hc_standby es la ÚNICA autoridad temporal para
+    // INCAPACIDAD/VACACIONES. STATUS queda exclusivamente para auditoría.
+    if (is_array($sb) && !empty($sb['tiene_intervalo'])) {
+        $diasStandby=max(0,min($diasPeriodo,(int)($sb['dias_standby']??0)));
+        $diasIncapacidad=max(0,min($diasPeriodo,(int)($sb['dias_incapacidad']??0)));
+        $diasVacaciones=max(0,min($diasPeriodo,(int)($sb['dias_vacaciones']??0)));
+        $diasDisponibles=max(0,min($diasPeriodo,(int)($sb['dias_disponibles']??($diasPeriodo-$diasStandby))));
+
+        $regla=self::evaluarElegibilidadHcSinIns(
+            $diasPeriodo,
+            $diasStandby,
+            $diasDisponibles
+        );
+
+        return [
+            'dias_periodo'=>$diasPeriodo,
+            'dias_standby'=>$diasStandby,
+            'dias_incapacidad'=>$diasIncapacidad,
+            'dias_vacaciones'=>$diasVacaciones,
+            'dias_disponibles'=>$diasDisponibles,
+            'pct_incapacidad'=>$diasPeriodo>0 ? ($diasIncapacidad/$diasPeriodo)*100.0 : 0.0,
+            'pct_standby'=>(float)$regla['pct_standby'],
+            'operativo'=>$diasDisponibles>0,
+            'elegible_hc_sin_ins'=>(bool)$regla['elegible'],
+            'motivo_exclusion_hc_sin_ins'=>(string)$regla['motivo'],
+            'fuente'=>'STANDBY',
+            'eventos'=>array_values($sb['eventos']??[]),
+        ];
+    }
+
+    // Sin intervalo real en hc_standby NO existe ausencia temporal.
+    // Para preservar únicamente controles estructurales ajenos a INCAPACIDAD/VACACIONES,
+    // se respeta hc_operativo salvo que el STATUS sea precisamente uno de esos dos estados,
+    // que desde v0.6.7 son sólo informativos/auditables.
+    $estado=strtoupper(trim((string)($seat['estado_hc']??$seat['status']??'ACTIVO')));
+    $statusTemporalSoloAuditoria=in_array($estado,['INCAPACIDAD','VACACIONES'],true);
+    $esOperativo=$statusTemporalSoloAuditoria
+        ? true
+        : ((int)($seat['hc_operativo']??1)===1);
+    $diasDisponibles=$esOperativo?$diasPeriodo:0;
+
+    $regla=self::evaluarElegibilidadHcSinIns(
+        $diasPeriodo,
+        0,
+        $diasDisponibles
+    );
+
+    return [
+        'dias_periodo'=>$diasPeriodo,
+        'dias_standby'=>0,
+        'dias_incapacidad'=>0,
+        'dias_vacaciones'=>0,
+        'dias_disponibles'=>$diasDisponibles,
+        'pct_incapacidad'=>0.0,
+        'pct_standby'=>(float)$regla['pct_standby'],
+        'operativo'=>$esOperativo,
+        'elegible_hc_sin_ins'=>(bool)$regla['elegible'],
+        'motivo_exclusion_hc_sin_ins'=>(string)$regla['motivo'],
+        'fuente'=>'HC',
+        'eventos'=>[],
+    ];
+}
+
+    public static function resumenEquipoProductividad(array $hc, string $lider, ?string $coach, array $eventos, string $corte=''): array {
+    $filas=[];
+    foreach ($hc['vendedores'] as $k=>$seats) {
+        if (!str_starts_with($k, $lider.'|')) continue;
+        $idCoach=substr($k,strlen($lider)+1);
+        if ($coach!==null && $idCoach!==$coach) continue;
+        foreach ($seats as $pos=>$seat) $filas[$k.'|'.$pos]=$seat;
+    }
+
+    $identidadesConInst=[];
+    foreach ($eventos as $ev) {
+        if (($ev['lider_id']??null)!==$lider) continue;
+        if ($coach!==null && (string)($ev['coach_id']??'SIN_COACH')!==$coach) continue;
+        if (!empty($ev['vendedor_id'])) $identidadesConInst[(string)$ev['vendedor_id']]=true;
+    }
+
+    // v0.6.5 STANDBY:
+    // - activo = plaza ocupada (HC mostrado).
+    // - operativo = vendedor con al menos UN día operativo en el período.
+    // - jornadas_operativas = suma exacta de días disponibles por vendedor.
+    // - productividad = instalaciones / jornadas_operativas.
+    // - hc_standby es autoridad temporal; STATUS queda sólo para auditoría.
+    $activo=0; $operativo=0; $vacante=0; $conOperativo=0;
+    $elegibleSinIns=0; $conInsElegible=0;
+    $jornadasOperativas=0; $diasStandby=0; $personasStandby=0;
+    $antiguedadSumaMeses=0; $antiguedadConFecha=0; $ocupadosEquipo=0;
+    if ($corte==='') $corte=date('Y-m-d');
+
+    foreach ($filas as $seat) {
+        $esVacante=(bool)($seat['vacante']??false) || (bool)($seat['es_vacante_status']??false);
+        if ($esVacante) {
+            $vacante++;
+            continue;
+        }
+
+        $activo++;
+        $ocupadosEquipo++;
+        $antig=self::antiguedadProductividadCorte($seat['fecha_alta']??null,$corte);
+        if (($antig['valido']??false)===true) {
+            $antiguedadSumaMeses+=(int)$antig['meses'];
+            $antiguedadConFecha++;
+        }
+
+        $disp=self::disponibilidadPlazaProductividad($seat);
+        $jornadasOperativas+=(int)$disp['dias_disponibles'];
+        $diasStandby+=(int)$disp['dias_standby'];
+        if (!empty($disp['eventos'])) $personasStandby++;
+
+        $tieneInst=($seat['persona']??null)!==null
+            && isset($identidadesConInst[(string)$seat['persona']]);
+
+        // HC SIN INS es una métrica de personas, separada de Productividad.
+        // El vendedor sólo puede entrar al universo SIN INS si Motor HC lo declara elegible.
+        if (!empty($disp['elegible_hc_sin_ins'])) {
+            $elegibleSinIns++;
+            if ($tieneInst) $conInsElegible++;
+        }
+
+        if (empty($disp['operativo'])) continue;
+        $operativo++;
+        if ($tieneInst) $conOperativo++;
+    }
+
+    return [
+        'activo'=>$activo,
+        'operativo'=>$operativo,
+        'vacante'=>$vacante,
+        'con_ins'=>$conOperativo,
+        'elegible_sin_ins'=>$elegibleSinIns,
+        'con_ins_elegible'=>$conInsElegible,
+        'jornadas_operativas'=>$jornadasOperativas,
+        'dias_standby'=>$diasStandby,
+        'personas_standby'=>$personasStandby,
+        'antiguedad_suma_meses'=>$antiguedadSumaMeses,
+        'antiguedad_con_fecha'=>$antiguedadConFecha,
+        'antiguedad_ocupados'=>$ocupadosEquipo,
+        'antiguedad_promedio_meses'=>$antiguedadConFecha>0 ? (int)round($antiguedadSumaMeses/$antiguedadConFecha) : null,
+    ];
+}
     /** Homologación de distrito (misma semántica para HC y otros motores). */
     public static function normalizarDistrito(?string $valor): ?string
     {
@@ -196,14 +534,17 @@ final class RankingAtribucionServiceV06
     }
 
     /**
-     * Clasificación canónica de STATUS para NIVEL VENDEDOR.
-     * No altera atribución ni estructura. Entrega únicamente metadatos HC operativos.
+     * Clasificación canónica de STATUS para NIVEL VENDEDOR (v0.6.7).
+     * STATUS se conserva como metadato/auditoría de la fotografía CH.
+     * VACACIONES e INCAPACIDAD NO producen indisponibilidad por STATUS:
+     * la única autoridad temporal es hc_standby.
      *
      * Reglas:
      * - ACTIVO o blanco: HC total=1, ocupado=1, activo=1, operativo=1.
      * - VACANTE: sólo se acepta como vacante si el nombre contiene "VACANT".
-     * - INCAPACIDAD / VACACIONES: HC total=1, ocupado=1, activo=0, operativo=0.
-     * - Cualquier contradicción se marca INCONSISTENTE y no entra al denominador operativo.
+     * - INCAPACIDAD / VACACIONES: plaza ocupada y operativa por defecto; cualquier
+     *   descuento real se resolverá después exclusivamente con hc_standby.
+     * - Cualquier otro STATUS contradictorio se conserva como INCONSISTENTE para auditoría.
      */
     public static function clasificarEstadoVendedor(?string $status, ?string $nombre): array
     {
@@ -222,7 +563,7 @@ final class RankingAtribucionServiceV06
             'valido'=>true,
         ];
 
-        if ($st==='ACTIVO') {
+        if ($st==='ACTIVO' || $st==='INCAPACIDAD' || $st==='VACACIONES') {
             $base['hc_activo']=1;
             $base['hc_operativo']=1;
             return $base;
@@ -236,10 +577,6 @@ final class RankingAtribucionServiceV06
             }
             $base['estado_hc']='INCONSISTENTE_STATUS_VACANTE';
             $base['valido']=false;
-            return $base;
-        }
-
-        if ($st==='INCAPACIDAD' || $st==='VACACIONES') {
             return $base;
         }
 
@@ -698,13 +1035,35 @@ final class RankingAtribucionServiceV06
                     $coach=$indices[$fotoKey]['coaches'][$district][$coachPos]??null;
                     if (!$coach) continue;
                     $key=$coach['lider_id'].'|'.$coachPos;
-                    $candidatos[$key]=$coach;
+
+                    // v0.6.8: conservar identidad visible desde la MISMA foto histórica
+                    // que certifica la jerarquía. Nunca buscar el nombre sólo en la foto
+                    // de cierre BASE/ACTUAL porque el vendedor pudo cambiar de Coach.
+                    if (!isset($candidatos[$key])) {
+                        $candidatos[$key]=$coach;
+                        $candidatos[$key]['vendedor_nombres']=[];
+                        $candidatos[$key]['vendedor_fechas_alta']=[];
+                    }
+                    $nombreHist=self::norm($h['nombre_colaborador']??'');
+                    if (self::isValidName($nombreHist)) {
+                        $candidatos[$key]['vendedor_nombres'][$nombreHist]=true;
+                    }
+                    $fechaAltaHist=substr(trim((string)($h['fecha_alta']??'')),0,10);
+                    if ($fechaAltaHist!=='' && $fechaAltaHist!=='0000-00-00') {
+                        $candidatos[$key]['vendedor_fechas_alta'][$fechaAltaHist]=true;
+                    }
                 }
             }
             $estado='OK'; $fuente='HC_FOTO'; $lid=null; $coachId=null; $coachNombre=null;
+            $vendedorNombre=null; $vendedorFechaAlta=null;
             if (count($candidatos)===1) {
                 $c=array_values($candidatos)[0];
                 $lid=$c['lider_id']; $coachId=$c['coach_id']; $coachNombre=$c['coach_nombre'];
+                $nombresHist=array_keys($c['vendedor_nombres']??[]);
+                if (count($nombresHist)===1) $vendedorNombre=(string)$nombresHist[0];
+                $fechasAltaHist=array_keys($c['vendedor_fechas_alta']??[]);
+                sort($fechasAltaHist,SORT_STRING);
+                if ($fechasAltaHist) $vendedorFechaAlta=(string)$fechasAltaHist[0];
                 // Evento líder es informativo: una posición nunca se invalida por nombre.
                 if ($coachOriginal!==null && self::nameKey($coachNombre)!==$coachOriginal) $estado='CAMBIO_ESTRUCTURA_COACH';
             } else {
@@ -724,6 +1083,8 @@ final class RankingAtribucionServiceV06
                 'lider_evento_original'=>$evs[0]['lider']??'',
                 'coach_evento_texto'=>$evs[0]['coach']??'',
                 'lider_id'=>$lid,'lider_posicion'=>($lid!==null?substr($lid,strpos($lid,'|')+1):null),'coach_id'=>$coachId,'vendedor_id'=>$seller,
+                'vendedor_nombre'=>$vendedorNombre,
+                'vendedor_fecha_alta'=>$vendedorFechaAlta,
                 'vendedor_folio_original'=>$original,
                 'identidad_hic'=>$hicAmbiguo?'HIC_AMBIGUA':($seller!==null && $seller!==$original?'HIC_VERIFICABLE':'DIRECTA_O_SIN_HIC'),
                 'coach_evento'=>$coachNombre,'lider_evento_id'=>$liderOriginal,
@@ -774,7 +1135,8 @@ final class RankingAtribucionServiceV06
             throw new LogicException('Conciliación v0.6 incongruente');
         }
         return [
-            'version'=>'0.6.6-hc-standby40-all-channels',
+            'version'=>'0.6.8-hc-historical-seller-name-all-channels',
+            'version_productividad'=>self::VERSION_PRODUCTIVIDAD,
             'fuente_identidad'=>'historial_identidad_colaborador',
             'cuentas'=>$seleccion,
             'conciliacion'=>self::conciliar($seleccion),

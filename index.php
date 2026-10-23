@@ -3507,9 +3507,47 @@ function tx_build_top_regional_productividad_dashboard($conexion, $vendedores, $
 }
 
 
+/** Antigüedad de la plaza HC a la fecha del corte, en meses completos. */
+function tx_antiguedad_meses_hc_index(?string $fechaAlta, string $corte): ?int {
+    $fechaAlta = trim((string)$fechaAlta);
+    if ($fechaAlta === '' || $fechaAlta === '0000-00-00') return null;
+    $alta = DateTimeImmutable::createFromFormat('!Y-m-d', $fechaAlta);
+    $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $corte);
+    if (!$alta || !$fin || $alta->format('Y-m-d') !== $fechaAlta || $alta > $fin) return null;
+    $dif = $alta->diff($fin);
+    return ((int)$dif->y * 12) + (int)$dif->m;
+}
+
+/**
+ * Elegibilidad ejecutiva TOP/BOTTOM vendedor: antigüedad ESTRICTAMENTE mayor
+ * a 3 meses calendario al cierre del rango. No basta con truncar los meses
+ * porque 3 meses y 1 día se muestra como "3m", pero SÍ cumple >3 meses.
+ * Sin fecha de alta HC verificable => no se clasifica (no se presume antigüedad).
+ * No modifica la antigüedad presentada ni la clasificación de Coaches.
+ */
+function tx_vendedor_mayor_3m_hc_index(?string $fechaAlta, string $corte): bool {
+    $fechaAlta = trim((string)$fechaAlta);
+    $alta = DateTimeImmutable::createFromFormat('!Y-m-d', $fechaAlta);
+    $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $corte);
+    if (!$alta || !$fin || $alta->format('Y-m-d') !== $fechaAlta
+        || $fin->format('Y-m-d') !== $corte || $alta > $fin) return false;
+    $dif = $alta->diff($fin);
+    $meses = ((int)$dif->y * 12) + (int)$dif->m;
+    return $meses > 3 || ($meses === 3 && (int)$dif->d > 0);
+}
+
+/** Etiqueta legible para la misma antigüedad en coaches y vendedores. */
+function tx_antiguedad_texto_hc_index(?int $meses, bool $compacto = false): string {
+    if ($meses === null || $meses < 0) return '—';
+    $anios = intdiv($meses, 12);
+    $resto = $meses % 12;
+    if ($compacto) return $anios > 0 ? $anios.'a '.$resto.'m' : $resto.'m';
+    return $anios > 0 ? $anios.' años '.$resto.' meses' : $resto.' meses';
+}
+
 // ── TOP REGIONAL PRODUCTIVIDAD COACHES ──────────────────────────────────────
 // Se muestra antes del Top de vendedores y es regional para todos los niveles.
-// Productividad Coach = instalaciones / HC activo a cargo / días hábiles del rango seleccionado.
+// Productividad Coach = instalaciones HC / jornadas-persona disponibles (STANDBY).
 // ── TOP/BOTTOM COACHES · FUENTE MOTOR HC v0.6.2 ─────────────────────────────
 // La atribución de cada cuenta procede del HC histórico por semana del evento.
 // NO se reconstruye el vendedor→coach con nombres de instalaciones o folios
@@ -3530,102 +3568,28 @@ function tx_coach_nombre_clave_hc_staging(string $nombre): string {
  * El HC usa personas distintas (con HIC verificable), no cantidad de aliases.
  * Cada coach queda identificado como DISTRITO_CANONICO|ID_POSICION.
  */
-function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, string $inicio, string $fin): array {
-    $hc = $motor->cargarHc($inicio, $fin);
-    $fotos = $hc['datos'] ?? [];
-    if (empty($fotos)) throw new RuntimeException('TOP/BOTTOM Coaches: no existe una foto HC anterior o igual al corte');
-    $claveFoto = array_key_last($fotos); // cargarHc entrega las fotos en orden cronológico.
-    $filas = $fotos[$claveFoto];
-    if (!is_array($filas) || !$filas) throw new RuntimeException('TOP/BOTTOM Coaches: foto HC sin registros');
-
-    $porPosicion = [];
-    foreach ($filas as $fila) {
-        $distrito = RankingAtribucionServiceV06::normalizarDistrito($fila['distrito'] ?? null);
-        $posicion = trim((string)($fila['id_posicion'] ?? ''));
-        if ($distrito === null || $posicion === '') continue;
-        $porPosicion[$distrito][$posicion][] = $fila;
-    }
-
-    // El catálogo de líderes lo certifica el Motor HC. El nombre a mostrar
-    // se obtiene del ocupante de esa plaza en la fotografía de corte.
-    $lideres = [];
-    foreach ($motor->catalogoLideres($inicio, $fin) as $id => $info) {
-        $distrito = (string)($info['distrito'] ?? '');
-        $plaza = trim((string)($info['plaza'] ?? ''));
-        $asientos = $porPosicion[$distrito][$plaza] ?? [];
-        if (count($asientos) !== 1) continue;
-        $fila = $asientos[0];
-        $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
-        // La plaza de líder VACANTE continúa siendo válida por ID de posición.
-        // Motor HC ya certificó la plaza: no excluir a sus coaches.
-        $lideres[(string)$id] = ($nombre === '' ? 'VACANTE' : $nombre);
-    }
-    $lideresPorNombre = [];
-    foreach ($lideres as $id => $nombre) {
-        // Solo un líder ocupado sirve para resolver autorreferencias por nombre.
-        // VACANTE no es una identidad personal ni un alias único.
-        if (strtoupper(trim($nombre)) === 'VACANTE') continue;
-        $d = explode('|', $id, 2)[0];
-        $lideresPorNombre[$d][tx_coach_nombre_clave_hc_staging($nombre)][] = $id;
-    }
-
-    $coaches = [];
-    foreach ($filas as $fila) {
-        // Misma señal estructural que usa Motor HC para reconocer el coach:
-        // su puesto_lr apunta a un líder de ventas, por posición, no por texto.
-        if (stripos((string)($fila['puesto_lr'] ?? ''), 'LIDER') === false) continue;
-        $d = RankingAtribucionServiceV06::normalizarDistrito($fila['distrito'] ?? null);
-        $pos = trim((string)($fila['id_posicion'] ?? ''));
-        $super = trim((string)($fila['posicion_lr'] ?? ''));
-        $talento = trim((string)($fila['numero_talento_gs'] ?? ''));
-        $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
-        if ($d === null || $pos === '' || $super === '' || $talento === ''
-            || stripos($talento, 'VACANTE') !== false || $nombre === '' || strtoupper($nombre) === 'VACANTE') continue;
-        if (count($porPosicion[$d][$pos] ?? []) !== 1) continue; // HC duplicado = no certificar.
-
-        if ($super === $pos) {
-            // Parche de autorreferencia: solo HC → nombre del líder único de la MISMA foto.
-            $nomSuperior = tx_coach_nombre_clave_hc_staging((string)($fila['nombre_linea_reporte'] ?? ''));
-            $candidatos = $lideresPorNombre[$d][$nomSuperior] ?? [];
-            if ($nomSuperior === '' || count($candidatos) !== 1) continue;
-            $idLider = $candidatos[0];
-        } else {
-            $idLider = $d.'|'.$super;
-        }
-        if (!isset($lideres[$idLider]) || $idLider === $d.'|'.$pos) continue;
-        $clave = $d.'|'.$pos;
-        $coaches[$clave] = [
-            'id_posicion'=>$pos, 'coach'=>$nombre, 'distrito'=>$d,
-            'lider'=>$lideres[$idLider], 'lider_id'=>$idLider,
-            'hc_activo'=>0, 'instalaciones'=>0, 'productividad'=>0.0,
-            'arpu'=>0.0, 'spark'=>array_fill(0, 6, 0), '_personas'=>[],
-            '_ingreso_neto'=>0.0, '_arpu_cuentas'=>0,
+function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, string $inicio, string $fin, array $standby): array {
+    // Fuente única HC/HIC y misma fotografía/resumen utilizados por Ranking Productividad.
+    $catalogo=$motor->catalogoLideres($inicio,$fin);
+    $hic=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic());
+    $foto=$motor->construirFotoProductividad($inicio,$fin,$catalogo,$hic['canonicos'],$standby);
+    $coaches=[];
+    foreach ($foto['coaches'] as $key=>$c) {
+        $lider=(string)$c['lider_id'];
+        $id=(string)$c['id'];
+        $d=explode('|',$lider,2)[0];
+        $nombre=(string)$c['nombre'];
+        if ($nombre==='' || $nombre==='VACANTE') continue;
+        $coaches[$d.'|'.$id]=[
+            'id_posicion'=>$id,'coach'=>$nombre,'distrito'=>$d,
+            'lider'=>(string)($catalogo[$lider]['nombre']??'VACANTE'),'lider_id'=>$lider,
+            'hc_activo'=>0,'jornadas_operativas'=>0,'dias_standby'=>0,
+            'antiguedad_meses'=>null,'antiguedad_con_fecha'=>0,'antiguedad_ocupados'=>0,
+            'instalaciones'=>0,'productividad'=>null,'arpu'=>0.0,
+            'spark'=>array_fill(0,6,0),'_ingreso_neto'=>0.0,'_arpu_cuentas'=>0,
         ];
     }
-
-    // HIC identifica PERSONAS, no plazas. Solo equivalencias no ambiguas.
-    $hic = $motor->resolverEquivalenciasHic($motor->cargarHic());
-    foreach ($filas as $fila) {
-        if (stripos((string)($fila['puesto_lr'] ?? ''), 'COACH') === false) continue;
-        $d = RankingAtribucionServiceV06::normalizarDistrito($fila['distrito'] ?? null);
-        $posCoach = trim((string)($fila['posicion_lr'] ?? ''));
-        $folio = trim((string)($fila['numero_talento_gs'] ?? ''));
-        $nombre = trim((string)($fila['nombre_colaborador'] ?? ''));
-        if ($d === null || $posCoach === '' || $folio === '' || stripos($folio, 'VACANTE') !== false
-            || $nombre === '' || strtoupper($nombre) === 'VACANTE') continue;
-        $key = $d.'|'.$posCoach;
-        if (!isset($coaches[$key])) continue;
-        $persona = (($hic['estados'][$folio] ?? '') === 'HIC_AMBIGUA')
-            ? $folio : ($hic['canonicos'][$folio] ?? $folio);
-        $coaches[$key]['_personas'][(string)$persona] = true;
-    }
-    foreach ($coaches as $key => &$coach) {
-        $coach['hc_activo'] = count($coach['_personas']);
-        unset($coach['_personas']);
-    }
-    unset($coach);
-    // Igual que el Ranking Coach, únicamente plazas con vendedores activos.
-    return array_filter($coaches, static fn($c)=>(int)$c['hc_activo'] > 0);
+    return ['coaches'=>$coaches,'foto'=>$foto];
 }
 
 /**
@@ -3677,7 +3641,6 @@ function tx_build_coaches_motor_hc_staging(
     string $desde, string $hasta, int $diasHabiles,
     ?array $respuestaAnterior = null, ?string $respuestaDesde = null, array $diasIso = []
 ): array {
-    $coaches = tx_coaches_foto_motor_hc_staging($motor, $desde, $hasta);
     $fechaCorte = new DateTimeImmutable($hasta);
     $lunesActual = $fechaCorte->modify('monday this week');
     $inicioSpark = $lunesActual->modify('-5 weeks')->format('Y-m-d');
@@ -3693,6 +3656,13 @@ function tx_build_coaches_motor_hc_staging(
     if (empty($respuesta['conciliacion_comercial']['verificada'])) {
         throw new RuntimeException('TOP/BOTTOM Coaches: conciliación Motor HC no verificada');
     }
+    // La respuesta ampliada puede abarcar 6 semanas, pero la foto STANDBY
+    // debe cubrir EXCLUSIVAMENTE el corte solicitado, igual que en Ranking.
+    $hicCorte=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic());
+    $standbyCorte=$motor->cargarStandby($desde,$hasta,$diasIso,$hicCorte['canonicos']);
+    $paqueteFoto=tx_coaches_foto_motor_hc_staging($motor,$desde,$hasta,$standbyCorte);
+    $coaches=$paqueteFoto['coaches'];
+    $fotoProductiva=$paqueteFoto['foto'];
 
     $clavesSemana = [];
     for ($i = 5; $i >= 0; --$i) {
@@ -3729,6 +3699,7 @@ function tx_build_coaches_motor_hc_staging(
     }
 
     // Precio lista sin IVA del Motor Comercial, sobre LAS MISMAS cuentas HC.
+    $detalles=[];
     if ($eventosPeriodo) {
         require_once __DIR__.'/includes/motor_comercial.php';
         if (!class_exists('MotorComercial')) throw new RuntimeException('Motor Comercial no disponible para ARPU Coach');
@@ -3747,8 +3718,20 @@ function tx_build_coaches_motor_hc_staging(
 
     foreach ($coaches as &$coach) {
         $ins = (int)$coach['instalaciones'];
-        $hc = (int)$coach['hc_activo'];
-        $coach['productividad'] = ($hc > 0 && $diasHabiles > 0) ? round($ins / $hc / $diasHabiles, 2) : 0.0;
+        $liderId=(string)$coach['lider_id'];
+        $coachId=(string)$coach['id_posicion'];
+        $resumen=RankingAtribucionServiceV06::resumenEquipoProductividad(
+            $fotoProductiva,$liderId,$coachId,$eventosPeriodo,$hasta
+        );
+        $prod=RankingAtribucionServiceV06::productividadEquipo($ins,$resumen);
+        $coach['hc_activo']=$prod['hc_activo'];
+        $coach['jornadas_operativas']=$prod['jornadas_operativas'];
+        $coach['dias_standby']=$prod['dias_standby'];
+        // Edad promedio de vendedores ocupados del equipo, sin consultas adicionales.
+        $coach['antiguedad_meses']=$resumen['antiguedad_promedio_meses'];
+        $coach['antiguedad_con_fecha']=(int)$resumen['antiguedad_con_fecha'];
+        $coach['antiguedad_ocupados']=(int)$resumen['antiguedad_ocupados'];
+        $coach['productividad']=$prod['productividad'];
         $coach['arpu'] = (int)$coach['_arpu_cuentas'] > 0
             ? round($coach['_ingreso_neto'] / $coach['_arpu_cuentas'], 2) : 0.0;
         unset($coach['_arpu_cuentas'], $coach['_ingreso_neto']);
@@ -3757,26 +3740,160 @@ function tx_build_coaches_motor_hc_staging(
 
     $lista = array_values($coaches);
     $piso = $diasIso ? tx_piso_volumen_top_coaches_fechas_dashboard($desde, $hasta, $diasIso) : tx_piso_volumen_top_coaches_dashboard($desde, $hasta);
-    $top = array_values(array_filter($lista, static fn($c)=>(int)$c['instalaciones'] >= $piso));
+    $top = array_values(array_filter($lista, static fn($c)=>(int)$c['instalaciones'] >= $piso && $c['productividad'] !== null));
     usort($top, static function($a,$b) {
         $r = $b['productividad'] <=> $a['productividad'];
         if ($r !== 0) return $r;
         $r = $b['instalaciones'] <=> $a['instalaciones'];
+        if ($r !== 0) return $r;
+        $r = (float)$b['arpu'] <=> (float)$a['arpu'];
         return $r !== 0 ? $r : strcmp((string)$a['coach'], (string)$b['coach']);
     });
-    $bottom = $lista;
+    $bottom = array_values(array_filter($lista, static fn($c)=>$c['productividad'] !== null));
     usort($bottom, static function($a,$b) {
         $r = $a['productividad'] <=> $b['productividad'];
         if ($r !== 0) return $r;
         $r = $a['instalaciones'] <=> $b['instalaciones'];
+        if ($r !== 0) return $r;
+        $r = (float)$a['arpu'] <=> (float)$b['arpu'];
         return $r !== 0 ? $r : strcmp((string)$a['coach'], (string)$b['coach']);
     });
     return [array_slice($top,0,5), array_slice($bottom,0,5),
         ['coaches'=>count($coaches),'certificadas'=>count($eventosPeriodo),
-         'sin_coach_foto'=>$sinPlaza, 'hc_reutilizado'=>$mesesVerificados]];
+         'sin_coach_foto'=>$sinPlaza, 'hc_reutilizado'=>$mesesVerificados],
+        ['foto'=>$fotoProductiva,'cuentas_periodo'=>$eventosPeriodo,
+         'cuentas_historicas'=>$respuesta['cuentas']??[],'arpu_grupos'=>$detalles,
+         'desde'=>$desde,'hasta'=>$hasta,'dias_iso'=>$diasIso,
+         'fecha_inicio_historia'=>($mesesVerificados ? $respuestaDesde : min($desde,$inicioSpark))]];
 }
 
-// Productividad vendedor = instalaciones / días hábiles del rango seleccionado.
+/**
+ * TOP/BOTTOM Vendedores — idénticas cuentas y disponibilidades que Motor HC.
+ * TOP: volumen DESC, productividad DESC, ARPU DESC.
+ * BOTTOM: volumen ASC, productividad ASC, ARPU ASC (incluye ceros).
+ * La productividad publicada NUNCA se reconstruye por folio bruto ni HC*días.
+ * Elegibilidad ejecutiva en AMBAS listas, sin alterar Motor HC ni rankings:
+ * - antigüedad > 3 meses reales al cierre del rango (HC.fecha_alta)
+ * - STANDBY total <= 40% de las jornadas del rango (motor_hc.php, v0.6.9)
+ * - jornadas disponibles > 0; dato de alta faltante no se presupone.
+ */
+function tx_build_vendedores_regional_hc_dashboard(
+    mysqli $conexion, RankingAtribucionServiceV06 $motor, array $ctx, int $fechaCorteTs
+): array {
+    $foto=$ctx['foto']??[];
+    $cuentas=$ctx['cuentas_periodo']??[];
+    $historia=$ctx['cuentas_historicas']??[];
+    $arpu=$ctx['arpu_grupos']??[];
+    $desde=(string)($ctx['desde']??'');
+    $hasta=(string)($ctx['hasta']??'');
+    $vend=[];
+    // La fotografía es por plaza, la identidad es por persona (HIC).
+    foreach (($foto['vendedores']??[]) as $claveCoach=>$plazas) {
+        $liderCoach=explode('|',$claveCoach);
+        $coachPos=(string)array_pop($liderCoach);
+        $liderId=implode('|',$liderCoach);
+        $d=explode('|',$liderId,2)[0];
+        $coachNombre=(string)($foto['coaches'][$claveCoach]['nombre']??'');
+        foreach ($plazas as $seat) {
+            if (!empty($seat['vacante']) || !empty($seat['es_vacante_status'])) continue;
+            $persona=(string)($seat['persona']??'');
+            if ($persona==='') continue;
+            $clave=$liderId.'|'.$coachPos.'|'.$persona;
+            if (isset($vend[$clave])) throw new LogicException('HC vendedor duplicado en misma estructura: '.$clave);
+            $vend[$clave]=[
+                'folio'=>$persona,'id_posicion'=>$seat['id_posicion']??'',
+                'vendedor'=>$seat['nombre']??'VENDEDOR NO IDENTIFICADO',
+                'distrito'=>$d,'coach'=>$coachNombre,'lider_id'=>$liderId,
+                'coach_id'=>$coachPos,'instalaciones'=>0,'productividad'=>null,
+                'jornadas_operativas'=>0,'dias_standby'=>0,
+                'arpu'=>0.0,'spark'=>array_fill(0,6,0),
+                'antiguedad_meses'=>tx_antiguedad_meses_hc_index($seat['fecha_alta']??null,$hasta),
+                'cumple_antiguedad'=>tx_vendedor_mayor_3m_hc_index($seat['fecha_alta']??null,$hasta),
+                '_seat'=>$seat,
+            ];
+        }
+    }
+    $lunes=(new DateTimeImmutable($hasta))->modify('monday this week');
+    $weeks=[];
+    for($i=5;$i>=0;--$i){$w=$lunes->modify('-'.$i.' weeks');$weeks[$w->format('oW')]=count($weeks);}
+    $fueraFoto=0;
+    foreach ($historia as $ev) {
+        $lid=(string)($ev['lider_id']??'');
+        $c=(string)($ev['coach_id']??'');
+        $p=(string)($ev['vendedor_id']??'');
+        $key=$lid.'|'.$c.'|'.$p;
+        if (!isset($vend[$key])) {
+            if (($ev['fecha']??'') >= $desde && ($ev['fecha']??'') <= $hasta) $fueraFoto++;
+            continue;
+        }
+        $f=(string)($ev['fecha']??'');
+        $dt=new DateTimeImmutable($f);
+        $sem=$dt->format('oW');
+        if (isset($weeks[$sem])) $vend[$key]['spark'][$weeks[$sem]]++;
+    }
+    foreach ($cuentas as $ev) {
+        $key=(string)($ev['lider_id']??'').'|'.(string)($ev['coach_id']??'').'|'.(string)($ev['vendedor_id']??'');
+        if (!isset($vend[$key])) continue;
+        $vend[$key]['instalaciones']++;
+    }
+    foreach ($vend as $key=>&$v) {
+        $p=RankingAtribucionServiceV06::productividadVendedor((int)$v['instalaciones'],$v['_seat']);
+        $v['jornadas_operativas']=$p['jornadas_operativas'];
+        $v['dias_standby']=$p['dias_standby'];
+        $v['productividad']=$p['productividad'];
+        // Mismo dictamen del Motor HC que usa HC SIN INS: >40% STANDBY
+        // excluye, 40% exacto NO excluye. Fuente exclusiva: hc_standby.
+        $v['pct_standby']=(float)($p['disponibilidad']['pct_standby']??0.0);
+        $v['cumple_standby']=(bool)($p['disponibilidad']['elegible_hc_sin_ins']??false);
+        $com=$arpu[$key]??[];
+        $v['arpu']=round((float)($com['arpu']??0),2); // Desempate exacto; la tabla sigue mostrando pesos enteros.
+        unset($v['_seat']);
+    }
+    unset($v);
+    // El desempate histórico 3M deja de intervenir: ahora manda VOLUMEN del corte.
+    // Al no necesitar 3M, eliminamos su SELECT y el reprocesamiento HIC adicional.
+    // Filtros sólo de exhibición ejecutiva: no recalcular PROD ni cambiar cuentas,
+    // HC SIN INS, fotografía de plantilla, ni Ranking Productividad.
+    $excluidosAntiguedad=0; $excluidosStandby=0; $excluidosSinJornadas=0;
+    foreach ($vend as $candidato) {
+        if (empty($candidato['cumple_antiguedad'])) ++$excluidosAntiguedad;
+        if (empty($candidato['cumple_standby'])) ++$excluidosStandby;
+        if ($candidato['productividad']===null) ++$excluidosSinJornadas;
+    }
+    $lista=array_values(array_filter($vend,static function($v): bool {
+        return $v['productividad']!==null
+            && !empty($v['cumple_antiguedad'])
+            && !empty($v['cumple_standby']);
+    }));
+    $top=$lista;
+    usort($top,static function($a,$b) {
+        return ((int)$b['instalaciones'] <=> (int)$a['instalaciones'])
+            ?: ((float)$b['productividad'] <=> (float)$a['productividad'])
+            ?: ((float)$b['arpu'] <=> (float)$a['arpu'])
+            ?: strcmp((string)$a['vendedor'],(string)$b['vendedor'])
+            ?: strcmp((string)$a['folio'],(string)$b['folio']);
+    });
+    $top=array_slice($top,0,10);
+    $bottom=$lista;
+    usort($bottom,static function($a,$b) {
+        return ((int)$a['instalaciones'] <=> (int)$b['instalaciones'])
+            ?: ((float)$a['productividad'] <=> (float)$b['productividad'])
+            ?: ((float)$a['arpu'] <=> (float)$b['arpu'])
+            ?: strcmp((string)$a['vendedor'],(string)$b['vendedor'])
+            ?: strcmp((string)$a['folio'],(string)$b['folio']);
+    });
+    $bottom=array_slice($bottom,0,10);
+    return [$top,$bottom,[
+        'vendedores'=>count($vend), 'elegibles'=>count($lista),
+        'excluidos_antiguedad'=>$excluidosAntiguedad,
+        'excluidos_standby'=>$excluidosStandby,
+        'excluidos_sin_jornadas'=>$excluidosSinJornadas,
+        'fuera_foto'=>$fueraFoto,
+    ]];
+}
+
+// Días operativos del período: sólo referencia visual y cálculos heredados.
+// La PRODUCTIVIDAD de las tarjetas Vendedor y Coach procede de Motor HC 0.6.9.
 $dias_productividad_vendedor = tx_dias_habiles_rango_fechas(
     $conexion, $fecha_inicio_dashboard, $fecha_fin_dashboard
 );
@@ -3808,16 +3925,20 @@ $top_productividad_coaches = [];
 $top_offender_coaches = [];
 $tx_coaches_motor_auditoria = [];
 $tx_coaches_motor_error = null;
+$tx_contexto_productividad = null;
 try {
     require_once __DIR__.'/includes/motor_hc.php';
     if (!class_exists('RankingAtribucionServiceV06')) {
-        throw new RuntimeException('La clase Motor HC v0.6.2 no está disponible');
+        throw new RuntimeException('La clase Motor HC no está disponible');
+    }
+    if (RankingAtribucionServiceV06::VERSION_PRODUCTIVIDAD !== '0.6.9-hc-productividad-jornadas') {
+        throw new RuntimeException('INDEX requiere Motor HC Productividad 0.6.9');
     }
     $tx_motor_coaches = isset($tx_stg_motor_hc) && $tx_stg_motor_hc instanceof RankingAtribucionServiceV06
         ? $tx_stg_motor_hc : new RankingAtribucionServiceV06($conexion);
     $tx_respuesta_previa_coaches = isset($tx_stg_respuesta_hc) && is_array($tx_stg_respuesta_hc)
         ? $tx_stg_respuesta_hc : null;
-    list($top_productividad_coaches, $top_offender_coaches, $tx_coaches_motor_auditoria) =
+    list($top_productividad_coaches, $top_offender_coaches, $tx_coaches_motor_auditoria, $tx_contexto_productividad) =
         tx_build_coaches_motor_hc_staging(
             $conexion, $tx_motor_coaches,
             $fecha_inicio_dashboard, $fecha_fin_dashboard,
@@ -3833,22 +3954,21 @@ try {
 }
 
 // TOP REGIONAL: se calcula con toda la plantilla comercial activa, sin importar el scope del tablero.
-$vendedores_regional_productividad = tx_get_vendedores_regional_dashboard(
-    $conexion,
-    $semana_actual,
-    $anio_actual,
-    $puestos_comerciales
-);
+$top_productividad_vendedores=[];
+$top_offender_vendedores=[];
+$tx_vendedores_motor_auditoria=[];
+$tx_vendedores_motor_error=null;
+try {
+    if ($tx_coaches_motor_error !== null || empty($tx_contexto_productividad)) {
+        throw new RuntimeException('No se obtuvo contexto HC certificado para Ranking Regional Vendedores');
+    }
+    [$top_productividad_vendedores,$top_offender_vendedores,$tx_vendedores_motor_auditoria] =
+        tx_build_vendedores_regional_hc_dashboard($conexion,$tx_motor_coaches,$tx_contexto_productividad,$fecha_corte_timestamp);
+} catch (Throwable $e) {
+    $tx_vendedores_motor_error=$e->getMessage();
+    error_log('TalIA INDEX TOP/BOTTOM Vendedores HC: '.$tx_vendedores_motor_error);
+}
 
-list($top_productividad_vendedores, $top_offender_vendedores) = tx_build_top_regional_productividad_dashboard(
-    $conexion,
-    $vendedores_regional_productividad,
-    $mes_actual,
-    $anio_query,
-    $cond_dia_fecha,
-    $dias_productividad_vendedor,
-    $fecha_corte_timestamp
-);
 
 
 // Preparar lista ejecutiva para Cumplimiento del nivel inferior.
@@ -4537,19 +4657,31 @@ if ($tx_geo_sum_count > 0) {
             overflow-x:hidden;
         }
         .top-productividad-table th:nth-child(1),
-        .top-productividad-table td:nth-child(1){width:34px;}
+        .top-productividad-table td:nth-child(1){width:4%;}
         .top-productividad-table th:nth-child(2),
-        .top-productividad-table td:nth-child(2){width:31%;}
+        .top-productividad-table td:nth-child(2){width:25%;}
         .top-productividad-table th:nth-child(3),
-        .top-productividad-table td:nth-child(3){width:14%;}
+        .top-productividad-table td:nth-child(3){width:12%;}
         .top-productividad-table th:nth-child(4),
-        .top-productividad-table td:nth-child(4){width:23%;}
+        .top-productividad-table td:nth-child(4){width:18%;}
         .top-productividad-table th:nth-child(5),
-        .top-productividad-table td:nth-child(5){width:12%;}
+        .top-productividad-table td:nth-child(5){width:11%;}
         .top-productividad-table th:nth-child(6),
-        .top-productividad-table td:nth-child(6){width:12%;}
+        .top-productividad-table td:nth-child(6){width:11%;}
         .top-productividad-table th:nth-child(7),
-        .top-productividad-table td:nth-child(7){width:8%;}
+        .top-productividad-table td:nth-child(7){width:11%;}
+        .top-productividad-table th:nth-child(8),
+        .top-productividad-table td:nth-child(8){width:8%;}
+        .top-productividad-table .seller-antiguedad{
+            white-space:nowrap;
+            color:#516381;
+            font-size:.69rem;
+            font-weight:800;
+        }
+        @media(max-width:1100px){
+            .top-productividad-table-wrap{overflow-x:auto;}
+            .top-productividad-table{min-width:640px;}
+        }
 
 .top-productividad-table tr:last-child td{
             border-bottom:0;
@@ -5953,6 +6085,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <th>Nombre Coach</th>
                             <th>Distrito</th>
                             <th>Líder</th>
+                            <th title="Antigüedad promedio de vendedores ocupados del equipo (HC.fecha_alta)">Antig. equipo</th>
                             <th style="text-align:right;">Ventas instaladas</th>
                             <th style="text-align:right;">Prod.</th>
                             <th style="text-align:right;">ARPU</th>
@@ -5969,10 +6102,11 @@ include __DIR__ . '/includes/sidebar.php';
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
                             <td><div class="seller-small" title="<?= htmlspecialchars($row['lider'] ?? '') ?>"><?= htmlspecialchars($row['lider'] ?? '') ?></div></td>
+                            <td class="seller-antiguedad" title="<?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null).' · '.$row['antiguedad_con_fecha'].' de '.$row['antiguedad_ocupados'].' vendedores con fecha de alta válida',ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null,true),ENT_QUOTES,'UTF-8') ?></td>
                             <td class="seller-num" title="Cuentas certificadas por Motor HC v0.6.2"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
                             <td class="seller-num">
                                 <div class="seller-prod">
-                                    <strong title="<?= htmlspecialchars(number_format((int)($row['instalaciones'] ?? 0)).' INS / '.number_format((int)($row['hc_activo'] ?? 0)).' HC activo / '.(int)$GLOBALS['dias_productividad_vendedor'].' días hábiles', ENT_QUOTES, 'UTF-8') ?>"><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
+                                    <strong title="<?= htmlspecialchars(number_format((int)($row['instalaciones'] ?? 0)).' INS / '.number_format((int)($row['jornadas_operativas'] ?? 0)).' jornadas-persona disponibles (STANDBY descontado)', ENT_QUOTES, 'UTF-8') ?>"><?= number_format((float)($row['productividad'] ?? 0), 2) ?></strong>
                                     <div class="sparkline" title="Tendencia últimas 6 semanas">
                                         <?php foreach ($spark as $sv): ?>
                                             <span style="height:<?= max(3, round(((int)$sv / $sparkMax) * 16)) ?>px;"></span>
@@ -5984,7 +6118,7 @@ include __DIR__ . '/includes/sidebar.php';
                         </tr>
                         <?php endforeach; ?>
                         <?php if (empty($items)): ?>
-                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($mensajeVacio, ENT_QUOTES, 'UTF-8') ?></td></tr>
+                        <tr><td colspan="8" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($mensajeVacio, ENT_QUOTES, 'UTF-8') ?></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -5994,18 +6128,18 @@ include __DIR__ . '/includes/sidebar.php';
 
         <?php $renderTopCoachTable(
             'TOP Five Coaches',
-            'Motor HC · Mejor PROD. · Piso mínimo '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días)',
+            'PROD. → INS → ARPU · Piso mínimo '.number_format($tx_piso_min_top_coaches).' INS ('.$tx_dias_cal_top_coaches.' días)',
             $top_productividad_coaches,
             'top-productividad',
             ($tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Ningún coach cumple el piso mínimo de '.number_format($tx_piso_min_top_coaches).' instalaciones para este rango.')
         ); ?>
-        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Motor HC · Menor PROD. regional de coaches de venta', $top_offender_coaches, 'top-offender', $tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Sin coaches activos para este corte.'); ?>
+        <?php $renderTopCoachTable('BOTTOM Five Coaches', 'Menor PROD. → INS → ARPU · HC certificado', $top_offender_coaches, 'top-offender', $tx_coaches_motor_error !== null ? 'Sin datos certificados: revisar el log del motor HC.' : 'Sin coaches activos para este corte.'); ?>
     </div>
     <?php endif; ?>
 
 
     <!-- TOP REGIONAL PRODUCTIVIDAD VENDEDORES -->
-    <?php if (!empty($top_productividad_vendedores) || !empty($top_offender_vendedores)): ?>
+    <?php if (!empty($top_productividad_vendedores) || !empty($top_offender_vendedores) || $tx_vendedores_motor_error !== null): ?>
     <div class="top-productividad-grid">
         <?php
             $renderTopTable = function($titulo, $subtitulo, $items, $extraClass = '') {
@@ -6026,6 +6160,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <th>Nombre vendedor</th>
                             <th>Distrito</th>
                             <th>Coach</th>
+                            <th title="Antigüedad individual del vendedor al cierre del corte (HC.fecha_alta)">Antigüedad</th>
                             <th style="text-align:right;">Ventas instaladas</th>
                             <th style="text-align:right;">Prod.</th>
                             <th style="text-align:right;">ARPU</th>
@@ -6042,6 +6177,7 @@ include __DIR__ . '/includes/sidebar.php';
                             <td><div class="seller-name" title="<?= htmlspecialchars($row['vendedor'] ?? '') ?>"><?= htmlspecialchars($row['vendedor'] ?? '') ?></div></td>
                             <td><span class="seller-district"><?= htmlspecialchars($row['distrito'] ?? '') ?></span></td>
                             <td><div class="seller-small" title="<?= htmlspecialchars($row['coach'] ?? '') ?>"><?= htmlspecialchars($row['coach'] ?? '') ?></div></td>
+                            <td class="seller-antiguedad" title="<?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null),ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars(tx_antiguedad_texto_hc_index($row['antiguedad_meses'] ?? null,true),ENT_QUOTES,'UTF-8') ?></td>
                             <td class="seller-num"><?= number_format((int)($row['instalaciones'] ?? 0)) ?></td>
                             <td class="seller-num">
                                 <div class="seller-prod">
@@ -6057,7 +6193,7 @@ include __DIR__ . '/includes/sidebar.php';
                         </tr>
                         <?php endforeach; ?>
                         <?php if (empty($items)): ?>
-                        <tr><td colspan="7" style="text-align:center;color:#6b7a99;padding:18px;">Sin datos para el rango seleccionado.</td></tr>
+                        <tr><td colspan="8" style="text-align:center;color:#6b7a99;padding:18px;"><?= htmlspecialchars($GLOBALS['tx_vendedores_motor_error'] !== null ? 'Datos HC no disponibles: revisar log de Motor HC.' : 'Sin datos para el rango seleccionado.', ENT_QUOTES, 'UTF-8') ?></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -6065,8 +6201,8 @@ include __DIR__ . '/includes/sidebar.php';
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('TOP Regional Vendedor', 'Mejor PROD. regional del rango seleccionado', $top_productividad_vendedores, 'top-productividad'); ?>
-        <?php $renderTopTable('BOTTOM Regional Vendedor', '0 instalaciones · Productividad 3M más baja', $top_offender_vendedores, 'top-offender'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('BOTTOM Regional Vendedor', 'Menor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
 
