@@ -4803,21 +4803,21 @@ if ($tx_geo_sum_count > 0) {
             overflow-x:hidden;
         }
         .top-productividad-table th:nth-child(1),
-        .top-productividad-table td:nth-child(1){width:4%;}
+        .top-productividad-table td:nth-child(1){width:6%;}
         .top-productividad-table th:nth-child(2),
-        .top-productividad-table td:nth-child(2){width:25%;}
+        .top-productividad-table td:nth-child(2){width:29%;}
         .top-productividad-table th:nth-child(3),
-        .top-productividad-table td:nth-child(3){width:12%;}
+        .top-productividad-table td:nth-child(3){width:10%;}
         .top-productividad-table th:nth-child(4),
-        .top-productividad-table td:nth-child(4){width:18%;}
+        .top-productividad-table td:nth-child(4){width:19%;}
         .top-productividad-table th:nth-child(5),
-        .top-productividad-table td:nth-child(5){width:11%;}
+        .top-productividad-table td:nth-child(5){width:10%;}
         .top-productividad-table th:nth-child(6),
-        .top-productividad-table td:nth-child(6){width:11%;}
+        .top-productividad-table td:nth-child(6){width:10%;}
         .top-productividad-table th:nth-child(7),
-        .top-productividad-table td:nth-child(7){width:11%;}
+        .top-productividad-table td:nth-child(7){width:9%;}
         .top-productividad-table th:nth-child(8),
-        .top-productividad-table td:nth-child(8){width:8%;}
+        .top-productividad-table td:nth-child(8){width:7%;}
         .top-productividad-table .seller-antiguedad{
             white-space:nowrap;
             color:#516381;
@@ -4898,6 +4898,55 @@ if ($tx_geo_sum_count > 0) {
             .top-productividad-grid{
                 grid-template-columns:1fr;
             }
+        }
+
+
+        /* INDEX 2026-10-23 · Reconocimiento visible: nombres COMPLETOS.
+         * Nunca recortar con puntos suspensivos nombres de coach, vendedor ni
+         * responsables. Celdas multilínea de alto automático; tablas ordenables.
+         * No se modifica ninguna consulta, filtro, productividad ni posición #.
+         */
+        .top-productividad-card .top-productividad-table .seller-name,
+        .top-productividad-card .top-productividad-table .seller-small{
+            display:block;
+            width:100%;
+            max-width:none;
+            white-space:normal;
+            overflow:visible;
+            text-overflow:clip;
+            overflow-wrap:anywhere;
+            word-break:normal;
+            line-height:1.35;
+        }
+        .top-productividad-card .top-productividad-table .seller-name{
+            font-size:.75rem;
+            font-weight:950;
+        }
+        .top-productividad-card .top-productividad-table .seller-small{
+            font-size:.70rem;
+            font-weight:850;
+        }
+        .top-productividad-card .top-productividad-table .seller-district{
+            display:block;
+            white-space:normal;
+            overflow-wrap:anywhere;
+            line-height:1.32;
+        }
+        .top-productividad-card .top-productividad-table th,
+        .top-productividad-card .top-productividad-table td{
+            overflow-wrap:anywhere;
+        }
+        .top-productividad-card .top-productividad-table th .tx-index-sort{
+            white-space:normal;
+            flex-wrap:wrap;
+        }
+        .top-productividad-card .top-productividad-table td{
+            padding-top:10px;
+            padding-bottom:10px;
+        }
+        /* En pantallas intermedias no comprimir ocho columnas en media tarjeta. */
+        @media (max-width:1450px){
+            .top-productividad-grid{grid-template-columns:minmax(0,1fr);}
         }
 
 .dashboard-analytics-grid{
