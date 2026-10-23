@@ -3642,7 +3642,7 @@ function tx_antiguedad_meses_hc_index(?string $fechaAlta, string $corte): ?int {
  * meses: 3 meses y 1 día puede mostrarse como "3m" y SÍ cumple >3 meses.
  * Sin fecha de alta HC verificable => se excluye SOLO del BOTTOM.
  * TOP Regional Vendedor admite nuevos ingresos, sin importar antigüedad,
- * siempre que cumplan la regla vigente de STANDBY y tengan productividad.
+ * siempre que Motor HC determine una productividad válida; el TOP NO filtra STANDBY.
  * No modifica la antigüedad presentada ni la clasificación de Coaches.
  */
 function tx_vendedor_mayor_3m_hc_index(?string $fechaAlta, string $corte): bool {
@@ -3893,10 +3893,12 @@ function tx_build_coaches_motor_hc_staging(
  * BOTTOM: volumen ASC, productividad ASC, ARPU ASC (incluye ceros).
  * La productividad publicada NUNCA se reconstruye por folio bruto ni HC*días.
  * Elegibilidad ejecutiva, sin alterar Motor HC ni rankings:
- * - TOP: sin restricción de antigüedad; nuevos ingresos pueden destacar.
- * - BOTTOM: antigüedad estrictamente > 3 meses (HC.fecha_alta verificable).
- * - AMBOS: STANDBY total <= 40% del rango (motor_hc.php v0.6.9)
- *          y jornadas disponibles > 0.
+ * - TOP: sin filtro de antigüedad NI porcentaje STANDBY. Reconoce el
+ *        volumen excepcional también de nuevos ingresos o colaboradores
+ *        con STANDBY >40%, siempre que Motor HC certifique productividad.
+ * - BOTTOM: antigüedad estrictamente > 3 meses (HC.fecha_alta verificable)
+ *           Y STANDBY total <= 40% del rango (Motor HC).
+ * - AMBOS: productividad no nula calculada por Motor HC, sin recalcular jornadas.
  * - Sin fecha de alta válida: puede entrar al TOP, NUNCA al BOTTOM.
  */
 function tx_build_vendedores_regional_hc_dashboard(
@@ -3982,15 +3984,18 @@ function tx_build_vendedores_regional_hc_dashboard(
         if (empty($candidato['cumple_standby'])) ++$excluidosStandby;
         if ($candidato['productividad']===null) ++$excluidosSinJornadas;
     }
-    // TOP reconoce resultados sobresalientes incluso si el vendedor es nuevo.
-    // BOTTOM protege nuevos ingresos (<=3 meses) y registros sin alta comprobable.
-    // Ambas listas mantienen el mismo filtro de STANDBY y disponibilidad HC.
+    // TOP: SIN restricciones de antigüedad o STANDBY.
+    // Solo se exige productividad CERTIFICADA por Motor HC (no nula).
+    // BOTTOM: SI conserva antigüedad >3m y STANDBY <=40% del período.
+    // Los universos se filtran de forma INDEPENDIENTE para evitar que las
+    // restricciones del BOTTOM terminen limitando el reconocimiento TOP.
     $listaTop=array_values(array_filter($vend,static function($v): bool {
-        return $v['productividad']!==null
-            && !empty($v['cumple_standby']);
+        return $v['productividad']!==null;
     }));
-    $listaBottom=array_values(array_filter($listaTop,static function($v): bool {
-        return !empty($v['cumple_antiguedad']);
+    $listaBottom=array_values(array_filter($vend,static function($v): bool {
+        return $v['productividad']!==null
+            && !empty($v['cumple_antiguedad'])
+            && !empty($v['cumple_standby']);
     }));
     $top=$listaTop;
     usort($top,static function($a,$b) {
@@ -4016,7 +4021,7 @@ function tx_build_vendedores_regional_hc_dashboard(
         'elegibles_top'=>count($listaTop),
         'elegibles_bottom'=>count($listaBottom),
         'excluidos_antiguedad'=>$excluidosAntiguedad, // aplica exclusivamente al BOTTOM
-        'excluidos_standby'=>$excluidosStandby,
+        'excluidos_standby'=>$excluidosStandby, // aplica exclusivamente al BOTTOM
         'excluidos_sin_jornadas'=>$excluidosSinJornadas,
         'fuera_foto'=>$fueraFoto,
     ]];
@@ -6444,7 +6449,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
         </div>
         <?php }; ?>
 
-        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor INS → PROD. → ARPU · Nuevos incluidos · STANDBY ≤40%', $top_productividad_vendedores, 'top-productividad'); ?>
+        <?php $renderTopTable('TOP Regional Vendedor', 'Mayor INS → PROD. → ARPU · Nuevos incluidos · Sin filtro STANDBY', $top_productividad_vendedores, 'top-productividad'); ?>
         <?php $renderTopTable('BOTTOM Regional Vendedor', 'Menor INS → PROD. → ARPU · >3 meses · STANDBY ≤40%', $top_offender_vendedores, 'top-offender'); ?>
     </div>
     <?php endif; ?>
