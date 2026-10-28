@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR COMERCIAL v0.2.1 · PRODUCCIÓN
+ * TalIA / TotalXpedient · MOTOR COMERCIAL v0.2.2 · ARPU PRONTO PAGO
  * ============================================================================
  * Ubicación: /plataforma/includes/motor_comercial.php
  * Contrato: MotorComercial(mysqli $conexion).
@@ -13,12 +13,21 @@ declare(strict_types=1);
  *   Este motor NO amplía ni modifica el universo de cuentas certificadas.
  * - resumirVendedores() clasifica todas las cuentas HC certificadas, sin
  *   filtrar por origen: Play (2P/3P), oferta (Residencial/Negocios), Bundle y
- *   ARPU precio lista neto de IVA; los paquetes PYME permanecen incluidos.
+ *   ARPU por Precio Pronto Pago (sin dividir entre 1.16); los paquetes PYME permanecen incluidos.
  * - Las clasificaciones proceden exclusivamente de catalogo_paquetes mediante
  *   coincidencia exacta normalizada; ausencias/conflictos se auditan sin
  *   inventar atributos. Se conserva 'Sin clasificar' cuando corresponde.
- * - Precio: primero instalaciones.precio_lista positivo; si falta, respaldo
- *   auditado de catálogo ACTUAL; ARPU = SUM(precio_lista/1.16)/N con precio.
+ * - REGLA CANÓNICA ARPU: SUM(precio_pronto_pago) / N de instalaciones con
+ *   precio pronto pago válido, sin dividir entre 1.16 ni sustituir por lista.
+ * - Prioridad de precio: instalaciones.precio_pronto_pago (si la columna existe);
+ *   si no consta, catalogo_paquetes.precio_pronto_pago del plan exacto.
+ * - El precio del catálogo es ACTUAL; su uso para períodos históricos es un
+ *   respaldo auditado, NO una garantía de que sea el precio histórico vendido.
+ * - No se inventa precio cuando falta o es ambiguo: se excluye solo del
+ *   denominador de ARPU, sin excluir la instalación de volumen/Play/Oferta/Bundle.
+ * - Las claves públicas arpu_ingreso_neto y arpu_cuentas se mantienen por
+ *   compatibilidad; arpu_ingreso_neto pasa a reflejar la SUMA de pronto pago
+ *   (nombre heredado, NO equivale a ingreso contable neto de IVA).
  * - Registros duplicados de una cuenta se revisan en el período consultado;
  *   divergencias de plan o precio no se resuelven de forma arbitraria.
  * - Indicadores gerenciales por REGISTRO preservan su propia semántica,
@@ -29,6 +38,13 @@ declare(strict_types=1);
  *   cuentas ya certificadas por Motor HC (vendedores, diario y semanal).
  * - Se conservan deduplicación, clasificaciones, ARPU y controles de auditoría.
  *
+ * CAMBIO v0.2.2 (28-OCT-2026)
+ * - ARPU usa Precio Pronto Pago directo, sin ajuste por IVA; no utiliza precio lista.
+ * - Se actualizan resumen HC, tendencias y series gerenciales diarias/semanales.
+ * - Se mantienen los nombres de los métodos y el esquema de respuesta existente.
+ * - Se incorpora sumatoria explícita arpu_suma_pronto_pago, con alias heredado.
+ * - La fuente CATALOGO_ACTUAL queda auditada para evitar confundirla con precio histórico.
+ *
  * Contrato público:
  *   resumirVendedores($cuentasCertificadas,$desde,$hasta,$diasIso=[]);
  *   indicadoresDiariosHc($eventos,$desde,$hasta);
@@ -38,7 +54,8 @@ declare(strict_types=1);
  */
 final class MotorComercial
 {
-    public const VERSION = '0.2.1-all-channels';
+    public const VERSION = '0.2.2-all-channels-arpu-pronto-pago';
+    public const ARPU_REGLA_CANONICA = 'PRECIO_PRONTO_PAGO_DIRECTO';
     private mysqli $db;
     private array $columnasInst;
     private array $columnasCatalogo;
@@ -54,11 +71,13 @@ final class MotorComercial
                 throw new RuntimeException('Motor Comercial: falta instalaciones.'.$col);
             }
         }
-        foreach (['nombre_plan', 'play', 'tipo', 'bundle_app'] as $col) {
+        foreach (['nombre_plan', 'play', 'tipo', 'bundle_app', 'precio_pronto_pago'] as $col) {
             if (!isset($this->columnasCatalogo[$col])) {
                 throw new RuntimeException('Motor Comercial: falta catalogo_paquetes.'.$col);
             }
         }
+        // Sin el campo pronto pago no se permiten resultados ARPU ficticios.
+        // Catálogo vigente es la única fuente base garantizada en esta arquitectura.
         $this->cargarCatalogo();
     }
 
@@ -91,7 +110,7 @@ final class MotorComercial
     private function cargarCatalogo(): void
     {
         $campos = ['nombre_plan','play','tipo','bundle_app'];
-        if (isset($this->columnasCatalogo['precio_lista'])) $campos[] = 'precio_lista';
+        if (isset($this->columnasCatalogo['precio_pronto_pago'])) $campos[] = 'precio_pronto_pago';
         $res = $this->db->query('SELECT '.implode(',', array_map(static fn($x) => '`'.$x.'`',$campos)).' FROM catalogo_paquetes');
         if ($res === false) throw new RuntimeException('No se pudo leer catalogo_paquetes');
         while ($r = $res->fetch_assoc()) {
@@ -101,18 +120,18 @@ final class MotorComercial
                 'play' => self::normalizar($r['play'] ?? ''),
                 'tipo' => self::normalizar($r['tipo'] ?? ''),
                 'bundle_app' => self::normalizar($r['bundle_app'] ?? ''),
-                'precio_lista' => self::precioPositivo($r['precio_lista'] ?? null),
+                'precio_pronto_pago' => self::precioPositivo($r['precio_pronto_pago'] ?? null),
                 'conflictos' => [],
             ];
             if (!isset($this->catalogo[$nombre])) {
                 $this->catalogo[$nombre] = $entrada;
                 continue;
             }
-            foreach (['play','tipo','bundle_app','precio_lista'] as $campo) {
+            foreach (['play','tipo','bundle_app','precio_pronto_pago'] as $campo) {
                 $prev = $this->catalogo[$nombre][$campo];
                 $nuevo = $entrada[$campo];
                 if (isset($this->catalogo[$nombre]['conflictos'][$campo])) continue;
-                if ($campo === 'precio_lista') {
+                if ($campo === 'precio_pronto_pago') {
                     // Un precio ausente no contradice uno presente.
                     if ($prev === null && $nuevo !== null) $this->catalogo[$nombre][$campo] = $nuevo;
                     elseif ($prev !== null && $nuevo !== null && abs($prev - $nuevo) > .005) {
@@ -135,7 +154,7 @@ final class MotorComercial
             'doble_play' => 0, 'triple_play' => 0, 'play_sin_clasificar' => 0,
             'residencial' => 0, 'negocios' => 0, 'oferta_sin_clasificar' => 0,
             'no_bundle' => 0, 'bundle' => 0, 'bundle_sin_clasificar' => 0,
-            'arpu' => null, 'arpu_ingreso_neto' => 0.0, 'arpu_cuentas' => 0,
+            'arpu' => null, 'arpu_ingreso_neto' => 0.0, 'arpu_suma_pronto_pago' => 0.0, 'arpu_cuentas' => 0,
             'arpu_fuente_catalogo' => 0, 'arpu_precio_ambiguo' => 0,
             'instalacion_no_encontrada' => 0, 'instalacion_plan_ambiguo' => 0,
             'catalogo_sin_match' => 0, 'catalogo_ambiguo' => 0,
@@ -148,7 +167,7 @@ final class MotorComercial
         foreach ($filas as $r) {
             $plan = self::normalizar($r['plan'] ?? '');
             if ($plan !== '') $planes[$plan] = true;
-            $p = self::precioPositivo($r['precio_lista'] ?? null);
+            $p = self::precioPositivo($r['precio_pronto_pago'] ?? null);
             if ($p !== null) $precios[number_format($p, 2, '.', '')] = $p;
         }
         $planConflicto = count($planes) > 1;
@@ -180,13 +199,13 @@ final class MotorComercial
         if (!$planConflicto && !$precioConflicto && count($precios) === 1) {
             $precio = (float)array_values($precios)[0];
             $fuente = 'INSTALACION';
-        } elseif (!$planConflicto && !$precioConflicto && !$precios && $cat !== null && $cat['precio_lista'] !== null) {
-            $precio = (float)$cat['precio_lista'];
+        } elseif (!$planConflicto && !$precioConflicto && !$precios && $cat !== null && $cat['precio_pronto_pago'] !== null) {
+            $precio = (float)$cat['precio_pronto_pago'];
             $fuente = 'CATALOGO_ACTUAL';
         }
         return [
             'play' => $p, 'oferta' => $o, 'bundle' => $b,
-            'precio_neto' => $precio !== null ? $precio / 1.16 : null,
+            'precio_arpu' => $precio, // pronto pago original, sin dividir por IVA ni aplicar otros ajustes
             'fuente_precio' => $fuente,
             'plan_ambiguo' => $planConflicto,
             'precio_ambiguo' => $precioConflicto,
@@ -205,8 +224,9 @@ final class MotorComercial
         if ($c['catalogo_estado'] === 'SIN_MATCH') $s['catalogo_sin_match']++;
         if ($c['catalogo_estado'] === 'AMBIGUO') $s['catalogo_ambiguo']++;
         if ($c['precio_ambiguo']) $s['arpu_precio_ambiguo']++;
-        if ($c['precio_neto'] !== null) {
-            $s['arpu_ingreso_neto'] += $c['precio_neto'];
+        if ($c['precio_arpu'] !== null) {
+            $s['arpu_ingreso_neto'] += $c['precio_arpu']; // alias heredado
+            $s['arpu_suma_pronto_pago'] += $c['precio_arpu'];
             $s['arpu_cuentas']++;
             if ($c['fuente_precio'] === 'CATALOGO_ACTUAL') $s['arpu_fuente_catalogo']++;
         }
@@ -214,7 +234,7 @@ final class MotorComercial
 
     private static function finalizar(array &$s): void
     {
-        $s['arpu'] = $s['arpu_cuentas'] > 0 ? round($s['arpu_ingreso_neto'] / $s['arpu_cuentas'], 2) : null;
+        $s['arpu'] = $s['arpu_cuentas'] > 0 ? round($s['arpu_suma_pronto_pago'] / $s['arpu_cuentas'], 2) : null;
         foreach ([
             ['doble_play','triple_play','play_sin_clasificar'],
             ['residencial','negocios','oferta_sin_clasificar'],
@@ -265,7 +285,7 @@ final class MotorComercial
 
         $porCuenta = [];
         $campos = ['cuenta','fecha','plan'];
-        if (isset($this->columnasInst['precio_lista'])) $campos[] = 'precio_lista';
+        if (isset($this->columnasInst['precio_pronto_pago'])) $campos[] = 'precio_pronto_pago';
         $cols = implode(',',array_map(static fn($x)=>'`'.$x.'`',$campos));
         $hastaExclusivo = $ff->modify('+1 day')->format('Y-m-d');
         foreach (array_chunk(array_values($unicos), 300) as $chunk) {
@@ -363,7 +383,7 @@ final class MotorComercial
      * Todos los canales en el alcance recibido. Cuenta REGISTROS de instalaciones,
      * igual que Evolución (no deduplica cuentas para evitar perder volumen).
      * Calcula simultáneamente ARPU ponderado, 2P/3P, RES/NEG y Bundle.
-     * Usa clasificación exacta del mismo catálogo y precios lista sin IVA.
+     * Usa clasificación exacta del mismo catálogo y Precio Pronto Pago directo.
      * Devuelve valores mensuales junto con auditoría de precios/clasificación.
      */
     public function indicadoresInstalacionesPorCatalogo(
@@ -395,8 +415,8 @@ final class MotorComercial
             $out['datos'][$ym] = self::resumenVacio();
             $cursor = $cursor->modify('+1 month');
         }
-        $tienePrecio = isset($this->columnasInst['precio_lista']);
-        $precioSelect = $tienePrecio ? '`precio_lista`' : 'NULL';
+        $tienePrecio = isset($this->columnasInst['precio_pronto_pago']);
+        $precioSelect = $tienePrecio ? '`precio_pronto_pago`' : 'NULL';
         $sql = "SELECT DATE_FORMAT(`fecha`,'%Y-%m') AS ym, `plan`, {$precioSelect} AS precio, COUNT(*) AS n
                 FROM `instalaciones` WHERE `fecha` >= ? AND `fecha` <= ? AND `origen_prospecto` <> '-'";
         $args = [$desde,$hasta];
@@ -410,7 +430,7 @@ final class MotorComercial
             $args[] = $inicioMesRango; $args[] = $fechaInicioRango;
         }
         $sql .= $this->filtrosGerenciales('instalaciones',$scope,$args);
-        $sql .= " GROUP BY DATE_FORMAT(`fecha`,'%Y-%m'), `plan`".($tienePrecio?', `precio_lista`':'');
+        $sql .= " GROUP BY DATE_FORMAT(`fecha`,'%Y-%m'), `plan`".($tienePrecio?', `precio_pronto_pago`':'');
         $stmt = $this->db->prepare($sql);
         if (!$stmt) throw new RuntimeException('Indicadores Comerciales: no se pudo preparar instalaciones');
         $stmt->bind_param(str_repeat('s',count($args)), ...$args);
@@ -422,7 +442,7 @@ final class MotorComercial
             if (!isset($out['datos'][$ym])) continue;
             $n = (int)$row['n'];
             if ($n <= 0) continue;
-            $c = self::clasificarCuenta([['plan'=>$row['plan'] ?? '', 'precio_lista'=>$row['precio'] ?? null]],$this->catalogo);
+            $c = self::clasificarCuenta([['plan'=>$row['plan'] ?? '', 'precio_pronto_pago'=>$row['precio'] ?? null]],$this->catalogo);
             $s = &$out['datos'][$ym];
             $s['total'] += $n;
             $s[$c['play']] += $n;
@@ -432,8 +452,9 @@ final class MotorComercial
             if ($c['catalogo_estado'] === 'AMBIGUO') $s['catalogo_ambiguo'] += $n;
             if ($c['plan_ambiguo']) $s['instalacion_plan_ambiguo'] += $n;
             if ($c['precio_ambiguo']) $s['arpu_precio_ambiguo'] += $n;
-            if ($c['precio_neto'] !== null) {
-                $s['arpu_ingreso_neto'] += $c['precio_neto']*$n;
+            if ($c['precio_arpu'] !== null) {
+                $s['arpu_ingreso_neto'] += $c['precio_arpu']*$n; // alias heredado
+                $s['arpu_suma_pronto_pago'] += $c['precio_arpu']*$n;
                 $s['arpu_cuentas'] += $n;
                 if ($c['fuente_precio'] === 'CATALOGO_ACTUAL') $s['arpu_fuente_catalogo'] += $n;
             }
@@ -614,7 +635,7 @@ final class MotorComercial
             $fecha=$origen==='ventas' ? 'fecha_cierre':'fecha';
             $plan=$origen==='ventas' ? 'nombre_plan':'plan';
             $canal=$origen==='ventas' ? 'canal_venta':'origen_prospecto';
-            $precio=($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) ? '`precio_lista`' : 'NULL';
+            $precio=($origen==='instalaciones' && isset($this->columnasInst['precio_pronto_pago'])) ? '`precio_pronto_pago`' : 'NULL';
             $sql="SELECT YEARWEEK(`{$fecha}`,3) AS semana_iso, `{$plan}` AS plan, `{$canal}` AS canal, {$precio} AS precio, COUNT(*) AS n
                 FROM `{$tabla}` WHERE `{$fecha}` >= ? AND `{$fecha}` <= ?";
             $args=[$desde,$hasta];
@@ -625,7 +646,7 @@ final class MotorComercial
             }
             $sql.=$this->filtrosGerenciales($origen,$scope,$args);
             $sql.=" GROUP BY YEARWEEK(`{$fecha}`,3), `{$plan}`, `{$canal}`";
-            if($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) $sql.=', `precio_lista`';
+            if($origen==='instalaciones' && isset($this->columnasInst['precio_pronto_pago'])) $sql.=', `precio_pronto_pago`';
             $st=$this->db->prepare($sql);
             if (!$st) throw new RuntimeException('Series ISO: no pudo preparar '.$tabla);
             $st->bind_param(str_repeat('s',count($args)),...$args);
@@ -644,15 +665,15 @@ final class MotorComercial
                     $out['datos']['canal'][$origen][$nombreCanal]=array_fill_keys($keys,0);
                 }
                 $out['datos']['canal'][$origen][$nombreCanal][$k]+=$n;
-                $cl=self::clasificarCuenta([['plan'=>$r['plan']??'','precio_lista'=>$r['precio']??null]],$this->catalogo);
+                $cl=self::clasificarCuenta([['plan'=>$r['plan']??'','precio_pronto_pago'=>$r['precio']??null]],$this->catalogo);
                 $oferta=match($cl['oferta']) {'residencial'=>'Residencial','negocios'=>'Negocios',default=>'Sin clasificar'};
                 $play=match($cl['play']) {'doble_play'=>'2P','triple_play'=>'3P',default=>'Sin clasificar'};
                 $bundle=match($cl['bundle']) {'bundle'=>'Bundle','no_bundle'=>'No Bundle',default=>'Sin clasificar'};
                 $out['datos']['oferta'][$origen][$oferta][$k]+=$n;
                 $out['datos']['play'][$origen][$play][$k]+=$n;
                 $out['datos']['bundle'][$origen][$bundle][$k]+=$n;
-                if($origen==='instalaciones' && $cl['precio_neto']!==null) {
-                    $ingresos[$k]+=(float)$cl['precio_neto']*$n;
+                if($origen==='instalaciones' && $cl['precio_arpu']!==null) {
+                    $ingresos[$k]+=(float)$cl['precio_arpu']*$n;
                     $out['arpu_cuentas'][$k]+=$n;
                 }
             }
@@ -710,14 +731,14 @@ final class MotorComercial
             $fecha=$origen==='ventas'?'fecha_cierre':'fecha';
             $plan=$origen==='ventas'?'nombre_plan':'plan';
             $canal=$origen==='ventas'?'canal_venta':'origen_prospecto';
-            $precio=($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) ? '`precio_lista`' : 'NULL';
+            $precio=($origen==='instalaciones' && isset($this->columnasInst['precio_pronto_pago'])) ? '`precio_pronto_pago`' : 'NULL';
             $sql="SELECT `{$fecha}` AS dia, `{$plan}` AS plan, `{$canal}` AS canal, {$precio} AS precio, COUNT(*) AS n
                   FROM `{$tabla}` WHERE `{$fecha}` >= ? AND `{$fecha}` <= ?";
             $args=[$desde,$hasta];
             if($origen==='instalaciones') $sql.=" AND `origen_prospecto` <> '-'";
             $sql.=$this->filtrosGerenciales($origen,$scope,$args);
             $sql.=" GROUP BY `{$fecha}`, `{$plan}`, `{$canal}`";
-            if($origen==='instalaciones' && isset($this->columnasInst['precio_lista'])) $sql.=', `precio_lista`';
+            if($origen==='instalaciones' && isset($this->columnasInst['precio_pronto_pago'])) $sql.=', `precio_pronto_pago`';
             $st=$this->db->prepare($sql);
             if (!$st) throw new RuntimeException('Serie diaria: no se pudo preparar '.$tabla);
             $st->bind_param(str_repeat('s',count($args)),...$args);
@@ -736,15 +757,15 @@ final class MotorComercial
                     $out['datos']['canal'][$origen][$nombreCanal]=array_fill_keys($dias,0);
                 }
                 $out['datos']['canal'][$origen][$nombreCanal][$dia]+=$n;
-                $c=self::clasificarCuenta([['plan'=>$r['plan']??'','precio_lista'=>$r['precio']??null]],$this->catalogo);
+                $c=self::clasificarCuenta([['plan'=>$r['plan']??'','precio_pronto_pago'=>$r['precio']??null]],$this->catalogo);
                 $oferta=match($c['oferta']) {'residencial'=>'Residencial','negocios'=>'Negocios',default=>'Sin clasificar'};
                 $play=match($c['play']) {'doble_play'=>'2P','triple_play'=>'3P',default=>'Sin clasificar'};
                 $bundle=match($c['bundle']) {'bundle'=>'Bundle','no_bundle'=>'No Bundle',default=>'Sin clasificar'};
                 $out['datos']['oferta'][$origen][$oferta][$dia]+=$n;
                 $out['datos']['play'][$origen][$play][$dia]+=$n;
                 $out['datos']['bundle'][$origen][$bundle][$dia]+=$n;
-                if($origen==='instalaciones' && $c['precio_neto']!==null) {
-                    $ingresos[$dia]+=(float)$c['precio_neto']*$n;
+                if($origen==='instalaciones' && $c['precio_arpu']!==null) {
+                    $ingresos[$dia]+=(float)$c['precio_arpu']*$n;
                     $out['arpu_cuentas'][$dia]+=$n;
                 }
             }
@@ -784,7 +805,7 @@ final class MotorComercial
         }
         $filas=[];
         if($cuentas) {
-            $columnas='`cuenta`,`fecha`,`plan`'.(isset($this->columnasInst['precio_lista'])?',`precio_lista`':'');
+            $columnas='`cuenta`,`fecha`,`plan`'.(isset($this->columnasInst['precio_pronto_pago'])?',`precio_pronto_pago`':'');
             foreach(array_chunk(array_keys($cuentas),300) as $lote) {
                 $ph=implode(',',array_fill(0,count($lote),'?'));
                 $sql="SELECT {$columnas} FROM `instalaciones` WHERE `cuenta` IN ({$ph})
@@ -837,7 +858,7 @@ final class MotorComercial
         }
         $filas=[];
         if($ids) {
-            $cols='`cuenta`, `fecha`, `plan`'.(isset($this->columnasInst['precio_lista'])?', `precio_lista`':'');
+            $cols='`cuenta`, `fecha`, `plan`'.(isset($this->columnasInst['precio_pronto_pago'])?', `precio_pronto_pago`':'');
             $finExc=$fin->modify('+1 day')->format('Y-m-d');
             foreach(array_chunk(array_keys($ids),300) as $chunk) {
                 $ph=implode(',',array_fill(0,count($chunk),'?'));
