@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR COMERCIAL v0.2.2 · ARPU PRONTO PAGO
+ * TalIA / TotalXpedient · MOTOR COMERCIAL v0.2.3 · INTEGRACIÓN ARPU PPP + VELOCIDAD
  * ============================================================================
  * Ubicación: /plataforma/includes/motor_comercial.php
  * Contrato: MotorComercial(mysqli $conexion).
@@ -45,6 +45,11 @@ declare(strict_types=1);
  * - Se incorpora sumatoria explícita arpu_suma_pronto_pago, con alias heredado.
  * - La fuente CATALOGO_ACTUAL queda auditada para evitar confundirla con precio histórico.
  *
+ * CAMBIO v0.2.3 (28-OCT-2026) · INTEGRACIÓN DE RAMAS
+ * - Preserva la extensión Mix por Velocidad y su API pública añadidas a master.
+ * - Toda agregación de ARPU, incluyendo Velocidades, usa Precio Pronto Pago directo.
+ * - Conserva arpu_ingreso_neto como alias heredado para no romper consumidores.
+ *
  * Contrato público:
  *   resumirVendedores($cuentasCertificadas,$desde,$hasta,$diasIso=[]);
  *   indicadoresDiariosHc($eventos,$desde,$hasta);
@@ -54,7 +59,8 @@ declare(strict_types=1);
  */
 final class MotorComercial
 {
-    public const VERSION = '0.2.2-all-channels-arpu-pronto-pago';
+    public const VERSION = '0.2.3-integracion-arpu-ppp-velocidad';
+    public const VERSION_VELOCIDADES = '0.2.2-velocidad-catalogo-paquetes';
     public const ARPU_REGLA_CANONICA = 'PRECIO_PRONTO_PAGO_DIRECTO';
     private mysqli $db;
     private array $columnasInst;
@@ -111,6 +117,7 @@ final class MotorComercial
     {
         $campos = ['nombre_plan','play','tipo','bundle_app'];
         if (isset($this->columnasCatalogo['precio_pronto_pago'])) $campos[] = 'precio_pronto_pago';
+        if (isset($this->columnasCatalogo['velocidad_agrupada'])) $campos[] = 'velocidad_agrupada';
         $res = $this->db->query('SELECT '.implode(',', array_map(static fn($x) => '`'.$x.'`',$campos)).' FROM catalogo_paquetes');
         if ($res === false) throw new RuntimeException('No se pudo leer catalogo_paquetes');
         while ($r = $res->fetch_assoc()) {
@@ -120,6 +127,7 @@ final class MotorComercial
                 'play' => self::normalizar($r['play'] ?? ''),
                 'tipo' => self::normalizar($r['tipo'] ?? ''),
                 'bundle_app' => self::normalizar($r['bundle_app'] ?? ''),
+                'velocidad_agrupada' => self::normalizar($r['velocidad_agrupada'] ?? ''),
                 'precio_pronto_pago' => self::precioPositivo($r['precio_pronto_pago'] ?? null),
                 'conflictos' => [],
             ];
@@ -127,7 +135,7 @@ final class MotorComercial
                 $this->catalogo[$nombre] = $entrada;
                 continue;
             }
-            foreach (['play','tipo','bundle_app','precio_pronto_pago'] as $campo) {
+            foreach (['play','tipo','bundle_app','precio_pronto_pago','velocidad_agrupada'] as $campo) {
                 $prev = $this->catalogo[$nombre][$campo];
                 $nuevo = $entrada[$campo];
                 if (isset($this->catalogo[$nombre]['conflictos'][$campo])) continue;
@@ -890,4 +898,310 @@ final class MotorComercial
         return $semanas;
     }
 
+    // ─────────────────── EXTENSIÓN ADITIVA: MIX POR VELOCIDAD ───────────────────
+    // Conserva firmas públicas de Mix por Velocidad. ARPU sigue regla canónica PPP.
+    // Fuente única de velocidad: catalogo_paquetes.velocidad_agrupada.
+    // "No clasificada" incluye nulos, vacíos y velocidades fuera del catálogo.
+    private const VELOCIDADES_MIX = [
+        '100 MB', '150 MB', '250 MB', '350 MB', '500 MB',
+        '1,000 MB', '5,000 MB', '10,000 MB', 'No clasificada',
+    ];
+
+    /** Catálogo estable para ordenar las filas y los datos de las gráficas. */
+    public static function velocidadesMix(): array
+    {
+        return self::VELOCIDADES_MIX;
+    }
+
+    private function velocidadMixDePlan(string $plan): string
+    {
+        $cat = $this->catalogo[self::normalizar($plan)] ?? null;
+        $velocidad = self::normalizar($cat['velocidad_agrupada'] ?? '');
+        // Validación explícita: no atribuir velocidades inexistentes o desconocidas.
+        foreach (self::VELOCIDADES_MIX as $permitida) {
+            if ($velocidad === self::normalizar($permitida)) return $permitida;
+        }
+        return 'No clasificada';
+    }
+
+    /**
+     * Valida un rango inclusivo y los días ISO. Las consultas leen hasta
+     * medianoche EXCLUSIVA del día siguiente, admitiendo DATE y DATETIME.
+     */
+    private static function validarFechasVelocidad(string $desde, string $hasta, array $diasIso): array
+    {
+        $ini = DateTimeImmutable::createFromFormat('!Y-m-d', $desde);
+        $fin = DateTimeImmutable::createFromFormat('!Y-m-d', $hasta);
+        if (!$ini || !$fin || $ini->format('Y-m-d') !== $desde ||
+            $fin->format('Y-m-d') !== $hasta || $ini > $fin) {
+            throw new InvalidArgumentException('Mix velocidad: rango de fechas inválido');
+        }
+        foreach ($diasIso as $dia) {
+            if (!is_int($dia) || $dia < 1 || $dia > 7) {
+                throw new InvalidArgumentException('Mix velocidad: día ISO inválido');
+            }
+        }
+        return [$ini, $fin, array_values(array_unique($diasIso))];
+    }
+
+    private static function nuevaFilaVelocidad(): array
+    {
+        return [
+            'instalaciones' => 0,
+            'participacion_pct' => 0.0,
+            'arpu' => null,
+            'arpu_ingreso_neto' => 0.0,
+            'arpu_cuentas' => 0,
+            'bundle' => 0,
+            'no_bundle' => 0,
+            'bundle_sin_clasificar' => 0,
+            'bundle_pct' => 0.0,
+            'no_bundle_pct' => 0.0,
+            'bundle_sin_clasificar_pct' => 0.0,
+        ];
+    }
+
+    private static function nuevoMixVelocidad(string $desde, string $hasta, array $diasIso): array
+    {
+        $velocidades = [];
+        foreach (self::VELOCIDADES_MIX as $v) $velocidades[$v] = self::nuevaFilaVelocidad();
+        $dias = [];
+        for ($d = new DateTimeImmutable($desde), $fin = new DateTimeImmutable($hasta);
+             $d <= $fin; $d = $d->modify('+1 day')) {
+            if ($diasIso && !in_array((int)$d->format('N'), $diasIso, true)) continue;
+            $dia = $d->format('Y-m-d');
+            $dias[$dia] = [
+                'instalaciones' => 0,
+                'arpu' => null,
+                'arpu_ingreso_neto' => 0.0,
+                'arpu_cuentas' => 0,
+                'velocidades' => array_fill_keys(self::VELOCIDADES_MIX, 0),
+                'participacion_velocidad_pct' => array_fill_keys(self::VELOCIDADES_MIX, 0.0),
+            ];
+        }
+        $base = [
+            'total_instalaciones' => 0,
+            'arpu' => null,
+            'arpu_ingreso_neto' => 0.0,
+            'arpu_cuentas' => 0,
+            'velocidades' => $velocidades,
+            'dias' => $dias,
+        ];
+        return ['TODAS' => $base, '2P' => $base, '3P' => $base];
+    }
+
+    /**
+     * Acumula por REGISTRO cuando proviene de la consulta gerencial, o por
+     * CUENTA ÚNICA cuando proviene de los eventos certificados de Motor HC.
+     * Una cuenta sin Play identificado suma solo en TODAS, no se inventa 2P/3P.
+     */
+    private static function agregarAlMixVelocidad(
+        array &$mix, string $dia, int $cantidad, array $clasificacion, string $velocidad
+    ): void {
+        if ($cantidad <= 0) return;
+        $plays = ['TODAS'];
+        if ($clasificacion['play'] === 'doble_play') $plays[] = '2P';
+        elseif ($clasificacion['play'] === 'triple_play') $plays[] = '3P';
+        foreach ($plays as $play) {
+            $r = &$mix[$play];
+            if (!isset($r['dias'][$dia])) {
+                throw new LogicException('Mix velocidad: fecha fuera del rango/días seleccionado');
+            }
+            $v = &$r['velocidades'][$velocidad];
+            $d = &$r['dias'][$dia];
+            $r['total_instalaciones'] += $cantidad;
+            $v['instalaciones'] += $cantidad;
+            $d['instalaciones'] += $cantidad;
+            $d['velocidades'][$velocidad] += $cantidad;
+            $bundle = $clasificacion['bundle'];
+            if (!in_array($bundle, ['bundle','no_bundle','bundle_sin_clasificar'], true)) {
+                throw new LogicException('Mix velocidad: clasificación Bundle inválida');
+            }
+            $v[$bundle] += $cantidad;
+            if ($clasificacion['precio_arpu'] !== null) {
+                $prontoPago = (float)$clasificacion['precio_arpu'] * $cantidad;
+                $r['arpu_ingreso_neto'] += $prontoPago;
+                $r['arpu_cuentas'] += $cantidad;
+                $v['arpu_ingreso_neto'] += $prontoPago;
+                $v['arpu_cuentas'] += $cantidad;
+                $d['arpu_ingreso_neto'] += $prontoPago;
+                $d['arpu_cuentas'] += $cantidad;
+            }
+            unset($v, $d, $r);
+        }
+    }
+
+    private static function finalizarMixVelocidad(array &$mix): void
+    {
+        foreach ($mix as &$r) {
+            $total = $r['total_instalaciones'];
+            $r['arpu'] = $r['arpu_cuentas'] > 0
+                ? round($r['arpu_ingreso_neto'] / $r['arpu_cuentas'], 2) : null;
+            $conciliacion = 0;
+            foreach ($r['velocidades'] as &$v) {
+                $n = $v['instalaciones'];
+                $conciliacion += $n;
+                if ($v['bundle'] + $v['no_bundle'] + $v['bundle_sin_clasificar'] !== $n) {
+                    throw new LogicException('Mix velocidad: Bundle no concilia con instalaciones');
+                }
+                $v['participacion_pct'] = $total > 0 ? round(100 * $n / $total, 2) : 0.0;
+                $v['bundle_pct'] = $n > 0 ? round(100 * $v['bundle'] / $n, 2) : 0.0;
+                $v['no_bundle_pct'] = $n > 0 ? round(100 * $v['no_bundle'] / $n, 2) : 0.0;
+                $v['bundle_sin_clasificar_pct'] = $n > 0
+                    ? round(100 * $v['bundle_sin_clasificar'] / $n, 2) : 0.0;
+                $v['arpu'] = $v['arpu_cuentas'] > 0
+                    ? round($v['arpu_ingreso_neto'] / $v['arpu_cuentas'], 2) : null;
+            }
+            unset($v);
+            if ($conciliacion !== $total) throw new LogicException('Mix velocidad: total por velocidades no concilia');
+            $totalDiario = 0;
+            foreach ($r['dias'] as &$d) {
+                $n = $d['instalaciones'];
+                $totalDiario += $n;
+                $d['arpu'] = $d['arpu_cuentas'] > 0
+                    ? round($d['arpu_ingreso_neto'] / $d['arpu_cuentas'], 2) : null;
+                if (array_sum($d['velocidades']) !== $n) {
+                    throw new LogicException('Mix velocidad: suma diaria incongruente');
+                }
+                foreach ($d['velocidades'] as $velocidad => $cantidad) {
+                    $d['participacion_velocidad_pct'][$velocidad] = $n > 0
+                        ? round(100 * $cantidad / $n, 2) : 0.0;
+                }
+            }
+            unset($d);
+            if ($totalDiario !== $total) throw new LogicException('Mix velocidad: total diario no concilia');
+        }
+        unset($r);
+        if ($mix['2P']['total_instalaciones'] + $mix['3P']['total_instalaciones'] >
+            $mix['TODAS']['total_instalaciones']) {
+            throw new LogicException('Mix velocidad: Play supera el total');
+        }
+    }
+
+    /**
+     * Desglose gerencial por REGISTROS, con el alcance ya autorizado por el controlador.
+     * Admite el mismo scope que filtrosGerenciales(): REGION/DISTRITO/DISTRITOS/
+     * FOLIOS/VENDEDOR y, opcionalmente, canales.
+     *
+     * Resultado: ['por_play'=>['TODAS','2P','3P']], cada universo incluye
+     * total_instalaciones, arpu, velocidades (conteos, mix y ARPU) y dias
+     * (series porcentuales y ARPU); para comparar períodos, llamar por separado.
+     * El motor NO autoriza usuarios: el controlador debe validar el alcance.
+     */
+    public function distribucionVelocidadPorCatalogo(
+        string $desde, string $hasta, array $scope, array $diasIso = []
+    ): array {
+        [$ini, $fin, $diasIso] = self::validarFechasVelocidad($desde, $hasta, $diasIso);
+        $mix = self::nuevoMixVelocidad($desde, $hasta, $diasIso);
+        $precio = isset($this->columnasInst['precio_pronto_pago']) ? '`precio_pronto_pago`' : 'NULL';
+        $sql = "SELECT DATE(`fecha`) AS dia, `plan`, {$precio} AS precio,
+                       COUNT(`cuenta`) AS cantidad
+                FROM `instalaciones`
+                WHERE `fecha` >= ? AND `fecha` < ?
+                  AND `origen_prospecto` IS NOT NULL
+                  AND TRIM(`origen_prospecto`) <> '-'";
+        $args = [$desde, $fin->modify('+1 day')->format('Y-m-d')];
+        if ($diasIso) {
+            $sql .= ' AND (WEEKDAY(`fecha`) + 1) IN ('.implode(',', $diasIso).')';
+        }
+        $sql .= $this->filtrosGerenciales('instalaciones', $scope, $args);
+        $sql .= ' GROUP BY DATE(`fecha`), `plan`';
+        if (isset($this->columnasInst['precio_pronto_pago'])) $sql .= ', `precio_pronto_pago`';
+        $stmt = $this->db->prepare($sql);
+        if (!$stmt) throw new RuntimeException('Mix velocidad: no se pudo preparar instalaciones');
+        $stmt->bind_param(str_repeat('s', count($args)), ...$args);
+        if (!$stmt->execute()) throw new RuntimeException('Mix velocidad: consulta de instalaciones fallida');
+        $rs = $stmt->get_result();
+        if (!$rs) throw new RuntimeException('Mix velocidad: lectura de instalaciones fallida');
+        while ($row = $rs->fetch_assoc()) {
+            $n = (int)($row['cantidad'] ?? 0);
+            if ($n <= 0) continue;
+            $plan = (string)($row['plan'] ?? '');
+            $clasificacion = self::clasificarCuenta([
+                ['plan' => $plan, 'precio_pronto_pago' => $row['precio'] ?? null],
+            ], $this->catalogo);
+            self::agregarAlMixVelocidad($mix, (string)$row['dia'], $n,
+                $clasificacion, $this->velocidadMixDePlan($plan));
+        }
+        $rs->free();
+        $stmt->close();
+        self::finalizarMixVelocidad($mix);
+        return [
+            'version_velocidades' => self::VERSION_VELOCIDADES,
+            'fuente' => 'REGISTROS_INSTALACIONES',
+            'desde' => $desde, 'hasta' => $hasta,
+            'dias_iso' => $diasIso, 'por_play' => $mix,
+        ];
+    }
+
+    /**
+     * Desglose sobre CUENTAS ÚNICAS previamente certificadas/filtradas por HC.
+     * Comparte clasificarCuenta() con resumirVendedores(), incluida su auditoría
+     * de planes/precios ambiguos. NO se amplía el universo entregado por Motor HC.
+     * Usar este contrato para el filtro usuario/subordinados y el drill-down.
+     */
+    public function distribucionVelocidadHc(
+        array $eventos, string $desde, string $hasta, array $diasIso = []
+    ): array {
+        [$ini, $fin, $diasIso] = self::validarFechasVelocidad($desde, $hasta, $diasIso);
+        $mix = self::nuevoMixVelocidad($desde, $hasta, $diasIso);
+        $fechasCuenta = [];
+        foreach ($eventos as $evento) {
+            $cuenta = trim((string)($evento['cuenta'] ?? ''));
+            $fecha = substr((string)($evento['fecha'] ?? ''), 0, 10);
+            if ($cuenta === '' || $fecha < $desde || $fecha > $hasta) continue;
+            if ($diasIso && !in_array((int)(new DateTimeImmutable($fecha))->format('N'), $diasIso, true)) continue;
+            if (isset($fechasCuenta[$cuenta])) {
+                throw new LogicException('Mix velocidad HC: cuenta duplicada: '.$cuenta);
+            }
+            $fechasCuenta[$cuenta] = $fecha;
+        }
+        $filas = [];
+        if ($fechasCuenta) {
+            $cols = '`cuenta`, `fecha`, `plan`';
+            if (isset($this->columnasInst['precio_pronto_pago'])) $cols .= ', `precio_pronto_pago`';
+            $finExclusivo = $fin->modify('+1 day')->format('Y-m-d');
+            foreach (array_chunk(array_keys($fechasCuenta), 300) as $cuentas) {
+                $ph = implode(',', array_fill(0, count($cuentas), '?'));
+                $sql = "SELECT {$cols} FROM `instalaciones`
+                        WHERE `cuenta` IN ({$ph}) AND `fecha` >= ? AND `fecha` < ?";
+                $stmt = $this->db->prepare($sql);
+                if (!$stmt) throw new RuntimeException('Mix velocidad HC: no se pudo preparar consulta');
+                $args = array_merge($cuentas, [$desde, $finExclusivo]);
+                $stmt->bind_param(str_repeat('s', count($args)), ...$args);
+                if (!$stmt->execute()) throw new RuntimeException('Mix velocidad HC: consulta fallida');
+                $rs = $stmt->get_result();
+                if (!$rs) throw new RuntimeException('Mix velocidad HC: lectura fallida');
+                while ($r = $rs->fetch_assoc()) {
+                    $id = trim((string)($r['cuenta'] ?? ''));
+                    if (!isset($fechasCuenta[$id])) continue;
+                    $fechaFila = substr((string)($r['fecha'] ?? ''), 0, 10);
+                    if ($diasIso && !in_array((int)(new DateTimeImmutable($fechaFila))->format('N'), $diasIso, true)) continue;
+                    $filas[$id][] = $r;
+                }
+                $rs->free();
+                $stmt->close();
+            }
+        }
+        foreach ($fechasCuenta as $cuenta => $fecha) {
+            $filasCuenta = $filas[$cuenta] ?? [];
+            $clasificacion = self::clasificarCuenta($filasCuenta, $this->catalogo);
+            // Misma regla que clasificarCuenta(): dos planes distintos no se infieren.
+            $planes = [];
+            foreach ($filasCuenta as $fila) {
+                $plan = self::normalizar($fila['plan'] ?? '');
+                if ($plan !== '') $planes[$plan] = true;
+            }
+            $plan = count($planes) === 1 ? (string)array_key_first($planes) : '';
+            self::agregarAlMixVelocidad($mix, $fecha, 1,
+                $clasificacion, $this->velocidadMixDePlan($plan));
+        }
+        self::finalizarMixVelocidad($mix);
+        return [
+            'version_velocidades' => self::VERSION_VELOCIDADES,
+            'fuente' => 'CUENTAS_HC_CERTIFICADAS',
+            'desde' => $desde, 'hasta' => $hasta,
+            'dias_iso' => $diasIso, 'por_play' => $mix,
+        ];
+    }
 }
