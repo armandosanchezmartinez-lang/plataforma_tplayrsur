@@ -144,7 +144,7 @@
   let d;try{d=JSON.parse(script.textContent);}catch(e){return;}
   const ns='http://www.w3.org/2000/svg';const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 940 330');svg.setAttribute('preserveAspectRatio','none');
   const make=(name,attrs={},parent=svg)=>{const node=document.createElementNS(ns,name);for(const [k,v]of Object.entries(attrs))node.setAttribute(k,String(v));parent.appendChild(node);return node;};
-  const cutoff=Math.max(0,Math.min(23,Number.isInteger(d.cutoff)?d.cutoff:23));
+  const cutoff=Math.max(0,Math.min(24,Number.isInteger(d.cutoff)?d.cutoff:24));
   const visible=a=>(a||[]).slice(0,cutoff+1);
   const all=[...visible(d.sales),...visible(d.installs),...visible(d.previousSales),...visible(d.previousInstalls)].filter(Number.isFinite);
   const yMax=Math.max(9,Math.ceil(Math.max(0,...all)/9)*9);const W=850,H=245,x0=59,y0=277,x=i=>x0+(i/Math.max(1,cutoff))*W,y=v=>y0-(v/yMax)*H;
@@ -155,7 +155,7 @@
   for(const [name,color,width] of series){const data=d[name]||[];let path='';let seg=0;
     for(let i=0;i<=cutoff;i++){const v=data[i];if(!Number.isFinite(v)){seg=0;continue;}path+=(seg?' L ':' M ')+x(i).toFixed(1)+' '+y(v).toFixed(1);seg++;}
     make('path',{d:path,fill:'none',stroke:color,'stroke-width':width,'stroke-linejoin':'round','stroke-linecap':'round',opacity:width<3?'.82':'1'});
-    if(width>3)for(let i=0;i<=cutoff;i++){const v=data[i];if(!Number.isFinite(v)||v===0)continue;const c=make('circle',{cx:x(i),cy:y(v),r:4.3,fill:'#fff',stroke:color,'stroke-width':3});const title=make('title',{},c);title.textContent=`${name==='sales'?'Ventas':'Instalaciones'} ${i}:00: ${v}`;if(v>0){const label=make('text',{x:x(i),y:y(v)-11,'font-size':11,'font-weight':700,'text-anchor':'middle',fill:color});label.textContent=v;}}
+    if(width>3)for(let i=0;i<=cutoff;i++){const v=data[i];if(!Number.isFinite(v)||v===0)continue;const c=make('circle',{cx:x(i),cy:y(v),r:4.3,fill:'#fff',stroke:color,'stroke-width':3});const title=make('title',{},c);title.textContent=`${name==='sales'?'Ventas':'Instalaciones'} ${String(i-1).padStart(2,'0')}:00–${String(i-1).padStart(2,'0')}:59 (cierre ${String(i).padStart(2,'0')}:00): ${v}`;if(v>0){const label=make('text',{x:x(i),y:y(v)-11,'font-size':11,'font-weight':700,'text-anchor':'middle',fill:color});label.textContent=v;}}
   }
   el.appendChild(svg);
 })();
