@@ -2720,9 +2720,18 @@ if ($view !== 'ventas') {
                 $motorComercial05 = new MotorComercial($conexion);
                 // El universo HC multicanal exige el clasificador comercial homólogo.
                 // La incidencia solo desactiva el enriquecimiento, nunca las INS HC.
-                if (MotorComercial::VERSION !== '0.2.1-all-channels') {
+                // Compatibilidad explícita para despliegue y reversión segura:
+                // v0.2.1 anterior y v0.2.3 integrado (ARPU Precio Pronto Pago + Velocidad).
+                // No modifica los eventos HC ni la atribución de instalaciones.
+                $versionesComercialesCompatibles05 = [
+                    '0.2.1-all-channels',
+                    '0.2.3-integracion-arpu-ppp-velocidad',
+                ];
+                if (!in_array(MotorComercial::VERSION, $versionesComercialesCompatibles05, true)) {
                     throw new RuntimeException(
-                        'Motor Comercial incompatible. Requerido 0.2.1-all-channels; disponible '.MotorComercial::VERSION
+                        'Motor Comercial incompatible. Versiones permitidas: '.
+                        implode(', ', $versionesComercialesCompatibles05).
+                        '; disponible '.MotorComercial::VERSION
                     );
                 }
                 $mixBase05 = $motorComercial05->resumirVendedores(
