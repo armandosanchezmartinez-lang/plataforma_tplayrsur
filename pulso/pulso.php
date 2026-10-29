@@ -7,7 +7,8 @@ declare(strict_types=1);
  * Se conservan los nombres de tablas WP originales cuando estén presentes.
  */
 const PULSO_TIMEZONE = 'America/Merida';
-const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
+//const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
+const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexion.php';
 const PULSO_REFERENCE_CONNECTION_FILE = __DIR__ . '/../conexion.php';
 const PULSO_LOGIN_URL = '../login.php';
 const PULSO_HOME_URL = '../index.php';
@@ -459,10 +460,23 @@ function hc_user_district(array $hc): string {
     }
     return count($districts)===1?(string)array_key_first($districts):'';
 }
-/** Effective selection: self is the already enforced login permission, not an additional name-based filter. */
+/**
+ * El Director Distrital consulta el MISMO universo operativo que Ciudad.
+ * La posición seleccionada sigue disponible para el desglose jerárquico,
+ * pero no vuelve a filtrar las ventas/instalaciones del distrito por folio.
+ * La autorización del usuario se mantiene en hc_permission().
+ */
 function hc_effective_scope(string $scope,array $hc): string {
+    if($scope!=='' && explode('|',$scope,2)[0]==='director')return '';
     $self=$hc['identity']['scope']??'';
     return $scope!=='' && $scope===$self ? '' : $scope;
+}
+/** Director seleccionado y autorizado en la fotografía HC actual. */
+function pulso_director_district(array $f,array $hc): string {
+    $parts=explode('|',(string)($f['leader']??''),3);
+    if(count($parts)!==3||$parts[0]!=='director'||$parts[1]===''||$parts[2]==='')return '';
+    if(!hc_selected_valid($f,$hc))return '';
+    return (string)$parts[1];
 }
 /** Context with authorization constrained to the logged-in employee's HC subtree. */
 function ctx_hc(string $date): array {
@@ -824,10 +838,12 @@ function backlog(string $date,array $filter,array $inst,array $hc): array {
             }
             if(!$authorized)continue;
         }
-        $r['_realizada']=isset($instAccounts[$key]);$r['_status']=$status;
+        // Utilizar el mismo estado canónico en el conteo y en sus detalles.
+        // status_label conserva su valor original de FieldCloud para auditoría.
+        $col=['asignada'=>'assigned','pendiente'=>'pending','detenida'=>'detained'][$status];
+        $r['_realizada']=isset($instAccounts[$key]);$r['_status']=$col;
         $city=territory($r);
         if(!isset($by[$city]))$by[$city]=['assigned'=>0,'pending'=>0,'detained'=>0,'done'=>0,'total'=>0];
-        $col=['asignada'=>'assigned','pendiente'=>'pending','detenida'=>'detained'][$status];
         $by[$city][$col]++;$by[$city]['total']++;
         if($r['_realizada'])$by[$city]['done']++;
         $items[]=$r;
@@ -943,6 +959,26 @@ function pulso_daily_cutoff(string $date): array {
     }
     return ['hour'=>min($max,max(0,$declared)),'source'=>$source,'import'=>$row];
 }
+/**
+ * Universo de ventas: la fecha operativa ES fecha_cierre, no TS_CreacionHora.
+ * Si la oportunidad fue creada en otro día (o no tiene marca horaria),
+ * se contabiliza en su fecha de cierre, pero no participa en Ritmo del día.
+ * Cuando la creación sí ocurre el día del cierre, se aplica el corte horario
+ * exclusivo para no contar eventos futuros del mismo día.
+ */
+function pulso_sale_counts_at_cutoff(array $row,string $date,int $closingHour): bool {
+    if(substr((string)($row['fecha_cierre']??''),0,10)!==$date)return false;
+    $stamp=(string)($row['TS_CreacionHora']??'');
+    if(!preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d/', $stamp))return true;
+    if(substr($stamp,0,10)!==$date)return true;
+    return $closingHour>=24 || $stamp<$date.' '.sprintf('%02d:00:00',$closingHour);
+}
+/** Las ventas solo tienen posición horaria si creación y cierre son del mismo día. */
+function pulso_sale_charts_at_cutoff(array $row,string $date,int $closingHour): bool {
+    $stamp=(string)($row['TS_CreacionHora']??'');
+    return substr((string)($row['fecha_cierre']??''),0,10)===$date
+        && pulso_before_cutoff($row,'TS_CreacionHora',$date,$closingHour);
+}
 /** El día consultado se filtra con límite exclusivo; también el comparativo (-7 días). */
 function pulso_before_cutoff(array $row,string $field,string $date,int $closingHour): bool {
     $timestamp=(string)($row[$field]??'');
@@ -1011,12 +1047,20 @@ function daily_report(array $f): array {
     $hc=ctx_hc($f['date']);
     $ownDistrict=hc_user_district($hc);
     if($ownDistrict!=='')$f['district']=$ownDistrict;
+    // El Director filtra por distrito, igual que el selector Ciudad. No se
+    // cambia el alcance de la sesión ni se concede acceso a otros distritos.
+    $directorDistrict=pulso_director_district($f,$hc);
+    if($directorDistrict!=='')$f['district']=$directorDistrict;
     $cutoffInfo=pulso_daily_cutoff($f['date']);$cutoff=(int)$cutoffInfo['hour'];
-    $sales=array_values(array_filter(sales_for_date($f,$hc),static fn($r)=>pulso_before_cutoff($r,'TS_CreacionHora',$f['date'],$cutoff)));
+    $sales=array_values(array_filter(sales_for_date($f,$hc),static fn($r)=>pulso_sale_counts_at_cutoff($r,$f['date'],$cutoff)));
     $inst=array_values(array_filter(installs_for_date($f,$hc),static fn($r)=>pulso_before_cutoff($r,'finished_at',$f['date'],$cutoff)));
     $nd=nd_for_date($f,$hc);
-    $prev=$f;$prev['date']=date_shift($f['date'],-7);$prevHc=ctx_hc($prev['date']);
-    $lastSales=array_values(array_filter(sales_for_date($prev,$prevHc),static fn($r)=>pulso_before_cutoff($r,'TS_CreacionHora',$prev['date'],$cutoff)));
+    $prev=$f;$prev['date']=date_shift($f['date'],-7);
+    // Para Director el comparable semanal es el distrito, aun si cambió
+    // la posición/ocupante HC entre las dos fotografías semanales.
+    if($directorDistrict!=='')$prev['leader']='';
+    $prevHc=ctx_hc($prev['date']);
+    $lastSales=array_values(array_filter(sales_for_date($prev,$prevHc),static fn($r)=>pulso_sale_counts_at_cutoff($r,$prev['date'],$cutoff)));
     $lastInst=array_values(array_filter(installs_for_date($prev,$prevHc),static fn($r)=>pulso_before_cutoff($r,'finished_at',$prev['date'],$cutoff)));
     $allInst=db()->all("SELECT * FROM pulso_records WHERE event_date=? AND source='fieldcloud' AND is_completed=1 AND LOWER(TRIM(type_label)) IN ('instalación','instalacion')",[$f['date']]);
     $catalogData=catalog();$arpu=arpu_for($inst,$catalogData);
@@ -1024,7 +1068,7 @@ function daily_report(array $f): array {
     [$monday]=week_bounds($f['date']);
     $previousWeekStart=date_shift($monday,-7);$previousWeekEnd=date_shift($monday,-1);
     $prevWeekInst=[];
-    if($hc['allowed']===null&&$f['leader']===''){
+    if($hc['allowed']===null&&hc_effective_scope($f['leader'],$hc)===''){
         // For unrestricted regional reports ARPU only needs the installation facts,
         // so avoid seven owner/HC joins for the previous week.
         $previousFacts=db()->all("SELECT * FROM pulso_records WHERE event_date BETWEEN ? AND ? AND source='fieldcloud' AND LOWER(TRIM(type_label)) IN ('instalación','instalacion') AND LOWER(TRIM(status_label))='terminada' AND is_completed=1",[$previousWeekStart,$previousWeekEnd]);
@@ -1043,8 +1087,10 @@ function daily_report(array $f): array {
     // Nodos de la gráfica por HORA DE CIERRE: 09:00–09:59 se dibuja a las 10:00.
     $saleHours=array_fill(0,25,0);$instHours=array_fill(0,25,0);
     $prevSaleHours=array_fill(0,25,0);$prevInstHours=array_fill(0,25,0);
-    foreach([[$sales,'TS_CreacionHora',0],[$inst,'finished_at',1],[$lastSales,'TS_CreacionHora',2],[$lastInst,'finished_at',3]] as [$rows,$field,$series]){
+    foreach([[$sales,'TS_CreacionHora',0,$f['date']],[$inst,'finished_at',1,$f['date']],[$lastSales,'TS_CreacionHora',2,$prev['date']],[$lastInst,'finished_at',3,$prev['date']]] as [$rows,$field,$series,$day]){
         foreach($rows as $r){
+            // Una venta creada otro día sí se cuenta, pero nunca se grafica.
+            if(($series===0||$series===2)&&!pulso_sale_charts_at_cutoff($r,$day,$cutoff))continue;
             if(preg_match('/^\d{4}-\d\d-\d\d (\d\d):/',(string)($r[$field]??''),$match)){
                 $closing=(int)$match[1]+1;
                 if($closing<=$cutoff){
@@ -1681,7 +1727,7 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
 'conversion'=>'Distribución regional por distrito, líder y coach.','nd'=>'Motivos y concentración de no instalaciones del día.'][$view];
 ?><!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title><?=h($title)?> · Talia Pulso</title><link rel="stylesheet" href="assets/css/pulso.css?v=1.0.15-dos-conexiones"></head>
+<title><?=h($title)?> · Talia Pulso</title><link rel="stylesheet" href="../assets/css/pulso.css?v=1.0.21-record-tipografia"></head>
 <body class="tp-view-<?=h($view)?>"><div class="talia-pulso-shell is-front"><main class="talia-pulso-main">
 <?php if(in_array($view,['corte','importar','metas'],true)):?><section class="tp-hero"><div><span class="tp-kicker">CORTE DIARIO · TALIA PULSO · PHP INDEPENDIENTE</span><h1><?=h($title)?></h1><p><?=h($subtitle)?></p></div>
 <div class="tp-hero-actions"><?php if($view==='corte'): ?><span class="tp-chip-meta">Fecha: <b><?=h($f['date'])?></b></span><a class="tp-pill" href="<?=h(url(['view'=>'corte','date'=>date('Y-m-d')]))?>">Hoy</a><?php elseif($view==='metas'):?><a class="tp-btn tp-btn-gradient" href="#editar">Editar metas</a><?php endif;?></div></section><?php endif; ?>
@@ -1696,10 +1742,41 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
   $showRegionalLinks=$f['district']==='' && $f['channel']==='' && $f['leader']==='' && $selectedHierarchy==='';
   $hierarchyRows=tp_hierarchy_table($report['hc'],$selectedHierarchy,$sales,$inst,$nd);
   $showHierarchy=count(explode('|',$selectedHierarchy))===3 && in_array(explode('|',$selectedHierarchy)[0],['director','lider','coach'],true);
+  $topHierarchyRows=array_values(array_filter($hierarchyRows, static fn($row)=>((int)($row['depth'] ?? 0))===0));
+  $hierarchyUniqueRows=static function(array $rows, string $type): array {
+      $seen=[]; $unique=[];
+      foreach($rows as $row){
+          $key='';
+          if($type==='sales'){
+              $key=(string)($row['numero_oportunidad'] ?? $row['id'] ?? '');
+              if($key==='')$key='sales|'.md5(json_encode($row, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+          }elseif($type==='inst'){
+              $key=(string)($row['ot'] ?? $row['account'] ?? $row['id'] ?? '');
+              if($key==='')$key='inst|'.md5(json_encode($row, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+          }else{
+              $key=(string)($row['ot'] ?? $row['account'] ?? $row['id'] ?? '');
+              if($key==='')$key='nd|'.md5(json_encode($row, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+          }
+          if(isset($seen[$key]))continue;
+          $seen[$key]=true;
+          $unique[]=$row;
+      }
+      return $unique;
+  };
+  $hcTotalSales=[]; $hcTotalInst=[]; $hcTotalNd=[];
+  foreach($topHierarchyRows as $member){
+      $hcTotalSales=array_merge($hcTotalSales, $member['salesRows'] ?? []);
+      $hcTotalInst=array_merge($hcTotalInst, $member['instRows'] ?? []);
+      $hcTotalNd=array_merge($hcTotalNd, $member['ndRows'] ?? []);
+  }
+  $hcTotalSales=$hierarchyUniqueRows($hcTotalSales, 'sales');
+  $hcTotalInst=$hierarchyUniqueRows($hcTotalInst, 'inst');
+  $hcTotalNd=$hierarchyUniqueRows($hcTotalNd, 'nd');
   $detailSets=[
       'arpu:today'=>tp_detail_arpu($report['arpu']['all']['details']??[],$report['arpu']['all']['excluded']??[]),
       'arpu:previous'=>tp_detail_arpu($report['arpuPreviousWeek']['all']['details']??[],$report['arpuPreviousWeek']['all']['excluded']??[]),
   ];
+  $followupLabels=['assigned'=>'Asignadas','pending'=>'Pendientes','detained'=>'Detenidas'];
   foreach($d as $city=>$district){
       $set=tp_detail_arpu($report['arpu'][$city]['details']??[],$report['arpu'][$city]['excluded']??[]);$set['title']='ARPU del día · '.district_label($city);
       $detailSets['arpu:'.$city.':today']=$set;
@@ -1707,13 +1784,13 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
       $detailSets['arpu:'.$city.':previous']=$set;
       foreach(['assigned','pending','detained'] as $status){
           $items=array_values(array_filter($report['backlog']['rows'],static fn($r)=>territory($r)===$city && ($r['_status']??'')===$status));
-          $set=tp_detail_followup($items);$set['title']='Seguimiento · '.district_label($city).' · '.strtoupper($status);
+          $set=tp_detail_followup($items);$set['title']='Seguimiento · '.district_label($city).' · '.($followupLabels[$status]??$status);
           $detailSets['follow:'.$city.':'.$status]=$set;
       }
   }
   foreach(['assigned','pending','detained'] as $status){
       $items=array_values(array_filter($report['backlog']['rows'],static fn($r)=>($r['_status']??'')===$status));
-      $set=tp_detail_followup($items);$set['title']='Seguimiento · Total · '.strtoupper($status);
+      $set=tp_detail_followup($items);$set['title']='Seguimiento · Total · '.($followupLabels[$status]??$status);
       $detailSets['follow:all:'.$status]=$set;
   }
   foreach($hierarchyRows as $index=>$member){
@@ -1722,9 +1799,9 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
       $set=tp_detail_installs($member['instRows']);$set['title']='Instalaciones · '.$leaderLabel;$detailSets['hc:'.$index.':inst']=$set;
       $set=tp_detail_nd($member['ndRows']);$set['title']='ND · '.$leaderLabel;$detailSets['hc:'.$index.':nd']=$set;
   }
-  $detailSets['hc:all:sales']=tp_detail_sales($sales);
-  $detailSets['hc:all:inst']=tp_detail_installs($inst);
-  $detailSets['hc:all:nd']=tp_detail_nd($nd);
+  $detailSets['hc:all:sales']=tp_detail_sales($showHierarchy ? $hcTotalSales : $sales);
+  $detailSets['hc:all:inst']=tp_detail_installs($showHierarchy ? $hcTotalInst : $inst);
+  $detailSets['hc:all:nd']=tp_detail_nd($showHierarchy ? $hcTotalNd : $nd);
 ?>
 <section class="tp-card tp-daily-filterbar"><form class="tp-filterform" method="get"><input type="hidden" name="view" value="corte">
 <label>DÍA BASE<input type="date" name="date" value="<?=h($f['date'])?>"></label>
@@ -1737,17 +1814,22 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
 <article class="tp-kpi violet"><span class="tp-kpi-icon" aria-hidden="true">📈</span><span>VENTAS</span><strong><?=num(count($sales))?></strong><small>Semana pasada: <?=num(count($preS))?> · <?=pct(count($sales),max(1,count($preS)))?> completado</small><button class="tp-detail-open" data-detail="ventas">Detalle</button></article>
 <article class="tp-kpi cyan"><span class="tp-kpi-icon" aria-hidden="true">🔧</span><span>INSTALACIONES</span><strong><?=num(count($inst))?></strong><small>Semana pasada: <?=num(count($preI))?> · <?=pct(count($inst),max(1,count($preI)))?> completado</small><button class="tp-detail-open" data-detail="instalaciones">Detalle</button></article>
 <article class="tp-kpi"><?php if($showRegionalLinks):?><a data-regional-link class="tp-kpi-icon-link" href="<?=h(url(['view'=>'nd','date'=>$f['date']]))?>" aria-label="Abrir Cuentas con ND" title="Ver reporte ejecutivo de Cuentas con ND">🔄</a><a data-regional-link class="tp-conversion-title" href="<?=h(url(['view'=>'conversion','date'=>$f['date']]))?>" title="Abrir distribución regional de ventas, instalaciones y ND">CONVERSIÓN ↗</a><?php endif;?><span data-regional-placeholder class="tp-kpi-icon" aria-hidden="true" <?=$showRegionalLinks?'hidden':''?>>🔄</span><span data-regional-placeholder class="tp-conversion-label" <?=$showRegionalLinks?'hidden':''?>>CONVERSIÓN</span><strong><?=count($sales)?pct(count($inst),count($sales)):'—'?></strong><small>Instalaciones / ventas</small></article>
-<article class="tp-kpi"><span class="tp-kpi-icon" aria-hidden="true">🏆</span><span>RÉCORD HISTÓRICO POR HORA</span><strong class="tp-kpi-small">Ventas <?=num($report['record']['sales']??0)?> · Inst. <?=num($report['record']['installs']??0)?></strong><small>Récord del bloque <?=h(sprintf('%02d:00',$report['cutoff']))?> en el historial importado</small></article>
+<article class="tp-kpi tp-kpi-record"><span class="tp-kpi-icon" aria-hidden="true">🏆</span><span>RÉCORD HISTÓRICO POR HORA</span>
+<div class="tp-record-values" aria-label="Récord de ventas e instalaciones del bloque horario">
+  <div class="tp-record-unit"><span class="tp-record-label">VENTAS</span><strong><?=num($report['record']['sales']??0)?></strong></div>
+  <div class="tp-record-unit"><span class="tp-record-label">INSTALACIONES</span><strong><?=num($report['record']['installs']??0)?></strong></div>
+</div>
+<small>Récord del bloque <?=h(sprintf('%02d:00',$report['cutoff']))?> en el historial importado</small></article>
 <button type="button" class="tp-kpi tp-kpi-action" data-record-set="arpu:today" aria-haspopup="dialog" title="Ver cuentas utilizadas y excluidas del ARPU"><span class="tp-kpi-icon" aria-hidden="true">💲</span><span>ARPU</span><strong><?= $arpu!==null?'$'.number_format($arpu,2):'—' ?></strong><small><?=isset($report['arpu']['all'])?$report['arpu']['all']['valid'].' precios válidos de '.$report['arpu']['all']['count']:'Sin instalaciones válidas'?></small><small class="tp-click-hint">Ver cuentas incluidas y excluidas ↗</small></button>
 </section>
-<section class="tp-daily-layout"><div class="tp-leftstack"><article class="tp-card tp-rhythm"><div class="tp-card-head"><div><h2>Ritmo del día</h2><p>Última actualización: <strong><?=h($latestImport?:'Sin importaciones')?></strong></p><p>Ventas Salesforce (TS_CreacionHora) e instalaciones FieldCloud (Fecha término). Hora de corte <?=sprintf('%02d:00',$report['cutoff'])?>; se incluye únicamente el bloque anterior completo.</p></div><span class="tp-pill pink">Ritmo por hora</span></div>
-<?php [$svfirst,$svlast]=hours_extrema($sales,'TS_CreacionHora');[$infirst,$inlast]=hours_extrema($inst,'finished_at'); ?>
+<section class="tp-daily-layout"><div class="tp-leftstack"><article class="tp-card tp-rhythm"><div class="tp-card-head"><div><h2>Ritmo del día</h2><p>Última actualización: <strong><?=h($latestImport?:'Sin importaciones')?></strong></p><p>Ventas por Fecha de cierre; en la gráfica solo aparecen las creadas el mismo día (TS_CreacionHora). Instalaciones por Fecha término. Hora de corte <?=sprintf('%02d:00',$report['cutoff'])?>; se incluye únicamente el bloque anterior completo.</p></div><span class="tp-pill pink">Ritmo por hora</span></div>
+<?php $chartedSales=array_values(array_filter($sales,static fn($r)=>pulso_sale_charts_at_cutoff($r,$f['date'],$report['cutoff'])));[$svfirst,$svlast]=hours_extrema($chartedSales,'TS_CreacionHora');[$infirst,$inlast]=hours_extrema($inst,'finished_at'); ?>
 <div class="tp-moment-grid"><div><span>Primera venta</span><strong><?=h($svfirst)?></strong></div><div><span>Última venta</span><strong><?=h($svlast)?></strong></div><div><span>Primera instalación</span><strong><?=h($infirst)?></strong></div><div><span>Última instalación</span><strong><?=h($inlast)?></strong></div></div>
 <div class="tp-legend"><b class="sale"></b> Ventas por hora <b class="install"></b> Instalaciones por hora <b class="previous-sale"></b> Ventas semana pasada <b class="previous-install"></b> Instalaciones semana pasada</div>
 <div class="tp-chart-container" id="rhythmChart" role="img" aria-label="Comparativo de ventas e instalaciones por hora"></div>
 <script id="rhythmData" type="application/json"><?=json_encode(['sales'=>$report['saleHours'],'installs'=>$report['instHours'],'previousSales'=>$report['prevSaleHours'],'previousInstalls'=>$report['prevInstHours'],'cutoff'=>$report['cutoff']],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?></script>
-<p class="tp-chart-note">Cada punto representa las órdenes de una hora. Los periodos se comparan contra el mismo día de la semana anterior y se calculan a partir de datos importados.</p></article>
-<article class="tp-card"><div class="tp-card-head"><h2>Seguimiento de instalaciones por distrito</h2><p>Última importación FieldCloud: <?=h($report['backlog']['snapshot']?:'No disponible')?></p></div><div class="tp-table-wrap"><table class="tp-table compact"><thead><tr><th>DISTRITO</th><th>ASIGNADAS</th><th>%</th><th>PENDIENTES</th><th>%</th><th>DETENIDAS</th><th>%</th><th>TOTAL</th></tr></thead><tbody>
+<p class="tp-chart-note">Cada punto representa un bloque horario completo. Las ventas se contabilizan por Fecha de cierre; solo se grafican cuando la Fecha de cierre y la fecha de TS_CreacionHora coinciden. Las ventas creadas otro día permanecen en el total, pero no se incluyen en la gráfica. Se compara el mismo día de la semana anterior.</p></article>
+<article class="tp-card"><div class="tp-card-head"><h2>Seguimiento de instalaciones por distrito</h2><p>Última importación FieldCloud: <?=h($report['backlog']['snapshot']?:'No disponible')?></p></div><div class="tp-table-wrap"><table class="tp-table compact tp-followup-table"><thead><tr><th>DISTRITO</th><th>ASIGNADAS</th><th>%</th><th>PENDIENTES</th><th>%</th><th>DETENIDAS</th><th>%</th><th>TOTAL</th></tr></thead><tbody>
 <?php $bt=['assigned'=>0,'pending'=>0,'detained'=>0,'total'=>0];foreach($d as $key=>$row):$b=$row['backlog']??['assigned'=>0,'pending'=>0,'detained'=>0,'total'=>0];foreach($bt as $field=>$_)$bt[$field]+=$b[$field]??0; ?>
 <tr><td><b><?=h(district_label($key))?></b></td>
 <td><button type="button" class="tp-metric-link" data-record-set="follow:<?=h($key)?>:assigned" aria-label="Detalle de asignadas en <?=h(district_label($key))?>"><?=num($b['assigned'])?></button></td>
@@ -1812,14 +1894,14 @@ $bv=$row['bundleSales'];$bi=$row['bundleInstalls'];
  <td><button type="button" class="tp-metric-link" data-record-set="hc:<?=$i?>:inst"><?=num(count($member['instRows']))?></button></td>
  <td><button type="button" class="tp-metric-link" data-record-set="hc:<?=$i?>:nd"><?=num(count($member['ndRows']))?></button></td></tr>
  <?php endforeach; ?>
- <tr class="tp-total"><td>TOTAL DEL FILTRO</td><td><button type="button" class="tp-metric-link" data-record-set="hc:all:sales"><?=num(count($sales))?></button></td>
- <td><button type="button" class="tp-metric-link" data-record-set="hc:all:inst"><?=num(count($inst))?></button></td>
- <td><button type="button" class="tp-metric-link" data-record-set="hc:all:nd"><?=num(count($nd))?></button></td></tr>
+ <tr class="tp-total"><td>TOTAL DEL FILTRO</td><td><button type="button" class="tp-metric-link" data-record-set="hc:all:sales"><?=num(count($showHierarchy ? $hcTotalSales : $sales))?></button></td>
+ <td><button type="button" class="tp-metric-link" data-record-set="hc:all:inst"><?=num(count($showHierarchy ? $hcTotalInst : $inst))?></button></td>
+ <td><button type="button" class="tp-metric-link" data-record-set="hc:all:nd"><?=num(count($showHierarchy ? $hcTotalNd : $nd))?></button></td></tr>
  </tbody></table></div>
 </section>
 <?php endif; ?>
 </aside></section></div>
-<section class="tp-card tp-details" id="detalle-ventas" hidden><div class="tp-detail-header"><h2>Ventas contabilizadas</h2><button type="button" class="tp-detail-close" data-close-detail="ventas" aria-label="Cerrar detalle de ventas">Cerrar ×</button></div><div class="tp-table-wrap"><table class="tp-table"><thead><tr><th>Hora</th><th>Cuenta</th><th>Distrito</th><th>Canal</th><th>Líder</th><th>Coach</th><th>Vendedor</th></tr></thead><tbody><?php foreach($sales as $r):?><tr><td><?=h(substr((string)$r['TS_CreacionHora'],11,5))?></td><td><?=h($r['id_cuenta_brm'])?></td><td><?=h(district_label($r['distrito']))?></td><td><?=h($r['canal_venta'])?></td><td><?=h($r['_hierarchy']['leader_name']??$r['jefe_ventas'])?></td><td><?=h($r['_hierarchy']['coach_name']??$r['jefe_plaza'])?></td><td><?=h($r['_hierarchy']['seller_name']??$r['nombre_empleado'])?></td></tr><?php endforeach;?></tbody></table></div></section>
+<section class="tp-card tp-details" id="detalle-ventas" hidden><div class="tp-detail-header"><h2>Ventas contabilizadas</h2><button type="button" class="tp-detail-close" data-close-detail="ventas" aria-label="Cerrar detalle de ventas">Cerrar ×</button></div><div class="tp-table-wrap"><table class="tp-table"><thead><tr><th>Hora</th><th>Cuenta</th><th>Distrito</th><th>Canal</th><th>Líder</th><th>Coach</th><th>Vendedor</th></tr></thead><tbody><?php foreach($sales as $r):?><tr><td title="<?=h('Fecha de cierre: '.($r['fecha_cierre']??'').' · Fecha de creación: '.($r['TS_CreacionHora']??''))?>"><?=pulso_sale_charts_at_cutoff($r,$f['date'],$report['cutoff'])?h(substr((string)$r['TS_CreacionHora'],11,5)):'—'?></td><td><?=h($r['id_cuenta_brm'])?></td><td><?=h(district_label($r['distrito']))?></td><td><?=h($r['canal_venta'])?></td><td><?=h($r['_hierarchy']['leader_name']??$r['jefe_ventas'])?></td><td><?=h($r['_hierarchy']['coach_name']??$r['jefe_plaza'])?></td><td><?=h($r['_hierarchy']['seller_name']??$r['nombre_empleado'])?></td></tr><?php endforeach;?></tbody></table></div></section>
 <section class="tp-card tp-details" id="detalle-instalaciones" hidden><div class="tp-detail-header"><h2>Instalaciones contabilizadas</h2><button type="button" class="tp-detail-close" data-close-detail="instalaciones" aria-label="Cerrar detalle de instalaciones">Cerrar ×</button></div><div class="tp-table-wrap"><table class="tp-table"><thead><tr><th>Hora</th><th>Cuenta</th><th>OT</th><th>Distrito</th><th>Líder</th><th>Coach</th><th>Vendedor</th></tr></thead><tbody><?php foreach($inst as $r):
   $owner=$r['_owner']??[];$lineage=$r['_hierarchy']??[];
   $leaderName=$lineage['leader_name']??($owner['jefe_ventas']??'');
@@ -1973,4 +2055,4 @@ $date=$regional['date'];
 <?php foreach($targets as $r):?><tr><td><?=h($r['target_date'])?></td><td><?=h($r['city_norm'])?></td><td><?=h($r['sales_channel_norm']?:'Todos')?></td><td><?=num($r['sales_target'])?></td><td><?=num($r['installs_target'])?></td><td><?=h($r['target_source']==='xpedient'?'Xpedient ÷ 7':'Manual')?></td><td class="tp-actions-cell"><a href="<?=h(url(['view'=>'metas','edit'=>$r['id']]))?>#editar">Editar</a><form method="post" class="tp-deleteform" onsubmit="return confirm('¿Eliminar esta meta?')"><input type="hidden" name="csrf" value="<?=h(csrf())?>"><input type="hidden" name="action" value="delete_target"><input type="hidden" name="target_id" value="<?=h($r['id'])?>"><button type="submit" <?=!can_edit()?'disabled':''?>>Eliminar</button></form></td></tr><?php endforeach;?><?php if(!$targets):?><tr><td colspan="7">Sin metas registradas.</td></tr><?php endif;?></tbody></table></div></section>
 <?php endif; ?>
 <footer class="tp-footer">Talia Pulso · Aplicación PHP autónoma · Datos MySQL en tiempo de consulta · Usuario: <?=h($_SESSION['usuario']??'')?></footer>
-</main></div><script src="assets/js/pulso.js?v=1.0.16-corte-real" defer></script></body></html>
+</main></div><script src="../assets/js/pulso.js?v=1.0.18-fecha-cierre-director" defer></script></body></html>
