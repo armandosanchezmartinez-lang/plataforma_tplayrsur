@@ -7,8 +7,7 @@ declare(strict_types=1);
  * Se conservan los nombres de tablas WP originales cuando estén presentes.
  */
 const PULSO_TIMEZONE = 'America/Merida';
-//const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
-const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexion.php';
+const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
 const PULSO_REFERENCE_CONNECTION_FILE = __DIR__ . '/../conexion.php';
 const PULSO_LOGIN_URL = '../login.php';
 const PULSO_HOME_URL = '../index.php';
