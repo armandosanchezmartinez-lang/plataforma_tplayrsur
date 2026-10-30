@@ -1,14 +1,13 @@
 <?php
 declare(strict_types=1);
 /**
- * Talia Pulso Standalone v1.0.16 — PHP autónomo, sin src/, views/ ni config.php.
+ * Talia Pulso Standalone v1.0.22 — PHP autónomo, sin src/, views/ ni config.php.
  * Conexiones independientes: /plataforma/conexionTalia.php (WordPress),
  * /plataforma/conexion.php (HC, catálogo y metas semanales).
  * Se conservan los nombres de tablas WP originales cuando estén presentes.
  */
 const PULSO_TIMEZONE = 'America/Merida';
-//const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
-const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexion.php';
+const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
 const PULSO_REFERENCE_CONNECTION_FILE = __DIR__ . '/../conexion.php';
 const PULSO_LOGIN_URL = '../login.php';
 const PULSO_HOME_URL = '../index.php';
@@ -935,7 +934,15 @@ function pulso_cutoff_from_filename(?string $file): ?int {
     return null;
 }
 function pulso_daily_cutoff(string $date): array {
-    $isToday=$date===date('Y-m-d');
+    // Las fechas históricas son días completos; la hora del último archivo
+    // FieldCloud no debe recortar el día pasado al corte operativo de hoy.
+    // 24 significa un límite EXCLUSIVO al inicio del siguiente día y permite
+    // graficar el bloque 23:00–23:59 con etiqueta de cierre 24:00.
+    $today=date('Y-m-d');
+    if ($date < $today) {
+        return ['hour'=>24,'source'=>'dia_completo','import'=>null];
+    }
+    $isToday=$date===$today;
     $max=$isToday?(int)date('G'):24;
     $rows=db()->all("SELECT id,file_name,created_at,source,min_event_date,max_event_date
         FROM pulso_imports WHERE source='fieldcloud' AND (min_event_date IS NULL OR min_event_date<=?)
@@ -1822,7 +1829,7 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
 <small>Récord del bloque <?=h(sprintf('%02d:00',$report['cutoff']))?> en el historial importado</small></article>
 <button type="button" class="tp-kpi tp-kpi-action" data-record-set="arpu:today" aria-haspopup="dialog" title="Ver cuentas utilizadas y excluidas del ARPU"><span class="tp-kpi-icon" aria-hidden="true">💲</span><span>ARPU</span><strong><?= $arpu!==null?'$'.number_format($arpu,2):'—' ?></strong><small><?=isset($report['arpu']['all'])?$report['arpu']['all']['valid'].' precios válidos de '.$report['arpu']['all']['count']:'Sin instalaciones válidas'?></small><small class="tp-click-hint">Ver cuentas incluidas y excluidas ↗</small></button>
 </section>
-<section class="tp-daily-layout"><div class="tp-leftstack"><article class="tp-card tp-rhythm"><div class="tp-card-head"><div><h2>Ritmo del día</h2><p>Última actualización: <strong><?=h($latestImport?:'Sin importaciones')?></strong></p><p>Ventas por Fecha de cierre; en la gráfica solo aparecen las creadas el mismo día (TS_CreacionHora). Instalaciones por Fecha término. Hora de corte <?=sprintf('%02d:00',$report['cutoff'])?>; se incluye únicamente el bloque anterior completo.</p></div><span class="tp-pill pink">Ritmo por hora</span></div>
+<section class="tp-daily-layout"><div class="tp-leftstack"><article class="tp-card tp-rhythm"><div class="tp-card-head"><div><h2>Ritmo del día</h2><p>Última actualización: <strong><?=h($latestImport?:'Sin importaciones')?></strong></p><p>Ventas por Fecha de cierre; en la gráfica solo aparecen las creadas el mismo día (TS_CreacionHora). Instalaciones por Fecha término. <?php if(($report['cutoffInfo']['source']??'')==='dia_completo'): ?>Día histórico completo (00:00–23:59); el punto 24:00 cierra el último bloque del día.<?php else: ?>Hora de corte <?=sprintf('%02d:00',$report['cutoff'])?>; se incluye únicamente el bloque anterior completo.<?php endif; ?></p></div><span class="tp-pill pink">Ritmo por hora</span></div>
 <?php $chartedSales=array_values(array_filter($sales,static fn($r)=>pulso_sale_charts_at_cutoff($r,$f['date'],$report['cutoff'])));[$svfirst,$svlast]=hours_extrema($chartedSales,'TS_CreacionHora');[$infirst,$inlast]=hours_extrema($inst,'finished_at'); ?>
 <div class="tp-moment-grid"><div><span>Primera venta</span><strong><?=h($svfirst)?></strong></div><div><span>Última venta</span><strong><?=h($svlast)?></strong></div><div><span>Primera instalación</span><strong><?=h($infirst)?></strong></div><div><span>Última instalación</span><strong><?=h($inlast)?></strong></div></div>
 <div class="tp-legend"><b class="sale"></b> Ventas por hora <b class="install"></b> Instalaciones por hora <b class="previous-sale"></b> Ventas semana pasada <b class="previous-install"></b> Instalaciones semana pasada</div>
