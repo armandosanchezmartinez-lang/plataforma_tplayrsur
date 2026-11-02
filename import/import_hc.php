@@ -1,8 +1,8 @@
 <?php
 /**
- * TalIA / TotalXpedient · IMPORTADOR HC + STANDBY · 21-OCT-2026
+ * TalIA / TotalXpedient · IMPORTADOR HC + STANDBY · v5 · 31-OCT-2026
  * ============================================================================
- * Fuente esperada: hc_plataforma.xlsx generado por read_hc4_FINAL.py
+ * Fuente esperada: hc_plataforma.xlsx generado por read_hcv5.py
  * Hojas obligatorias:
  *   - Consolidado -> tabla hc
  *   - Standby     -> tabla hc_standby
@@ -19,14 +19,20 @@
  *     numero_talento_gs + tipo_standby + fecha_inicio
  * - No se almacena cantidad de días: se deriva de las fechas cuando sea necesario.
  *
+ * STATUS DERIVADO v5:
+ * - hc.status ya no replica INCAPACIDAD/VACACIONES del DETALLE de CH.
+ * - Valores canónicos permitidos: ACTIVO | VACANTE | STANDBY.
+ * - STANDBY es sólo una etiqueta derivada/auditable; las jornadas exactas
+ *   siguen gobernadas exclusivamente por hc_standby.
+ *
  * Sincronización:
  * - HC conserva la regla existente: reemplazo completo por (anio, semana)
  *   para todos los periodos presentes en Consolidado.
- * - STANDBY se sincroniza por ARCHIVO_ORIGEN. Antes de insertar la hoja
- *   canónica Standby, se eliminan de hc_standby los registros cuyo
- *   archivo_origen pertenece al conjunto de archivos fuente procesados en
- *   Consolidado/Standby. Esto permite corregir o retirar eventos sin dejar
- *   residuos históricos. El INSERT además usa ON DUPLICATE KEY UPDATE.
+ * - La hoja Standby de read_hcv5.py es el snapshot ACUMULADO completo más
+ *   reciente. Por ello, dentro de la misma transacción se reemplaza COMPLETA
+ *   la tabla hc_standby y después se inserta el snapshot canónico.
+ * - Esto permite que correcciones o retiros de Capital Humano no dejen
+ *   residuos históricos.
  * - HC y STANDBY se ejecutan dentro de UNA MISMA transacción.
  */
 
@@ -260,7 +266,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
                 ];
                 validar_headers_requeridos($mapa_hc, $requeridos_hc, 'Consolidado');
 
-                $status_validos = ['ACTIVO','VACANTE','INCAPACIDAD','VACACIONES'];
+                $status_validos = ['ACTIVO','VACANTE','STANDBY'];
                 $datos_hc = [];
                 $semanas_detectadas = [];
                 $archivos_fuente_detectados = [];
@@ -288,7 +294,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
                         valor_fila_por_header($f, $mapa_hc, 'STATUS')
                     );
 
-                    // A partir de SEM42/2026, STATUS es obligatorio.
+                    // STATUS v5 es derivado por TalIA. Desde SEM42/2026 se exige no vacío.
                     $status_obligatorio = ($v_anio > 2026) || ($v_anio === 2026 && $v_semana >= 42);
                     if ($status_obligatorio && $status === null) {
                         throw new Exception(
@@ -591,31 +597,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
                 mysqli_stmt_close($stmt_hc);
 
                 // ------------------------------------------------------------
-                // 4B) STANDBY: limpiar fuentes procesadas y reinsertar canónico
+                // 4B) STANDBY: reemplazo COMPLETO del snapshot acumulado v5
                 // ------------------------------------------------------------
-                if (!empty($archivos_fuente_detectados)) {
-                    $delete_standby = mysqli_prepare(
-                        $conexion,
-                        "DELETE FROM hc_standby WHERE archivo_origen = ?"
+                // read_hcv5.py entrega en la hoja Standby el snapshot acumulado
+                // completo del archivo semanal más reciente. hc_standby debe
+                // reflejar exactamente ese snapshot, sin residuos históricos.
+                if (!mysqli_query($conexion, "DELETE FROM hc_standby")) {
+                    throw new Exception(
+                        "Error al limpiar hc_standby previo: " . mysqli_error($conexion)
                     );
-                    if (!$delete_standby) {
-                        throw new Exception(
-                            "No se pudo preparar DELETE STANDBY: " . mysqli_error($conexion)
-                        );
-                    }
-
-                    foreach (array_keys($archivos_fuente_detectados) as $archivo_fuente) {
-                        mysqli_stmt_bind_param($delete_standby, "s", $archivo_fuente);
-                        if (!mysqli_stmt_execute($delete_standby)) {
-                            throw new Exception(
-                                "Error al sincronizar STANDBY de '{$archivo_fuente}': " .
-                                mysqli_stmt_error($delete_standby)
-                            );
-                        }
-                        $standby_eliminados += mysqli_stmt_affected_rows($delete_standby);
-                    }
-                    mysqli_stmt_close($delete_standby);
                 }
+                $standby_eliminados = mysqli_affected_rows($conexion);
 
                 $stmt_standby = mysqli_prepare($conexion, "
                     INSERT INTO hc_standby (
@@ -729,7 +721,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_FILES['archivo'])) {
                     "✅ Importación exitosa. " .
                     "HC: {$total_hc} registros importados; {$hc_eliminados} previos reemplazados; " .
                     count($semanas_detectadas) . " periodos sincronizados. " .
-                    "STANDBY: {$total_standby} eventos sincronizados " .
+                    "STANDBY acumulado: {$total_standby} eventos sincronizados " .
                     "({$conteo_standby_tipo['VACACIONES']} vacaciones / " .
                     "{$conteo_standby_tipo['INCAPACIDAD']} incapacidades); " .
                     "{$standby_eliminados} registros previos reemplazados. " .
@@ -829,7 +821,8 @@ button:disabled { opacity:.65; cursor:not-allowed; }
     <h2>📥 Importar HC + Standby</h2>
     <p class="sub">
         Importación transaccional por encabezados.<br>
-        Sincroniza Consolidado → hc y Standby → hc_standby.
+        Sincroniza Consolidado → hc y snapshot acumulado Standby → hc_standby.<br>
+        STATUS v5 derivado: ACTIVO / VACANTE / STANDBY.
     </p>
 
     <?php if ($mensaje): ?>
