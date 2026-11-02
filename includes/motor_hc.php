@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 /**
- * TalIA / TotalXpedient · MOTOR HC v0.6.9 · HIC + PRODUCTIVIDAD CENTRALIZADA
+ * TalIA / TotalXpedient · MOTOR HC v0.6.9 · HIC + PRODUCTIVIDAD CENTRALIZADA · PATCH STATUS v5
  * ============================================================================
  * Ubicación QA: /plataforma/includes/motor_hc_v0.6.9.php
  * Contrato: RankingAtribucionServiceV06(mysqli $conexion).
@@ -11,6 +11,12 @@ declare(strict_types=1);
  * EXTENSIÓN ADITIVA 22-OCT-2026: construcción de fotografía productiva,
  * jornadas-persona STANDBY y cálculo de productividad centralizados.
  * `version` original permanece estable para consumidores legacy.
+ *
+ * PATCH STATUS v5 · 02-NOV-2026
+ * - read_hcv5.py deriva hc.status como ACTIVO | VACANTE | STANDBY.
+ * - STANDBY es metadato/auditoría de plaza ocupada; NO descuenta jornadas por sí mismo.
+ * - La única autoridad temporal continúa siendo hc_standby por fechas reales.
+ * - Se mantiene compatibilidad histórica con INCAPACIDAD/VACACIONES en hc.status.
  *
  * REGLAS DE ATRIBUCIÓN
  * - Universo: todos los orígenes de instalaciones, sin exclusión por canal.
@@ -346,9 +352,9 @@ final class RankingAtribucionServiceV06
     // Sin intervalo real en hc_standby NO existe ausencia temporal.
     // Para preservar únicamente controles estructurales ajenos a INCAPACIDAD/VACACIONES,
     // se respeta hc_operativo salvo que el STATUS sea precisamente uno de esos dos estados,
-    // que desde v0.6.7 son sólo informativos/auditables.
+    // que desde v0.6.7/v5 son sólo informativos/auditables.
     $estado=strtoupper(trim((string)($seat['estado_hc']??$seat['status']??'ACTIVO')));
-    $statusTemporalSoloAuditoria=in_array($estado,['INCAPACIDAD','VACACIONES'],true);
+    $statusTemporalSoloAuditoria=in_array($estado,['STANDBY','INCAPACIDAD','VACACIONES'],true);
     $esOperativo=$statusTemporalSoloAuditoria
         ? true
         : ((int)($seat['hc_operativo']??1)===1);
@@ -542,8 +548,8 @@ final class RankingAtribucionServiceV06
      * Reglas:
      * - ACTIVO o blanco: HC total=1, ocupado=1, activo=1, operativo=1.
      * - VACANTE: sólo se acepta como vacante si el nombre contiene "VACANT".
-     * - INCAPACIDAD / VACACIONES: plaza ocupada y operativa por defecto; cualquier
-     *   descuento real se resolverá después exclusivamente con hc_standby.
+     * - STANDBY / INCAPACIDAD / VACACIONES: plaza ocupada y operativa por defecto;
+     *   cualquier descuento real se resuelve exclusivamente con hc_standby.
      * - Cualquier otro STATUS contradictorio se conserva como INCONSISTENTE para auditoría.
      */
     public static function clasificarEstadoVendedor(?string $status, ?string $nombre): array
@@ -563,7 +569,7 @@ final class RankingAtribucionServiceV06
             'valido'=>true,
         ];
 
-        if ($st==='ACTIVO' || $st==='INCAPACIDAD' || $st==='VACACIONES') {
+        if ($st==='ACTIVO' || $st==='STANDBY' || $st==='INCAPACIDAD' || $st==='VACACIONES') {
             $base['hc_activo']=1;
             $base['hc_operativo']=1;
             return $base;
