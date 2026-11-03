@@ -1,6 +1,6 @@
 <?php
 /**
- * Talia Mix Comercial Standalone v1.0.5 — módulo de /plataforma.
+ * Mix Comercial Standalone v1.0.6 — módulo de /plataforma.
  * Requiere sesión del sistema, conexion.php, motor_hc.php y motor_comercial.php 0.2.2.
  * No carga componentes de WordPress ni modifica la conexión compartida.
  */
@@ -357,12 +357,22 @@ try {
 ?>
 <!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mix comercial</title><link rel="stylesheet" href="../assets/css/mix_comercial.css?v=1.0.4"></head>
-<body><main class="mx-root" id="talia-mix-comercial">
+<title>Mix por Velocidad</title>
+<link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
+<link rel="stylesheet" href="../assets/css/mix_comercial.css?v=1.0.6"></head>
+<body class="page-mix-velocidad">
+<?php
+// Integración con el sidebar compartido de Plataforma, como ranking_comercial.php.
+// El sidebar se dibuja únicamente en la vista HTML; las peticiones API salen antes.
+$current_page = 'mix_comercial';
+include __DIR__ . '/../includes/sidebar.php';
+?>
+<main class="main">
+<div class="mx-root" id="talia-mix-comercial">
     <header class="mx-header mx-hero">
       <div class="mx-hero-copy">
         <span class="mx-hero-kicker">Comercial</span>
-        <h1 id="mx-page-title">Mix comercial</h1>
+        <h1 id="mx-page-title">Mix por Velocidad</h1>
         <p class="mx-hero-subtitle">Distribución comercial y desempeño de instalaciones</p>
         <p class="mx-hero-meta" id="mx-page-meta">Comparativo del periodo seleccionado · Inicializando tablero…</p>
       </div>
@@ -387,7 +397,8 @@ try {
     <section class="mx-panel" data-panel="matrix" hidden><div class="mx-panel-title"><div><h2>Matriz de desempeño</h2><p>Instalaciones y ARPU del mismo universo jerárquico visible</p></div><span id="mx-matrix-level">NIVEL: DIRECTORES</span></div><div class="mx-breadcrumb" id="mx-breadcrumb"></div><div class="mx-table-scroll"><table class="mx-table" id="mx-matrix-table"><thead></thead><tbody></tbody></table></div><p class="mx-footnote" id="mx-matrix-audit"></p></section>
     <section class="mx-detail"><div class="mx-panel-title"><div><h2>Mix comercial por velocidad</h2><p>Distribución por velocidad de las instalaciones del universo seleccionado</p></div><span id="mx-current-name"></span></div><div class="mx-table-scroll"><table class="mx-table" id="mx-speed-table"><thead></thead><tbody></tbody></table></div></section>
     <section class="mx-charts"><div class="mx-chart-box"><h3>Participación por velocidad</h3><p id="mx-speed-description">Distribución porcentual diaria de instalaciones</p><div class="mx-legend" id="mx-speed-legend"></div><div class="mx-chart" id="mx-speed-chart"></div></div><div class="mx-chart-box"><h3>Fluctuación del ARPU</h3><p>ARPU recalculado sobre instalaciones del universo visible por fecha</p><div class="mx-legend" id="mx-arpu-legend"></div><div class="mx-chart" id="mx-arpu-chart"></div></div></section>
-    <footer class="mx-footer">Talia Mix Comercial Standalone v1.0.5 · Fuente Motor Comercial + Motor HC · Sin WordPress</footer>
+    <footer class="mx-footer">Mix Comercial Standalone v1.0.6 · Fuente Motor Comercial + Motor HC · Sin WordPress</footer>
+</div>
 </main>
 <script>window.TaliaMixConfig=<?= json_encode(['csrf'=>$_SESSION['talia_mix_csrf'],'periods'=>$filters,'options'=>$options,'defaultView'=>(($_GET['view']??'mix')==='matrix'?'matrix':'mix')],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_QUOT|JSON_HEX_APOS|JSON_INVALID_UTF8_SUBSTITUTE) ?>;</script>
-<script src="../assets/js/mix_comercial.js?v=1.0.5" defer></script></body></html>
+<script src="../assets/js/mix_comercial.js?v=1.0.6" defer></script></body></html>
