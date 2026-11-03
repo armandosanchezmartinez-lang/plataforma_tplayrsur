@@ -5905,6 +5905,14 @@ if ($tx_geo_sum_count > 0) {
         .tx-yoy-secondary{display:flex;gap:7px;align-items:center;justify-content:space-between;
             font-size:.66rem;color:#64748b;font-weight:850;flex-wrap:wrap;margin:4px 0;}
         .tx-yoy-secondary strong{color:#334155;font-variant-numeric:tabular-nums;}
+        /* TalIA YOY: variaciones ejecutivas junto a la barra del año anterior. */
+        .tx-yoy-secondary-values{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;text-align:right;}
+        .tx-yoy-secondary-detail{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin:4px 0 6px;}
+        .tx-yoy-pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:.66rem;font-weight:800;line-height:1.2;border:1px solid transparent;}
+        .tx-yoy-pill.up{color:#047857;background:#ecfdf5;border-color:#a7f3d0;}
+        .tx-yoy-pill.down{color:#dc2626;background:#fef2f2;border-color:#fecaca;}
+        .tx-yoy-pill.flat{color:#a16207;background:#fffbeb;border-color:#fde68a;}
+        .tx-yoy-pill.na{color:#64748b;background:#f8fafc;border-color:#e2e8f0;}
         .tx-yoy-prev-track{height:7px;border-radius:9px;background:#eef2f7;overflow:hidden;border:1px solid #e2e8f0;}
         .tx-yoy-prev-fill{height:100%;background:repeating-linear-gradient(45deg,#94a3b8 0px,#94a3b8 4px,#cbd5e1 4px,#cbd5e1 8px);border-radius:9px;}
         .tx-yoy-legend{font-size:.66rem;color:#64748b;font-weight:800;margin:7px 0 0;line-height:1.35;}
@@ -6331,10 +6339,21 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                         </div>
                         <?php if ($tx_yoy_enabled):
                             $prevYoyReal = $item['yoy_real'] ?? null;
-                            $scaleYoyReal = max(1,$real_item,$meta_item,(int)($prevYoyReal??0));
+                            $scaleYoyReal = max(1, $real_item, $meta_item, (int)($prevYoyReal ?? 0));
+                            $yoyDiff = $prevYoyReal === null ? null : $real_item - (int)$prevYoyReal;
+                            $yoyPct = ($prevYoyReal === null || (int)$prevYoyReal <= 0)
+                                ? null : 100.0 * $yoyDiff / (int)$prevYoyReal;
+                            $yoyState = $yoyDiff === null ? 'na' : ($yoyDiff > 0 ? 'up' : ($yoyDiff < 0 ? 'down' : 'flat'));
                         ?>
-                        <div class="tx-yoy-secondary"><span>Año anterior · Instalaciones</span><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
-                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100*$prevYoyReal/$scaleYoyReal,2) ?>%"></div></div>
+                        <div class="tx-yoy-secondary">
+                            <span>Año anterior · Instalaciones</span>
+                            <div class="tx-yoy-secondary-values"><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
+                        </div>
+                        <div class="tx-yoy-secondary-detail">
+                            <span class="tx-yoy-pill <?= $yoyState ?>">Dif. <?= $yoyDiff === null ? 'N/D' : sprintf('%+d', $yoyDiff) ?></span>
+                            <span class="tx-yoy-pill <?= $yoyState ?>">% <?= $yoyPct === null ? 'N/D' : sprintf('%+.2f%%', $yoyPct) ?></span>
+                        </div>
+                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100 * $prevYoyReal / $scaleYoyReal, 2) ?>%"></div></div>
                         <?php endif; ?>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
@@ -6442,10 +6461,21 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                         </div>
                         <?php if ($tx_yoy_enabled):
                             $prevYoyReal = $item['yoy_real'] ?? null;
-                            $scaleYoyReal = max(1,$real_item,$meta_item,(int)($prevYoyReal??0));
+                            $scaleYoyReal = max(1, $real_item, $meta_item, (int)($prevYoyReal ?? 0));
+                            $yoyDiff = $prevYoyReal === null ? null : $real_item - (int)$prevYoyReal;
+                            $yoyPct = ($prevYoyReal === null || (int)$prevYoyReal <= 0)
+                                ? null : 100.0 * $yoyDiff / (int)$prevYoyReal;
+                            $yoyState = $yoyDiff === null ? 'na' : ($yoyDiff > 0 ? 'up' : ($yoyDiff < 0 ? 'down' : 'flat'));
                         ?>
-                        <div class="tx-yoy-secondary"><span>Año anterior · Instalaciones</span><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
-                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100*$prevYoyReal/$scaleYoyReal,2) ?>%"></div></div>
+                        <div class="tx-yoy-secondary">
+                            <span>Año anterior · Instalaciones</span>
+                            <div class="tx-yoy-secondary-values"><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
+                        </div>
+                        <div class="tx-yoy-secondary-detail">
+                            <span class="tx-yoy-pill <?= $yoyState ?>">Dif. <?= $yoyDiff === null ? 'N/D' : sprintf('%+d', $yoyDiff) ?></span>
+                            <span class="tx-yoy-pill <?= $yoyState ?>">% <?= $yoyPct === null ? 'N/D' : sprintf('%+.2f%%', $yoyPct) ?></span>
+                        </div>
+                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100 * $prevYoyReal / $scaleYoyReal, 2) ?>%"></div></div>
                         <?php endif; ?>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
@@ -7317,37 +7347,60 @@ const pluginTotalesArriba = {
     id: 'pluginTotalesArriba',
     afterDatasetsDraw: (chart) => {
         if (!chart.data.datasets || !chart.data.datasets.length) return;
-        // Las series semanales muestran su último TOTAL en la cabecera fija.
-        // No dibujar sobre la última barra: Chart.js recorta el texto en el borde.
-        if (txWeeklyMode) return;
         const ctx = chart.ctx;
-        chart.data.datasets[0].data.forEach((_, index) => {
-            let total = 0;
-            let topY = chart.scales.y.bottom;
-            let metaX = 0;
-            let hasData = false;
 
-            for (let k = 0; k < chart.data.datasets.length; k++) {
-                if (chart.data.datasets[k].txYoyHistorical) continue;
-                const meta = chart.getDatasetMeta(k);
-                const val = chart.data.datasets[k].data[index];
-                if (chart.isDatasetVisible(k) && val > 0) {
-                    total += val;
-                    metaX = meta.data[index].x;
-                    if (meta.data[index].y < topY) topY = meta.data[index].y;
-                    hasData = true;
+        // Mantener etiquetas del total ACTUAL en mensual/diario.
+        // En semanal se omiten para evitar saturacion.
+        if (!txWeeklyMode && chart.data.datasets[0] && Array.isArray(chart.data.datasets[0].data)) {
+            chart.data.datasets[0].data.forEach((_, index) => {
+                let total = 0, topY = chart.scales.y.bottom, metaX = 0, hasData = false;
+                for (let k = 0; k < chart.data.datasets.length; k++) {
+                    if (chart.data.datasets[k].txYoyHistorical || !chart.isDatasetVisible(k)) continue;
+                    const meta = chart.getDatasetMeta(k);
+                    const val = Number(chart.data.datasets[k].data[index] || 0);
+                    if (val > 0 && meta.data[index]) {
+                        total += val;
+                        metaX = meta.data[index].x;
+                        topY = Math.min(topY, meta.data[index].y);
+                        hasData = true;
+                    }
                 }
-            }
+                if (hasData && total > 0) {
+                    ctx.save();
+                    ctx.fillStyle = '#1a2540';
+                    ctx.font = (txDailyMode ? 'bold 10px' : 'bold 13px') + ' "Segoe UI", sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(total.toLocaleString('es-MX'), metaX, topY - 8);
+                    ctx.restore();
+                }
+            });
+        }
 
-            if (hasData && total > 0) {
-                ctx.save();
-                ctx.fillStyle = '#1a2540'; 
-                ctx.font = (txDailyMode ? 'bold 10px' : 'bold 13px') + ' "Segoe UI", sans-serif'; 
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'bottom';
-                ctx.fillText(total, metaX, topY - 8); 
-                ctx.restore();
-            }
+        // Etiquetas explicitas sobre el TOTAL DEL ANO ANTERIOR.
+        // En semanal se rotulan hasta 10 puntos mas el ultimo, sin consultas extra.
+        const historicalIndex = chart.data.datasets.findIndex(ds => ds && ds.txYoyHistorical);
+        if (!txYoyEnabled || historicalIndex < 0 || !chart.isDatasetVisible(historicalIndex)) return;
+        const ds = chart.data.datasets[historicalIndex];
+        const meta = chart.getDatasetMeta(historicalIndex);
+        const values = Array.isArray(ds.data) ? ds.data.map(v => Number(v || 0)) : [];
+        const nonZero = values.filter(v => v > 0).length;
+        const step = txWeeklyMode ? Math.max(1, Math.ceil(nonZero / 10)) : 1;
+        let seen = 0;
+        const lastValidIndex = values.findLastIndex(v => v > 0);
+        values.forEach((value, index) => {
+            if (value <= 0) return;
+            const shouldLabel = ((seen++ % step) === 0) || index === lastValidIndex;
+            if (!shouldLabel) return;
+            const point = meta.data[index];
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+            ctx.save();
+            ctx.fillStyle = '#475569';
+            ctx.font = (txWeeklyMode ? '600 9px' : '700 10px') + ' "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(value.toLocaleString('es-MX'), point.x, point.y - 8);
+            ctx.restore();
         });
     }
 };
@@ -7489,7 +7542,7 @@ function txEvoDatasets(matrix, historicalTotals=[]){
         actual.push({
             type: 'line', txYoyHistorical:true, label:'Total año anterior',
             data:historicalTotals, borderColor:'#475569', backgroundColor:'#475569',
-            pointRadius:1.5, pointHoverRadius:4, borderDash:[6,4], borderWidth:2,
+            pointRadius: txWeeklyMode ? 2 : 2.5, pointHoverRadius:5, pointHitRadius:12, borderDash:[6,4], borderWidth:2,
             tension:0.2, fill:false, stack:'historico', order:0
         });
     }
