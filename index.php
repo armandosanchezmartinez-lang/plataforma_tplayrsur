@@ -602,7 +602,10 @@ $distritos_sql = "'" . implode("','", array_map(function($d) use ($conexion) {
     return mysqli_real_escape_string($conexion, $d);
 }, $distritos_equivalentes)) . "'";
 
-$por_distrito = (!$scope_activo && in_array($rol_consulta, ['admin', 'director_regional', 'director_distrital']));
+// Director Regional mantiene su perfil pero visualiza la region completa.
+// Solo Director Distrital aplica el filtro por su distrito.
+$tx_consulta_regional = (!$scope_activo && in_array($rol_consulta, ['admin','director_regional'], true));
+$por_distrito = (!$scope_activo && $rol_consulta === 'director_distrital');
 
 // Contexto jerárquico temprano para activar meta propia en tablero inicial o scope.
 // IMPORTANTE: debe calcularse antes de $mostrar_meta.
@@ -626,10 +629,10 @@ if (!empty($root_dashboard_id_pre) && in_array($nivel_actual_dashboard_pre, ['li
     );
 }
 
-$mostrar_meta = $por_distrito || $scope_filtrar_por_distrito || (($meta_propia_operativa_dashboard ?? 0) > 0);
+$mostrar_meta = $tx_consulta_regional || $por_distrito || $scope_filtrar_por_distrito || (($meta_propia_operativa_dashboard ?? 0) > 0);
 
 // ── INSTALACIONES ────────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if (in_array($rol_consulta, ['admin','director_regional'], true)) {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-'");
 } elseif ($scope_filtrar_por_distrito) {
     $r_inst = mysqli_query($conexion, "SELECT COUNT(cuenta) as total FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
@@ -651,7 +654,7 @@ if ($rol_consulta === 'admin') {
 $kpi_inst = $r_inst ? (mysqli_fetch_assoc($r_inst)['total'] ?? 0) : 0;
 
 // ── VENTAS ───────────────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if (in_array($rol_consulta, ['admin','director_regional'], true)) {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE $tx_dashboard_where_ventas");
 } elseif ($scope_filtrar_por_distrito) {
     $r_vent = mysqli_query($conexion, "SELECT COUNT(*) as total FROM ventas WHERE $tx_dashboard_where_ventas AND distrito IN ($scope_distritos_sql)");
@@ -712,7 +715,7 @@ function tx_index_kpi_previo(
     }
     if ($esInst) $where .= " AND origen_prospecto <> '-'";
     $withFolios = false;
-    if ($rolConsulta === 'admin') {
+    if (in_array($rolConsulta, ['admin','director_regional'], true)) {
         // Admin: toda Región SUR (misma consulta que KPI vigente).
     } elseif ($scopeDistrito) {
         $where .= " AND distrito IN ($scopeDistritos)";
@@ -837,7 +840,7 @@ $tx_cmp_base = [
 // ── HC ───────────────────────────────────────────────────────────────────────
 $kpi_hc_act = 0; $kpi_hc_vac = 0;
 if ($semana_actual && $anio_actual) {
-    if ($rol_consulta === 'admin') {
+    if (in_array($rol_consulta, ['admin','director_regional'], true)) {
         $r_hc_act = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs NOT LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
         $r_hc_vac = mysqli_query($conexion, "SELECT COUNT(*) as total FROM hc WHERE numero_talento_gs LIKE '%VACANTE%' AND semana=$semana_actual AND anio=$anio_actual AND posicion IN ($puestos_comerciales)");
     } else {
@@ -880,7 +883,7 @@ if ($mostrar_meta) {
         $kpi_meta_acum = (int)$meta_propia_operativa_dashboard;
         $kpi_meta_pct  = $kpi_meta_acum > 0 ? round(($kpi_inst / $kpi_meta_acum) * 100) : 0;
     } else {
-        if ($rol_consulta === 'admin') {
+        if (in_array($rol_consulta, ['admin','director_regional'], true)) {
             $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE " . tx_dashboard_meta_fecha_where() . "");
         } elseif ($scope_filtrar_por_distrito) {
             $r_meta = mysqli_query($conexion, "SELECT SUM(meta_diaria) as meta_diaria_total FROM metas_instalacion WHERE " . tx_dashboard_meta_fecha_where() . " AND distrito IN ($scope_distritos_sql)");
@@ -2390,7 +2393,7 @@ $cumplimiento_canal_items = [];
 $mostrar_cumplimiento_canal = false;
 $scope_canal_sql = '';
 
-if ($rol_consulta === 'admin') {
+if (in_array($rol_consulta, ['admin','director_regional'], true)) {
     $mostrar_cumplimiento_canal = true;
     $scope_canal_sql = '';
 } elseif ($scope_filtrar_por_distrito) {
@@ -2460,7 +2463,7 @@ if ($tx_stg_aplicable) {
     $inst_2p = $tx_stg_ok ? $tx_stg_mix_2p : 0;
     $inst_3p = $tx_stg_ok ? $tx_stg_mix_3p : 0;
 } else {
-if ($rol_consulta === 'admin') {
+if (in_array($rol_consulta, ['admin','director_regional'], true)) {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-'");
 } elseif ($scope_filtrar_por_distrito) {
     $r_mix_inst = mysqli_query($conexion, "SELECT SUM(plan LIKE '%TV%') as p3, SUM(plan NOT LIKE '%TV%') as p2 FROM instalaciones WHERE $tx_dashboard_where_inst AND origen_prospecto <> '-' AND distrito IN ($scope_distritos_sql)");
@@ -2489,7 +2492,7 @@ $inst_2p = (int)($mix_inst['p2'] ?? 0);
 }
 
 // ── MIX VENTAS ───────────────────────────────────────────────────────────────
-if ($rol_consulta === 'admin') {
+if (in_array($rol_consulta, ['admin','director_regional'], true)) {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE $tx_dashboard_where_ventas");
 } elseif ($scope_filtrar_por_distrito) {
     $r_mix_vent = mysqli_query($conexion, "SELECT SUM(nombre_plan LIKE '%TV%') as p3, SUM(nombre_plan NOT LIKE '%TV%') as p2 FROM ventas WHERE $tx_dashboard_where_ventas AND distrito IN ($scope_distritos_sql)");
@@ -2625,7 +2628,7 @@ if ($tx_evo_daily_custom) {
         $mes_arpu=(int)$fecha_mes->format('n');$anio_arpu=(int)$fecha_mes->format('Y');
         $ultimo_dia_mes_arpu=(int)$fecha_mes->format('t');
         $cond_arpu_dia=($rango_mode==='completo' || $periodo==='semanal' || $tx_dashboard_cruza_mes)?'':(' AND DAY(fecha) BETWEEN '.min($dia_inicio_dashboard,$ultimo_dia_mes_arpu).' AND '.min($dia_fin_dashboard,$ultimo_dia_mes_arpu));
-        if ($rol_consulta==='admin') $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia);
+        if ($tx_consulta_regional) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia);
         elseif ($scope_filtrar_por_distrito) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,$scope_distritos_sql);
         elseif ($por_distrito) $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,$distritos_sql);
         else $arpu_data[$idx_arpu]=tx_arpu_instalaciones_dashboard($conexion,$mes_arpu,$anio_arpu,$cond_arpu_dia,'',$folio_ids);
@@ -2756,9 +2759,9 @@ if ($tx_evo_desde_enero && $periodo !== 'semanal' && !$tx_evo_daily_custom) {
     $segmento_inst_expr_evo=tx_segmento_instalacion_expr_dashboard($conexion);
     $query_inst_oferta = "SELECT MONTH(fecha) as mes, YEAR(fecha) as anio, ($segmento_inst_expr_evo) as oferta, COUNT(*) as total FROM instalaciones
        WHERE fecha >= '$fecha_inicio_evolucion' $cond_dia_evolucion_fecha AND origen_prospecto <> '-' ";
-    if ($rol_consulta!=='admin' && $scope_filtrar_por_distrito) $query_inst_oferta.=" AND distrito IN ($scope_distritos_sql)";
-    elseif ($rol_consulta!=='admin' && $por_distrito) $query_inst_oferta.=" AND distrito IN ($distritos_sql)";
-    elseif ($rol_consulta!=='admin' && !empty($folio_ids)) $query_inst_oferta.=" AND folio_empleado IN (".tx_sql_in_escaped($conexion,$folio_ids).")";
+    if (!in_array($rol_consulta, ['admin','director_regional'], true) && $scope_filtrar_por_distrito) $query_inst_oferta.=" AND distrito IN ($scope_distritos_sql)";
+    elseif (!in_array($rol_consulta, ['admin','director_regional'], true) && $por_distrito) $query_inst_oferta.=" AND distrito IN ($distritos_sql)";
+    elseif (!in_array($rol_consulta, ['admin','director_regional'], true) && !empty($folio_ids)) $query_inst_oferta.=" AND folio_empleado IN (".tx_sql_in_escaped($conexion,$folio_ids).")";
     $query_inst_oferta.=' GROUP BY anio, mes, oferta';
     $res_io=mysqli_query($conexion,$query_inst_oferta);
     while($res_io && ($row=mysqli_fetch_assoc($res_io))) {
@@ -2770,9 +2773,9 @@ if ($tx_evo_desde_enero && $periodo !== 'semanal' && !$tx_evo_daily_custom) {
     }
     $segmento_venta_expr_evo=tx_segmento_venta_expr_dashboard($conexion,'v');
     $query_vent_oferta="SELECT MONTH(v.fecha_cierre) as mes,YEAR(v.fecha_cierre) as anio,($segmento_venta_expr_evo) as oferta,COUNT(*) as total FROM ventas v WHERE v.fecha_cierre >= '$fecha_inicio_evolucion' ".str_replace('fecha_cierre','v.fecha_cierre',$cond_dia_evolucion_fecha_cierre)." ";
-    if ($rol_consulta!=='admin' && $scope_filtrar_por_distrito) $query_vent_oferta.=" AND v.distrito IN ($scope_distritos_sql)";
-    elseif ($rol_consulta!=='admin' && $por_distrito) $query_vent_oferta.=" AND v.distrito IN ($distritos_sql)";
-    elseif ($rol_consulta!=='admin' && !empty($folio_ids)) $query_vent_oferta.=" AND v.folio_empleado IN (".tx_sql_in_escaped($conexion,$folio_ids).")";
+    if (!in_array($rol_consulta, ['admin','director_regional'], true) && $scope_filtrar_por_distrito) $query_vent_oferta.=" AND v.distrito IN ($scope_distritos_sql)";
+    elseif (!in_array($rol_consulta, ['admin','director_regional'], true) && $por_distrito) $query_vent_oferta.=" AND v.distrito IN ($distritos_sql)";
+    elseif (!in_array($rol_consulta, ['admin','director_regional'], true) && !empty($folio_ids)) $query_vent_oferta.=" AND v.folio_empleado IN (".tx_sql_in_escaped($conexion,$folio_ids).")";
     $query_vent_oferta.=' GROUP BY anio, mes, oferta';
     $res_vo=mysqli_query($conexion,$query_vent_oferta);
     while($res_vo && ($row=mysqli_fetch_assoc($res_vo))) {
@@ -4562,7 +4565,7 @@ if ($tx_geo_col_plan !== '') {
 }
 
 $tx_geo_where_scope = "";
-if ($rol_consulta === 'admin') {
+if (in_array($rol_consulta, ['admin','director_regional'], true)) {
     $tx_geo_where_scope = "";
 } elseif ($scope_filtrar_por_distrito) {
     $tx_geo_where_scope = " AND distrito IN ($scope_distritos_sql)";
@@ -4648,7 +4651,7 @@ if ($tx_geo_mostrar_filtro_canales && !empty($tx_geo_canales_sel)) {
 
     if ($tx_geo_col_venta_canal !== '') {
         $tx_geo_where_scope_ventas = '';
-        if ($rol_consulta === 'admin') {
+        if (in_array($rol_consulta, ['admin','director_regional'], true)) {
             $tx_geo_where_scope_ventas = '';
         } elseif ($scope_filtrar_por_distrito) {
             $tx_geo_where_scope_ventas = " AND distrito IN ($scope_distritos_sql)";
