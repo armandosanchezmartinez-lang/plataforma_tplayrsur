@@ -1,4 +1,4 @@
-/* Talia Mix Comercial Standalone v1.0.5 - sin dependencias externas. */
+/* Mix Comercial Standalone v1.0.6 - sin dependencias externas. */
 (() => {
   'use strict';
   const root=document.getElementById('talia-mix-comercial');
@@ -39,9 +39,9 @@
   }
   function updateHero(){
     const title=$('#mx-page-title'),meta=$('#mx-page-meta');
-    if(title) title.textContent=state.view==='mix'?'Mix comercial':'Matriz de desempeño';
+    if(title) title.textContent='Mix por Velocidad';
     if(meta) meta.textContent=heroMeta();
-    document.title=title?title.textContent:'Mix comercial';
+    document.title='Mix por Velocidad';
   }
   function setBusy(working){state.busy=working;$('.mx-loading').hidden=!working;}
   function showError(e){$('.mx-error').textContent=e?String(e):'';$('.mx-error').hidden=!e;}

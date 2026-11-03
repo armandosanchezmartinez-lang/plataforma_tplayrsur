@@ -1734,8 +1734,22 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
 'conversion'=>'Distribución regional por distrito, líder y coach.','nd'=>'Motivos y concentración de no instalaciones del día.'][$view];
 ?><!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title><?=h($title)?> · Talia Pulso</title><link rel="stylesheet" href="../assets/css/pulso.css?v=1.0.21-record-tipografia"></head>
-<body class="tp-view-<?=h($view)?>"><div class="talia-pulso-shell is-front"><main class="talia-pulso-main">
+<title><?=h($title)?> · Talia Pulso</title>
+<link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
+<link rel="stylesheet" href="../assets/css/pulso.css?v=1.0.23-sidebar">
+<style>
+/* Pulso comparte la columna principal de Xpedient, sin alterar su sidebar. */
+body.page-pulso .pulso-page-main { min-width:0; }
+body.page-pulso .pulso-page-main .talia-pulso-shell { width:100%; box-sizing:border-box; }
+</style></head>
+<body class="page-ranking page-pulso tp-view-<?=h($view)?>">
+<?php
+// Sidebar central de la plataforma, siguiendo ranking_comercial.php.
+$current_page = 'pulso';
+include __DIR__ . '/../includes/sidebar.php';
+?>
+<main class="main pulso-page-main">
+<div class="talia-pulso-shell is-front"><div class="talia-pulso-main">
 <?php if(in_array($view,['corte','importar','metas'],true)):?><section class="tp-hero"><div><span class="tp-kicker">CORTE DIARIO · TALIA PULSO · PHP INDEPENDIENTE</span><h1><?=h($title)?></h1><p><?=h($subtitle)?></p></div>
 <div class="tp-hero-actions"><?php if($view==='corte'): ?><span class="tp-chip-meta">Fecha: <b><?=h($f['date'])?></b></span><a class="tp-pill" href="<?=h(url(['view'=>'corte','date'=>date('Y-m-d')]))?>">Hoy</a><?php elseif($view==='metas'):?><a class="tp-btn tp-btn-gradient" href="#editar">Editar metas</a><?php endif;?></div></section><?php endif; ?>
 <?php if(isset($_SESSION['pulso_flash'])){$msg=$_SESSION['pulso_flash'];unset($_SESSION['pulso_flash']);?><div class="talia-pulso-notice <?=h($msg['type'])?>"><?=h($msg['message'])?></div><?php } ?>
@@ -2062,4 +2076,5 @@ $date=$regional['date'];
 <?php foreach($targets as $r):?><tr><td><?=h($r['target_date'])?></td><td><?=h($r['city_norm'])?></td><td><?=h($r['sales_channel_norm']?:'Todos')?></td><td><?=num($r['sales_target'])?></td><td><?=num($r['installs_target'])?></td><td><?=h($r['target_source']==='xpedient'?'Xpedient ÷ 7':'Manual')?></td><td class="tp-actions-cell"><a href="<?=h(url(['view'=>'metas','edit'=>$r['id']]))?>#editar">Editar</a><form method="post" class="tp-deleteform" onsubmit="return confirm('¿Eliminar esta meta?')"><input type="hidden" name="csrf" value="<?=h(csrf())?>"><input type="hidden" name="action" value="delete_target"><input type="hidden" name="target_id" value="<?=h($r['id'])?>"><button type="submit" <?=!can_edit()?'disabled':''?>>Eliminar</button></form></td></tr><?php endforeach;?><?php if(!$targets):?><tr><td colspan="7">Sin metas registradas.</td></tr><?php endif;?></tbody></table></div></section>
 <?php endif; ?>
 <footer class="tp-footer">Talia Pulso · Aplicación PHP autónoma · Datos MySQL en tiempo de consulta · Usuario: <?=h($_SESSION['usuario']??'')?></footer>
-</main></div><script src="../assets/js/pulso.js?v=1.0.18-fecha-cierre-director" defer></script></body></html>
+</div></div></main>
+<script src="../assets/js/pulso.js?v=1.0.18-fecha-cierre-director" defer></script></body></html>
