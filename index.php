@@ -397,6 +397,8 @@ $rol_consulta = $scope_activo ? 'scoped' : $rol;
 // Los filtros son siempre fechas reales; una selección cruzada no se trunca
 // a los días de un único mes. El rol/jerarquía continúa independiente.
 $periodo = ($_GET['periodo'] ?? 'mensual') === 'semanal' ? 'semanal' : 'mensual';
+// Comparativo histórico opcional: sin consulta extra cuando está desactivado.
+$tx_yoy_enabled = (($_GET['comparar_anterior'] ?? '') === '1');
 $meses_es = [
     1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',
     7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'
@@ -758,6 +760,40 @@ function tx_index_kpi_variacion(?float $actual, ?float $anterior, bool $conversi
     }
     return ['estado'=>$estado,'icono'=>$icono,'dif'=>$formatoDif,'pct'=>$formatoPct];
 }
+/** Mismo día/mes del año anterior; 29/feb sin homólogo se alinea al 28/feb. */
+function tx_yoy_fecha_anterior(string $fecha): string {
+    $d = new DateTimeImmutable($fecha);
+    $y = (int)$d->format('Y') - 1;
+    $m = (int)$d->format('n');
+    $dia = (int)$d->format('j');
+    $primero = new DateTimeImmutable(sprintf('%04d-%02d-01', $y, $m));
+    return $primero->setDate($y, $m, min($dia, (int)$primero->format('t')))->format('Y-m-d');
+}
+/** Conserva la semana ISO (incluido su año ISO) y los días elegidos. */
+function tx_yoy_semana_iso_anterior(int $isoYear, int $semana): ?DateTimeImmutable {
+    $lunes = (new DateTimeImmutable('2020-01-01'))->setISODate($isoYear - 1, $semana, 1);
+    return ((int)$lunes->format('W') === $semana && (int)$lunes->format('o') === $isoYear - 1)
+        ? $lunes : null;
+}
+$tx_yoy_inicio = tx_yoy_fecha_anterior($fecha_inicio_dashboard);
+$tx_yoy_fin = tx_yoy_fecha_anterior($fecha_fin_dashboard);
+$tx_yoy_iso_days = [];
+$tx_yoy_week_valid = true;
+if ($periodo === 'semanal') {
+    $lunesAnterior = tx_yoy_semana_iso_anterior($tx_nav_anio_semana, $tx_nav_semana);
+    $tx_yoy_week_valid = ($lunesAnterior !== null);
+    if ($lunesAnterior) {
+        $seleccionDias = $tx_dashboard_dias_iso ?: range(1,7);
+        $diasFechas = [];
+        foreach ($seleccionDias as $numeroDia) {
+            $diasFechas[] = $lunesAnterior->modify('+'.((int)$numeroDia-1).' days')->format('Y-m-d');
+        }
+        sort($diasFechas);
+        $tx_yoy_inicio = reset($diasFechas);
+        $tx_yoy_fin = end($diasFechas);
+        $tx_yoy_iso_days = $seleccionDias;
+    }
+}
 if ($periodo === 'semanal') {
     $tx_cmp_inicio = (new DateTimeImmutable($fecha_inicio_dashboard))->modify('-7 days')->format('Y-m-d');
     $tx_cmp_fin = (new DateTimeImmutable($fecha_fin_dashboard))->modify('-7 days')->format('Y-m-d');
@@ -767,6 +803,11 @@ if ($periodo === 'semanal') {
     $tx_cmp_fin = tx_index_mes_previo_fecha($fecha_fin_dashboard);
     $tx_cmp_dias_iso = [];
 }
+if ($tx_yoy_enabled) {
+    $tx_cmp_inicio = $tx_yoy_inicio;
+    $tx_cmp_fin = $tx_yoy_fin;
+    $tx_cmp_dias_iso = $tx_yoy_iso_days;
+}
 $tx_cmp_periodo = tx_index_etiqueta_periodo($tx_cmp_inicio,$tx_cmp_fin);
 $tx_cmp_inst = tx_index_kpi_previo($conexion,'instalaciones',$tx_cmp_inicio,$tx_cmp_fin,
     $tx_cmp_dias_iso,$rol_consulta,(bool)$scope_filtrar_por_distrito,(string)$scope_distritos_sql,
@@ -774,6 +815,10 @@ $tx_cmp_inst = tx_index_kpi_previo($conexion,'instalaciones',$tx_cmp_inicio,$tx_
 $tx_cmp_vent = tx_index_kpi_previo($conexion,'ventas',$tx_cmp_inicio,$tx_cmp_fin,
     $tx_cmp_dias_iso,$rol_consulta,(bool)$scope_filtrar_por_distrito,(string)$scope_distritos_sql,
     (bool)$por_distrito,(string)$distritos_sql,$folio_ids);
+// Sin historial NO interpretamos cero registros como desempeño de cero.
+if ($tx_yoy_enabled && (!$tx_yoy_week_valid || ($tx_cmp_inst === 0 && $tx_cmp_vent === 0))) {
+    $tx_cmp_inst = $tx_cmp_vent = null;
+}
 $tx_cmp_conv = ($tx_cmp_inst !== null && $tx_cmp_vent !== null)
     ? ($tx_cmp_vent > 0 ? round($tx_cmp_inst/$tx_cmp_vent*100,1) : 0.0) : null;
 $tx_cmp_kpis = [
@@ -1760,6 +1805,7 @@ $cumplimiento_inferior_visual_pct = [];
 $cumplimiento_inferior_res_pct = [];
 $cumplimiento_inferior_neg_pct = [];
 $cumplimiento_inferior_mix_total = [];
+$cumplimiento_inferior_yoy_context = [];
 $cumplimiento_inferior_items = [];
 
 $nivel_actual_dashboard = $scope_activo ? $scope_nivel : ($rol === 'admin' ? 'admin' : nivel_dashboard_hc($posicion_usuario ?? '', ''));
@@ -1797,6 +1843,7 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
         $mix_res_neg = tx_mix_res_neg_distrito_dashboard($conexion, $dist, $mes_actual, $anio_query, $cond_dia_fecha);
         $tmp[] = [
             'label'=>$dist,
+            'yoy_distrito'=>$dist,
             'real'=>$real,
             'meta'=>$meta,
             'pct'=>$pct,
@@ -1883,6 +1930,7 @@ if (in_array($rol, ['admin','director_regional'], true) && !$scope_activo) {
             $mix_res_neg = tx_mix_res_neg_folios_dashboard($conexion, $child['folios'], $mes_actual, $anio_query, $cond_dia_fecha);
             $tmp[] = [
                 'label'=>$child['label'],
+                'yoy_folios'=>$child['folios'],
                 'real'=>$real,
                 'meta'=>$meta,
                 'pct'=>$pct,
@@ -2282,7 +2330,7 @@ if ($tx_stg_aplicable && $tx_stg_hc_ok && !(!$scope_activo && in_array($rol, ['a
         $tx_stg_real = (int)$tx_stg_child['real'];
         if ($tx_stg_real <= 0 && $tx_stg_meta <= 0) continue;
         $tmp[] = [
-            'label'=>$tx_stg_child['nombre'], 'real'=>$tx_stg_real,
+            'label'=>$tx_stg_child['nombre'], 'yoy_pos'=>$tx_stg_child['pos'], 'real'=>$tx_stg_real,
             'meta'=>$tx_stg_meta, 'pct'=>$tx_stg_meta > 0 ? round($tx_stg_real * 100 / $tx_stg_meta, 1) : 0,
             'meta_fuente'=>$tx_stg_meta_fuente,
             'res_pct'=>$tx_stg_real > 0 ? (int)round($tx_stg_res * 100 / $tx_stg_real) : null,
@@ -2297,6 +2345,18 @@ usort($tmp, function($a, $b) {
     return $b['pct'] <=> $a['pct'];
 });
 $tmp = array_slice($tmp, 0, 10);
+// Las líneas jerárquicas usan los folios conocidos de la posición ACTUAL.
+// No se afirma que representan la fotografía histórica de HC de 2025.
+if ($tx_yoy_enabled) {
+    foreach ($tmp as &$rTmpYoy) {
+        if (empty($rTmpYoy['yoy_folios']) && !empty($rTmpYoy['yoy_pos'])) {
+            $posicionesYoy = getTodosSubordinados($conexion, $rTmpYoy['yoy_pos'], 6, $semana_actual, $anio_actual);
+            $posicionesYoy[] = $rTmpYoy['yoy_pos'];
+            $rTmpYoy['yoy_folios'] = tx_hic_folios_por_posiciones_dashboard($conexion, array_unique($posicionesYoy));
+        }
+    }
+    unset($rTmpYoy);
+}
 
 $max_real_sin_meta = 0;
 foreach ($tmp as $r_tmp) {
@@ -2314,6 +2374,7 @@ foreach ($tmp as $r) {
     $cumplimiento_inferior_res_pct[] = $r['res_pct'] ?? null;
     $cumplimiento_inferior_neg_pct[] = $r['neg_pct'] ?? null;
     $cumplimiento_inferior_mix_total[] = (int)($r['mix_total'] ?? 0);
+    $cumplimiento_inferior_yoy_context[] = ['distrito'=>$r['yoy_distrito']??null, 'folios'=>$r['yoy_folios']??[]];
     $cumplimiento_inferior_visual_pct[] = (($r['meta_fuente'] ?? '') === 'sin_meta' && $max_real_sin_meta > 0)
         ? round(((int)$r['real'] / $max_real_sin_meta) * 100, 1)
         : (float)$r['pct'];
@@ -4120,6 +4181,7 @@ foreach ($cumplimiento_inferior_labels as $idx_ci => $nombre_ci) {
         'res_pct' => $cumplimiento_inferior_res_pct[$idx_ci] ?? null,
         'neg_pct' => $cumplimiento_inferior_neg_pct[$idx_ci] ?? null,
         'mix_total' => (int)($cumplimiento_inferior_mix_total[$idx_ci] ?? 0),
+        'yoy_context' => $cumplimiento_inferior_yoy_context[$idx_ci] ?? [],
     ];
 }
 usort($cumplimiento_inferior_items, function($a, $b) {
@@ -4128,6 +4190,267 @@ usort($cumplimiento_inferior_items, function($a, $b) {
     }
     return ((float)$b['pct']) <=> ((float)$a['pct']);
 });
+
+// ── AÑO ANTERIOR: agregación opcional, SIN alterar los cálculos productivos ──
+// Un solo lector comercial 2025 para todas las cuatro dimensiones y ARPU.
+// Ninguna consulta adicional se ejecuta cuando el check está desactivado.
+$tx_yoy_evo_views = [];
+$tx_yoy_arpu_data = [];
+$tx_yoy_mix = null;
+$tx_yoy_error = null;
+$tx_yoy_cobertura = false;
+$tx_yoy_canal_actual = [];
+if ($tx_yoy_enabled && $tx_yoy_week_valid) {
+    try {
+        require_once __DIR__.'/includes/motor_comercial.php';
+        if (!class_exists('MotorComercial')) throw new RuntimeException('Motor Comercial no disponible');
+        $motorYoy = new MotorComercial($conexion);
+        $scopeYoy = $tx_stg_gerencial ? $tx_stg_scope_gerencial : ['tipo'=>'FOLIOS','folios'=>$folio_ids];
+        if ($periodo === 'semanal') {
+            $primerSemana = tx_yoy_semana_iso_anterior((int)substr($tx_evo_week_keys[0]??'202601',0,4), 1);
+            $yoyEvoInicio = $primerSemana ? $primerSemana->format('Y-m-d') : $tx_yoy_inicio;
+        } elseif ($tx_evo_daily_custom) {
+            $yoyEvoInicio = tx_yoy_fecha_anterior($tx_evo_daily_dates[0] ?? $fecha_inicio_dashboard);
+        } else {
+            $yoyEvoInicio = sprintf('%04d-01-01', (int)$anio_query-1);
+        }
+        $yoyEvoFin = $tx_yoy_fin;
+        if ($yoyEvoFin < $yoyEvoInicio) throw new RuntimeException('Año anterior: rango sin fechas comparables');
+        // Respeta EXACTAMENTE el alcance autorizado y la clasificación del motor.
+        $histYoy = $motorYoy->seriesDiariasPorCatalogo($yoyEvoInicio, $yoyEvoFin, $scopeYoy);
+        $mapaIndiceFecha = []; $nEje = count($meses_labels);
+        if ($tx_evo_daily_custom) {
+            foreach ($tx_evo_daily_dates as $idx => $diaActual) {
+                $mapaIndiceFecha[tx_yoy_fecha_anterior($diaActual)] = $idx;
+            }
+        } elseif ($periodo === 'semanal') {
+            foreach ($tx_evo_week_keys as $idx => $claveSemana) {
+                $anioIso = (int)substr((string)$claveSemana,0,4);
+                $numSemana = (int)substr((string)$claveSemana,4,2);
+                $lunesPrevio = tx_yoy_semana_iso_anterior($anioIso, $numSemana);
+                if (!$lunesPrevio) continue; // Sin semana ISO homóloga (S53).
+                for ($diaIso=1;$diaIso<=7;$diaIso++) {
+                    if ($tx_dashboard_dias_iso && !in_array($diaIso,$tx_dashboard_dias_iso,true)) continue;
+                    $diaPrevio = $lunesPrevio->modify('+'.($diaIso-1).' days')->format('Y-m-d');
+                    if ($diaPrevio <= $yoyEvoFin) $mapaIndiceFecha[$diaPrevio] = $idx;
+                }
+            }
+        } else {
+            foreach ($meses_labels as $idx => $etiquetaMes) {
+                $fechaMes = DateTimeImmutable::createFromFormat('!M Y',(string)$etiquetaMes);
+                if (!$fechaMes) continue;
+                $mesPrevio = $fechaMes->modify('-1 year');
+                $mesInicio = $mesPrevio->modify('first day of this month');
+                $mesFin = $mesPrevio->modify('last day of this month');
+                for ($fechaP=$mesInicio;$fechaP<=$mesFin;$fechaP=$fechaP->modify('+1 day')) {
+                    $f = $fechaP->format('Y-m-d');
+                    if ($f > $yoyEvoFin) continue;
+                    if ($rango_mode !== 'completo' && !$tx_dashboard_cruza_mes) {
+                        $dia = (int)$fechaP->format('j');
+                        if ($dia < $dia_inicio_dashboard || $dia > $dia_fin_dashboard) continue;
+                    }
+                    if ($tx_dashboard_cruza_mes) {
+                        $fPrimer = substr($tx_yoy_inicio,0,7).'-01';
+                        if ($f >= $fPrimer && $f < $tx_yoy_inicio) continue;
+                    }
+                    $mapaIndiceFecha[$f]=$idx;
+                }
+            }
+        }
+        $totalesPrev = [
+            'inst'=>array_fill(0,$nEje,0), 'vent'=>array_fill(0,$nEje,0)
+        ];
+        foreach (['inst'=>'instalaciones','vent'=>'ventas'] as $prefijo=>$fuente) {
+            foreach (($histYoy['totales'][$fuente] ?? []) as $dia=>$n) {
+                if (isset($mapaIndiceFecha[$dia])) $totalesPrev[$prefijo][$mapaIndiceFecha[$dia]] += (int)$n;
+            }
+        }
+        foreach (['canal','oferta','play','bundle'] as $dimension) {
+            $mapasPrev = [];
+            foreach (['inst'=>'instalaciones','vent'=>'ventas'] as $prefijo=>$fuente) {
+                $matriz = [];
+                foreach (($histYoy['datos'][$dimension][$fuente] ?? []) as $cat=>$serie) {
+                    $valores = array_fill(0,$nEje,0);
+                    foreach ($serie as $dia=>$n) {
+                        if (isset($mapaIndiceFecha[$dia])) $valores[$mapaIndiceFecha[$dia]] += (int)$n;
+                    }
+                    if (array_sum($valores)>0) $matriz[$cat]=$valores;
+                }
+                $mapasPrev[$prefijo]=$matriz;
+            }
+            $tx_yoy_evo_views[$dimension] = [
+                'inst'=>$mapasPrev['inst'],'vent'=>$mapasPrev['vent'],
+                'inst_totales'=>$totalesPrev['inst'],'vent_totales'=>$totalesPrev['vent']
+            ];
+            // Los totales por dimensión deben conciliar con el origen.
+            foreach (['inst','vent'] as $prefijo) {
+                foreach (range(0,max(0,$nEje-1)) as $idx) {
+                    $suma=0; foreach ($mapasPrev[$prefijo] as $serie) $suma+=(int)($serie[$idx]??0);
+                    if ($suma !== (int)($totalesPrev[$prefijo][$idx]??0)) {
+                        throw new LogicException('Comparativo histórico sin conciliación: '.$dimension.' '.$prefijo.' '.$idx);
+                    }
+                }
+            }
+        }
+        // ARPU HISTÓRICO: solo precio pronto pago guardado en la instalación.
+        // Nunca sustituir aquí un precio 2025 faltante con catálogo ACTUAL 2026.
+        $sumasArpu = array_fill(0,$nEje,0.0);
+        $validosArpu = array_fill(0,$nEje,0);
+        $sqlPrecioYoy = "SELECT DATE(fecha) AS dia, SUM(precio_pronto_pago) AS suma,
+            COUNT(*) AS n FROM instalaciones WHERE fecha >= ? AND fecha <= ?
+            AND origen_prospecto <> '-' AND precio_pronto_pago > 0";
+        $paramsPrecioYoy = [$yoyEvoInicio, $yoyEvoFin];
+        if ($scopeYoy['tipo'] === 'DISTRITO') {
+            $distritoYoy = strtoupper(trim((string)$scopeYoy['distrito']));
+            $aliasesYoy = tx_distrito_equivalentes_array($distritoYoy);
+            if (str_contains($distritoYoy, 'TUXTLA')) {
+                $aliasesYoy = ['TUXTLA','TUXTLA GUTIERREZ','TUXTLA GUTIÉRREZ'];
+            } elseif (str_contains($distritoYoy, 'COATZA')) {
+                $aliasesYoy = ['COATZA MINA','COATZA/MINA','COATZA / MINA','COATZA-MINA',
+                    'COATZACOALCOS MINATITLAN','COATZACOALCOS - MINATITLAN','COATZACOALCOS - MINATITLÁN'];
+            }
+            $aliasesYoy = array_values(array_unique($aliasesYoy));
+            $sqlPrecioYoy .= ' AND UPPER(TRIM(distrito)) IN ('.implode(',',array_fill(0,count($aliasesYoy),'?')).')';
+            foreach ($aliasesYoy as $aliasYoy) $paramsPrecioYoy[] = strtoupper(trim($aliasYoy));
+        } elseif ($scopeYoy['tipo'] === 'FOLIOS') {
+            $foliosYoy = array_values(array_unique(array_filter(array_map('strval',$scopeYoy['folios']),static fn($x)=>trim($x)!=='')));
+            if (!$foliosYoy) $sqlPrecioYoy .= ' AND 1=0';
+            else {
+                $sqlPrecioYoy .= ' AND folio_empleado IN ('.implode(',',array_fill(0,count($foliosYoy),'?')).')';
+                array_push($paramsPrecioYoy,...$foliosYoy);
+            }
+        }
+        $sqlPrecioYoy .= ' GROUP BY DATE(fecha)';
+        $stmtPrecioYoy = mysqli_prepare($conexion,$sqlPrecioYoy);
+        if (!$stmtPrecioYoy) throw new RuntimeException('No se pudo preparar ARPU histórico');
+        $tipoPrecioYoy = str_repeat('s',count($paramsPrecioYoy));
+        mysqli_stmt_bind_param($stmtPrecioYoy,$tipoPrecioYoy,...$paramsPrecioYoy);
+        if (!mysqli_stmt_execute($stmtPrecioYoy)) throw new RuntimeException('Fallo de lectura ARPU histórico');
+        $resPrecioYoy=mysqli_stmt_get_result($stmtPrecioYoy);
+        if (!$resPrecioYoy) throw new RuntimeException('Sin resultado ARPU histórico');
+        while($filaPrecioYoy=mysqli_fetch_assoc($resPrecioYoy)) {
+            $dia=(string)$filaPrecioYoy['dia'];
+            if (!isset($mapaIndiceFecha[$dia])) continue;
+            $idx=$mapaIndiceFecha[$dia];
+            $sumasArpu[$idx]+=(float)$filaPrecioYoy['suma'];
+            $validosArpu[$idx]+=(int)$filaPrecioYoy['n'];
+        }
+        mysqli_stmt_close($stmtPrecioYoy);
+        foreach ($sumasArpu as $idx=>$suma) {
+            $tx_yoy_arpu_data[$idx]=$validosArpu[$idx]>0 ? round($suma/$validosArpu[$idx],2) : null;
+        }
+        // Mix: rango exacto seleccionado (NO necesariamente el último mes del gráfico).
+        $mixHist=['2P'=>0,'3P'=>0,'Sin clasificar'=>0];
+        foreach ($mixHist as $cat=>&$total) {
+            foreach (($histYoy['datos']['play']['instalaciones'][$cat]??[]) as $dia=>$n) {
+                if ($dia < $tx_yoy_inicio || $dia > $tx_yoy_fin) continue;
+                if ($tx_yoy_iso_days && !in_array((int)(new DateTimeImmutable($dia))->format('N'),$tx_yoy_iso_days,true)) continue;
+                $total+=(int)$n;
+            }
+        }
+        unset($total);
+        if (array_sum($mixHist)>0) $tx_yoy_mix=$mixHist;
+        $tx_yoy_cobertura = array_sum($totalesPrev['inst'])+array_sum($totalesPrev['vent'])>0;
+    } catch (Throwable $exYoy) {
+        // Fallar cerrado: los KPI vigentes no se modifican ni se inventan comparativos.
+        $tx_yoy_error=$exYoy->getMessage();
+        $tx_yoy_evo_views=[]; $tx_yoy_arpu_data=[]; $tx_yoy_mix=null;
+        error_log('TalIA INDEX YOY: '.$tx_yoy_error);
+    }
+}
+// Unir las matrices al caché actual: los botones Canal/Oferta/Play/Bundle siguen instantáneos.
+foreach ($tx_evo_cache_views as $dimension=>&$configYoy) {
+    $configYoy['yoy_inst']=$tx_yoy_evo_views[$dimension]['inst']??[];
+    $configYoy['yoy_vent']=$tx_yoy_evo_views[$dimension]['vent']??[];
+    $configYoy['yoy_inst_totales']=$tx_yoy_evo_views[$dimension]['inst_totales']??[];
+    $configYoy['yoy_vent_totales']=$tx_yoy_evo_views[$dimension]['vent_totales']??[];
+}
+unset($configYoy);
+
+// Comparativo jerárquico: distritos por distrito histórico; subniveles por folios
+// equivalentes de su línea VIGENTE (se señala expresamente la limitación histórica).
+if ($tx_yoy_enabled && $tx_yoy_week_valid && !empty($cumplimiento_inferior_items)) {
+    $iniEscYoy=mysqli_real_escape_string($conexion,$tx_yoy_inicio);
+    $finEscYoy=mysqli_real_escape_string($conexion,$tx_yoy_fin);
+    $filtroDiasYoy=$tx_yoy_iso_days ? ' AND (WEEKDAY(fecha)+1) IN ('.implode(',',array_map('intval',$tx_yoy_iso_days)).')' : '';
+    $prevDistrito=[]; $prevFolio=[];
+    $necesitaDistritosYoy=false;
+    foreach ($cumplimiento_inferior_items as $filaYoy) {
+        if (!empty($filaYoy['yoy_context']['distrito'])) { $necesitaDistritosYoy=true; break; }
+    }
+    $hayHistDistrito=false;
+    // Solo las vistas Admin/Regional trabajan con la distribución regional.
+    if ($necesitaDistritosYoy && !$scope_activo && in_array($rol,['admin','director_regional'],true)) {
+        $histDist = mysqli_query($conexion,"SELECT distrito, COUNT(cuenta) AS n FROM instalaciones
+            WHERE fecha >= '$iniEscYoy' AND fecha <= '$finEscYoy' $filtroDiasYoy
+              AND origen_prospecto <> '-' GROUP BY distrito");
+        $hayHistDistrito=($histDist && mysqli_num_rows($histDist)>0);
+        while($histDist && ($r=mysqli_fetch_assoc($histDist))) {
+            $clave=trim((string)$r['distrito']);
+            if ($clave==='COATZA MINA' || $clave==='COATZA / MINA') $clave='COATZA / MINA';
+            $prevDistrito[$clave]=($prevDistrito[$clave]??0)+(int)$r['n'];
+        }
+    }
+    $foliosItems=[];
+    $hayHistoricoFolios=false;
+    foreach ($cumplimiento_inferior_items as $r) foreach (($r['yoy_context']['folios']??[]) as $folio) {
+        if (trim((string)$folio)!=='') $foliosItems[(string)$folio]=true;
+    }
+    if ($foliosItems) {
+        $foliosSql=tx_sql_in_escaped($conexion,array_keys($foliosItems));
+        $rFolios=mysqli_query($conexion,"SELECT folio_empleado,COUNT(cuenta) AS n FROM instalaciones
+            WHERE fecha >= '$iniEscYoy' AND fecha <= '$finEscYoy' $filtroDiasYoy
+              AND origen_prospecto <> '-' AND folio_empleado IN ($foliosSql)
+            GROUP BY folio_empleado");
+        $hayHistoricoFolios=($rFolios && mysqli_num_rows($rFolios)>0);
+        while($rFolios && ($r=mysqli_fetch_assoc($rFolios))) $prevFolio[(string)$r['folio_empleado']]=(int)$r['n'];
+    }
+    foreach ($cumplimiento_inferior_items as &$itemYoy) {
+        $ctx=$itemYoy['yoy_context']??[];
+        if (!empty($ctx['distrito'])) {
+            $itemYoy['yoy_real']=$hayHistDistrito ? (int)($prevDistrito[$ctx['distrito']]??0) : null;
+        } elseif (!empty($ctx['folios'])) {
+            $itemYoy['yoy_real']=$hayHistoricoFolios ? 0 : null;
+            if ($hayHistoricoFolios) {
+                foreach (array_unique($ctx['folios']) as $folio) $itemYoy['yoy_real']+=(int)($prevFolio[(string)$folio]??0);
+            }
+        } else $itemYoy['yoy_real']=null;
+    }
+    unset($itemYoy);
+}
+
+// Canal: consulta agregada por canal/subcanal para respetar Venta Técnico.
+if ($tx_yoy_enabled && $tx_yoy_week_valid && $mostrar_cumplimiento_canal && $cumplimiento_canal_items) {
+    $campoSub=tx_subcanal_column_instalaciones($conexion);
+    $subExp=$campoSub!=='' ? '`'.$campoSub.'`' : "''";
+    $whereYoyCanal="fecha >= '".mysqli_real_escape_string($conexion,$tx_yoy_inicio)."' AND fecha <= '".
+        mysqli_real_escape_string($conexion,$tx_yoy_fin)."' AND origen_prospecto <> '-'";
+    if ($tx_yoy_iso_days) $whereYoyCanal.=' AND (WEEKDAY(fecha)+1) IN ('.implode(',',array_map('intval',$tx_yoy_iso_days)).')';
+    if ($scope_canal_sql !== '') $whereYoyCanal.=" AND distrito IN ($scope_canal_sql)";
+    $resYoyCanal=mysqli_query($conexion,"SELECT origen_prospecto AS canal,$subExp AS subcanal,
+        COUNT(cuenta) AS n FROM instalaciones WHERE $whereYoyCanal GROUP BY origen_prospecto".
+        ($campoSub!=='' ? ",`$campoSub`" : ''));
+    $histCanal=[]; $hayHistoricoCanal=$resYoyCanal && mysqli_num_rows($resYoyCanal)>0;
+    $mapaCanales=tx_canales_cumplimiento_dashboard();
+    while($resYoyCanal && ($r=mysqli_fetch_assoc($resYoyCanal))) {
+        $canal=strtoupper(trim((string)$r['canal']));
+        $sub=strtoupper(trim((string)$r['subcanal']));
+        foreach ($mapaCanales as $nombreCanal=>$regla) {
+            $reales=array_map(static fn($v)=>strtoupper(trim((string)$v)),$regla['real']);
+            if (!in_array($canal,$reales,true)) continue;
+            $only=array_map(static fn($v)=>strtoupper(trim((string)$v)),$regla['only_subcanal']??[]);
+            $exclude=array_map(static fn($v)=>strtoupper(trim((string)$v)),$regla['exclude_subcanal']??[]);
+            if ($campoSub!=='' && $only && !in_array($sub,$only,true)) continue;
+            if ($campoSub!=='' && $exclude && in_array($sub,$exclude,true)) continue;
+            $histCanal[$nombreCanal]=($histCanal[$nombreCanal]??0)+(int)$r['n'];
+        }
+    }
+    foreach ($cumplimiento_canal_items as &$itemCanalYoy) {
+        $itemCanalYoy['yoy_real']=$hayHistoricoCanal ? (int)($histCanal[$itemCanalYoy['nombre']]??0) : null;
+    }
+    unset($itemCanalYoy);
+}
+
 
 // Layout dinámico del dashboard:
  // En Admin / Regional / Director Distrital se muestra Cumplimiento por Canal y HC en el renglón superior.
@@ -5571,6 +5894,25 @@ if ($tx_geo_sum_count > 0) {
         .tx-nav-card{position:relative;overflow:visible;flex-wrap:wrap;z-index:80;}
         .tx-nav-actions{gap:7px;justify-content:flex-end;}
         .tx-nav-modes{display:inline-flex;gap:5px;margin-right:6px;}
+        .tx-yoy-toggle{display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+            font-size:.72rem;font-weight:850;color:#34436a;padding:7px 10px;
+            border:1px solid #cbd5e1;background:#fff;border-radius:999px;white-space:nowrap;}
+        .tx-yoy-toggle.is-on{border-color:#8b5cf6;background:#f3e8ff;color:#6d28d9;}
+        .tx-yoy-toggle:focus-visible{outline:2px solid #7c3aed;outline-offset:2px;}
+        .tx-yoy-checkbox{width:15px;height:15px;border:1.5px solid #94a3b8;border-radius:4px;
+            display:inline-flex;align-items:center;justify-content:center;font-size:.73rem;line-height:1;}
+        .tx-yoy-toggle.is-on .tx-yoy-checkbox{background:#7c3aed;border-color:#7c3aed;color:white;}
+        .tx-yoy-secondary{display:flex;gap:7px;align-items:center;justify-content:space-between;
+            font-size:.66rem;color:#64748b;font-weight:850;flex-wrap:wrap;margin:4px 0;}
+        .tx-yoy-secondary strong{color:#334155;font-variant-numeric:tabular-nums;}
+        .tx-yoy-prev-track{height:7px;border-radius:9px;background:#eef2f7;overflow:hidden;border:1px solid #e2e8f0;}
+        .tx-yoy-prev-fill{height:100%;background:repeating-linear-gradient(45deg,#94a3b8 0px,#94a3b8 4px,#cbd5e1 4px,#cbd5e1 8px);border-radius:9px;}
+        .tx-yoy-legend{font-size:.66rem;color:#64748b;font-weight:800;margin:7px 0 0;line-height:1.35;}
+        .tx-yoy-mix{margin-top:6px;padding:8px 10px;border-radius:10px;background:#f8fafc;
+            color:#475569;font-size:.73rem;font-weight:800;line-height:1.5;}
+        .tx-yoy-table-prior{display:block;font-size:.64rem;color:#64748b;font-weight:650;margin-top:2px;white-space:nowrap;}
+        .tx-yoy-missing{font-size:.68rem;color:#64748b;padding:4px 0;}
+        @media(max-width:840px){.tx-yoy-toggle{font-size:.67rem;padding:6px 8px;}}
         .tx-nav-button{
             background:#fff; border:1px solid #e4e9f4; border-radius:14px; padding:10px 13px;
             color:#25344f; text-decoration:none; font-size:.78rem;font-weight:900;
@@ -5647,6 +5989,13 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
         </div>
         <div class="dashboard-range-actions tx-nav-actions">
+            <a href="<?= tx_dashboard_link(['comparar_anterior'=>$tx_yoy_enabled ? null : '1']) ?>"
+               class="tx-yoy-toggle <?= $tx_yoy_enabled ? 'is-on' : '' ?>"
+               role="checkbox" aria-checked="<?= $tx_yoy_enabled ? 'true' : 'false' ?>"
+               title="Comparar contra las mismas fechas o semana ISO del año anterior">
+                <span class="tx-yoy-checkbox" aria-hidden="true"><?= $tx_yoy_enabled ? '✓' : '' ?></span>
+                Año anterior
+            </a>
             <div class="tx-nav-modes" aria-label="Modo de navegación temporal">
                 <a class="tx-nav-button <?= $periodo === 'semanal' ? 'is-active' : '' ?>"
                    href="<?= tx_dashboard_link(['periodo'=>'semanal','anio_semana'=>$tx_nav_anio_semana_max,'semana'=>$tx_nav_semana_max,'dias_semana'=>null,'rango_mode'=>null,'fecha_inicio'=>null,'fecha_fin'=>null]) ?>">Semanal</a>
@@ -5792,7 +6141,7 @@ include __DIR__ . '/includes/sidebar.php';
 
 
 <?php
-$tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_kpis,$tx_cmp_periodo,$tx_cmp_base): void {
+$tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_kpis,$tx_cmp_periodo,$tx_cmp_base,$tx_yoy_enabled): void {
     $k = $tx_cmp_kpis[$codigo];
     $estado = htmlspecialchars($k['estado'], ENT_QUOTES,'UTF-8');
     $dif = htmlspecialchars($k['dif'], ENT_QUOTES,'UTF-8');
@@ -5801,7 +6150,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
     $periodo = htmlspecialchars($tx_cmp_periodo, ENT_QUOTES,'UTF-8');
     $base = htmlspecialchars($tx_cmp_base[$codigo], ENT_QUOTES,'UTF-8');
     echo '<div class="tx-kpi-compare" title="Base anterior: '.$base.' · '.$periodo.'">';
-    echo '<div class="tx-kpi-compare-row"><span>Dif. vs anterior</span><strong class="tx-kpi-change-'.$estado.'">'.$icono.' '.$dif.'</strong></div>';
+    echo '<div class="tx-kpi-compare-row"><span>'.($tx_yoy_enabled ? 'Dif. vs año anterior' : 'Dif. vs anterior').'</span><strong class="tx-kpi-change-'.$estado.'">'.$icono.' '.$dif.'</strong></div>';
     echo '<div class="tx-kpi-compare-row"><span>% Dif.</span><strong class="tx-kpi-change-'.$estado.'">'.$icono.' '.$pct.'</strong></div>';
     echo '<div class="tx-kpi-compare-period">vs '.$periodo.' · base '.$base.'</div>';
     echo '</div>';
@@ -5954,6 +6303,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
         </div>
 
+        <?php if ($tx_yoy_enabled): ?><div class="tx-yoy-legend">Barra gris: instalaciones del año anterior (<?= htmlspecialchars(tx_index_etiqueta_periodo($tx_yoy_inicio,$tx_yoy_fin)) ?>). Para equipos se utilizan los folios de su línea vigente; no constituye una reconstrucción HC histórica. Las barras grises usan escala Meta/Actual/Anterior.</div><?php endif; ?>
         <div class="cumplimiento-list">
             <?php foreach ($cumplimiento_inferior_items as $item): ?>
                 <?php
@@ -5963,6 +6313,9 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     $meta_item = (int)($item['meta'] ?? 0);
                     $sin_meta_item = (($item['fuente'] ?? '') === 'sin_meta');
                     $bar_width = min($visual_pct_item, 100);
+                    if ($tx_yoy_enabled && isset($item['yoy_real'])) {
+                        $bar_width = round(100*$real_item/max(1,$real_item,$meta_item,(int)$item['yoy_real']),2);
+                    }
                     $bar_class = $sin_meta_item ? 'neutral' : (($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk'));
                 ?>
                 <div class="cumplimiento-row">
@@ -5973,9 +6326,16 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                         <div class="cumplimiento-track">
                             <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                                <span class="cumplimiento-resneg-divider" style="left:<?= ($tx_yoy_enabled && isset($item['yoy_real'])) ? round($bar_width*(int)$item['res_pct']/100,2) : (int)$item['res_pct'] ?>%;"></span>
                             <?php endif; ?>
                         </div>
+                        <?php if ($tx_yoy_enabled):
+                            $prevYoyReal = $item['yoy_real'] ?? null;
+                            $scaleYoyReal = max(1,$real_item,$meta_item,(int)($prevYoyReal??0));
+                        ?>
+                        <div class="tx-yoy-secondary"><span>Año anterior · Instalaciones</span><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
+                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100*$prevYoyReal/$scaleYoyReal,2) ?>%"></div></div>
+                        <?php endif; ?>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
                                 🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
@@ -6055,6 +6415,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
         </div>
 
+        <?php if ($tx_yoy_enabled): ?><div class="tx-yoy-legend">Barra gris: instalaciones del mismo período anterior, normalizadas contra el mayor de Meta/Real actual/Real anterior. No compara metas históricas.</div><?php endif; ?>
         <div class="cumplimiento-list">
             <?php foreach ($cumplimiento_canal_items as $item): ?>
                 <?php
@@ -6063,6 +6424,9 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     $real_item = (int)($item['real'] ?? 0);
                     $meta_item = (int)($item['meta'] ?? 0);
                     $bar_width = min($visual_pct_item, 100);
+                    if ($tx_yoy_enabled && isset($item['yoy_real'])) {
+                        $bar_width = round(100*$real_item/max(1,$real_item,$meta_item,(int)$item['yoy_real']),2);
+                    }
                     $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
                 ?>
                 <div class="cumplimiento-row">
@@ -6073,9 +6437,16 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                         <div class="cumplimiento-track">
                             <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                                <span class="cumplimiento-resneg-divider" style="left:<?= ($tx_yoy_enabled && isset($item['yoy_real'])) ? round($bar_width*(int)$item['res_pct']/100,2) : (int)$item['res_pct'] ?>%;"></span>
                             <?php endif; ?>
                         </div>
+                        <?php if ($tx_yoy_enabled):
+                            $prevYoyReal = $item['yoy_real'] ?? null;
+                            $scaleYoyReal = max(1,$real_item,$meta_item,(int)($prevYoyReal??0));
+                        ?>
+                        <div class="tx-yoy-secondary"><span>Año anterior · Instalaciones</span><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
+                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100*$prevYoyReal/$scaleYoyReal,2) ?>%"></div></div>
+                        <?php endif; ?>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
                                 🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
@@ -6110,6 +6481,18 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     <strong><?= $tx_arpu_last_value !== null && $tx_arpu_last_value > 0 ? '$'.number_format((float)$tx_arpu_last_value,0) : 'Sin precio válido' ?></strong>
                 </div>
             <?php endif; ?>
+            <?php if ($tx_yoy_enabled):
+                $arpuLastIndex=count($arpu_labels)-1;
+                $arpuActual=$arpu_data[$arpuLastIndex]??null;
+                $arpuHistorico=$tx_yoy_arpu_data[$arpuLastIndex]??null;
+            ?>
+            <div class="tx-yoy-mix">Año anterior: <?= $arpuHistorico === null ? 'Sin precio histórico válido en instalaciones' : '$'.number_format((float)$arpuHistorico,2) ?>
+                <?php if (!$tx_stg_gerencial): ?> · Histórico orientativo por folios vigentes (no certifica jerarquía HC de <?= (int)date('Y',strtotime($tx_yoy_fin)) ?>).<?php endif; ?>
+                <?php if ($arpuHistorico !== null && $arpuActual !== null): ?>
+                 · Variación <?= $arpuActual-$arpuHistorico>=0?'+':'' ?>$<?= number_format((float)($arpuActual-$arpuHistorico),2) ?>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
             <?php if ($tx_stg_gerencial && $tx_stg_ok && $periodo !== 'semanal' && !$tx_dashboard_cruza_mes && ($tx_stg_auditoria_arpu['validos'] ?? 0) < $tx_stg_universo_mes): ?>
                 <div style="font-size:10px;color:#64748b;padding:3px 0;">ARPU: <?= number_format((int)($tx_stg_auditoria_arpu['validos'] ?? 0)) ?> instalaciones con precio válido de <?= number_format((int)$tx_stg_universo_mes) ?>.</div>
             <?php endif; ?>
@@ -6129,6 +6512,25 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     <div style="font-size:11px;color:#64748b;padding:4px 0;">Sin clasificar: <?= number_format((int)$tx_stg_mix_sin_clasificar) ?> instalación(es); se muestran separadas.</div>
                 <?php endif; ?>
             <?php endif; ?>
+            <?php if ($tx_yoy_enabled):
+                $mixPrevTotal=$tx_yoy_mix !== null ? array_sum($tx_yoy_mix) : 0;
+                $mixActualTotal=(int)$inst_2p+(int)$inst_3p+(int)($tx_stg_mix_sin_clasificar??0);
+            ?>
+            <div class="tx-yoy-mix">
+                <?php if ($mixPrevTotal>0 && $mixActualTotal>0):
+                    $mixPrev2p=100*$tx_yoy_mix['2P']/$mixPrevTotal;
+                    $mixPrev3p=100*$tx_yoy_mix['3P']/$mixPrevTotal;
+                    $mixHoy2p=100*$inst_2p/$mixActualTotal;
+                    $mixHoy3p=100*$inst_3p/$mixActualTotal;
+                ?>
+                Año anterior (<?= number_format($mixPrevTotal) ?> INS):
+                2P <?= number_format($mixPrev2p,1) ?>% (<?= number_format($tx_yoy_mix['2P']) ?>)
+                · Cambio <?= sprintf('%+.1f',$mixHoy2p-$mixPrev2p) ?> pp
+                &nbsp; | &nbsp;3P <?= number_format($mixPrev3p,1) ?>% (<?= number_format($tx_yoy_mix['3P']) ?>)
+                · Cambio <?= sprintf('%+.1f',$mixHoy3p-$mixPrev3p) ?> pp
+                <?php else: ?>Sin datos comparables de Mix del año anterior<?php endif; ?>
+            </div>
+            <?php endif; ?>
             <div class="chart-wrap"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cInstMix"></canvas></div>
         </div>
 
@@ -6147,6 +6549,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
     <div class="evo-card">
         <div class="evo-card-head">
             <div class="chart-title" id="txEvoTitle"><?= htmlspecialchars($evo_titulo) ?></div>
+        <?php if ($tx_yoy_enabled): ?><div class="tx-yoy-legend">Línea gris discontinua: volumen total del mismo período del año anterior. En tablas: AA = año anterior y cambio en puntos porcentuales.</div><?php endif; ?>
             <div class="evo-toggle" aria-label="Selector de vista de evolución">
                 <a class="tx-evo-toggle-link <?= $evo_view === 'canal' ? 'active' : '' ?>" data-evo-view="canal" href="?<?= htmlspecialchars(http_build_query($qs_evo_canal)) ?>">CANAL DE VENTA</a>
                 <a class="tx-evo-toggle-link <?= $evo_view === 'oferta' ? 'active' : '' ?>" data-evo-view="oferta" href="?<?= htmlspecialchars(http_build_query($qs_evo_oferta)) ?>">OFERTA RES-NEG</a>
@@ -6158,6 +6561,9 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
         </div>
 
         <div id="txEvoError" class="tx-evo-error" style="<?= ($tx_evo_desde_enero && $evo_view !== 'canal' && !$tx_evo_fuente_catalogo_ok) ? '' : 'display:none;' ?>">No se pudo verificar la clasificación comercial. Consulta el registro de errores; no se muestran resultados estimados.</div>
+        <?php if ($tx_yoy_enabled && ($tx_yoy_error !== null || !$tx_yoy_cobertura)): ?>
+        <div class="tx-yoy-missing">Año anterior: <?= $tx_yoy_error !== null ? 'no se pudo verificar la serie histórica; revisa los logs.' : 'sin registros disponibles en el mismo alcance.' ?> Se conservan los resultados actuales.</div>
+        <?php endif; ?>
         <div class="evo-grid">
             <div>
                 <div class="tx-evo-caption-row">
@@ -6768,11 +7174,13 @@ const txDailyFullLabels = <?= json_encode($tx_evo_daily_dates, JSON_UNESCAPED_UN
 const txArpuFullWeekLabels = <?= json_encode($meses_labels, JSON_UNESCAPED_UNICODE) ?>;
 const arpuLabels = <?= json_encode($arpu_labels) ?>;
 const arpuData = <?= json_encode($arpu_data) ?>;
+const txYoyEnabled = <?= $tx_yoy_enabled ? 'true' : 'false' ?>;
+const txYoyArpuData = <?= json_encode($tx_yoy_enabled ? $tx_yoy_arpu_data : []) ?>;
 
 // ARPU: gráfica de línea para visualizar tendencia.
 // El eje Y NO inicia en cero; se ajusta alrededor de los valores reales:
 // límite inferior = 30% abajo del mínimo, límite superior = 30% arriba del máximo.
-const arpuValores = arpuData.map(v => Number(v || 0)).filter(v => v > 0);
+const arpuValores = arpuData.concat(txYoyArpuData).map(v => Number(v || 0)).filter(v => v > 0);
 const arpuMinReal = arpuValores.length ? Math.min(...arpuValores) : 0;
 const arpuMaxReal = arpuValores.length ? Math.max(...arpuValores) : 0;
 const arpuYMin = arpuMinReal > 0 ? Math.floor((arpuMinReal * 0.70) / 10) * 10 : 0;
@@ -6796,14 +7204,25 @@ new Chart(document.getElementById('cArpuHist'), {
             borderWidth: 3,
             tension: 0.35,
             fill: true
-        }]
+        }, ...(txYoyEnabled ? [{
+            label: 'ARPU año anterior',
+            data: txYoyArpuData,
+            borderColor: '#64748b',
+            backgroundColor: 'rgba(100,116,139,.08)',
+            pointRadius: 2,
+            borderDash: [6, 4],
+            borderWidth: 2,
+            tension: 0.35,
+            spanGaps: false,
+            fill: false
+        }] : [])]
     },
     options: {
         responsive: true,
         maintainAspectRatio: false,
         layout: { padding: { top: 32, right: 32, left: 4 } },
         plugins: {
-            legend: { display: false },
+            legend: { display: txYoyEnabled, position: 'bottom', labels:{boxWidth:12,font:{size:10}} },
             datalabels: {
                 anchor: 'end',
                 align: 'top',
@@ -6811,7 +7230,7 @@ new Chart(document.getElementById('cArpuHist'), {
                 clip: false,
                 color: '#1a2540',
                 font: { weight: '900', size: 10 },
-                display: ctx => (txCompactMode
+                display: ctx => ctx.datasetIndex === 0 && (txCompactMode
                     ? ctx.dataIndex === arpuLabels.length - 1
                     : ((arpuLabels.length - 1 - ctx.dataIndex) % 2 === 0))
                     && Number(arpuData[ctx.dataIndex] || 0) > 0,
@@ -6824,8 +7243,8 @@ new Chart(document.getElementById('cArpuHist'), {
                         const i = contexts?.[0]?.dataIndex ?? -1;
                         return txDailyMode ? (txDailyFullLabels[i] ? txDailyFullLabels[i].split('-').reverse().join('/') : (arpuLabels[i] || '')) : (txWeeklyMode ? (txArpuFullWeekLabels[i] || arpuLabels[i] || '') : (arpuLabels[i] || ''));
                     },
-                    label: ctx => ctx.parsed.y === null ? ' ARPU: sin precio válido'
-                        : ' ARPU: $' + Number(ctx.parsed.y).toLocaleString('es-MX', {maximumFractionDigits: 0})
+                    label: ctx => ctx.parsed.y === null ? ' ' + ctx.dataset.label + ': sin precio válido'
+                        : ' ' + ctx.dataset.label + ': $' + Number(ctx.parsed.y).toLocaleString('es-MX', {maximumFractionDigits: 2})
                 }
             }
         },
@@ -6885,6 +7304,7 @@ const ventData    = <?= json_encode(empty($datos_vent_stacked) ? [] : array_valu
 // Al cambiar de botón no se hace request, no se recarga el dashboard y no se recalculan KPIs.
 const txEvoViewCache = <?= json_encode($tx_evo_cache_views, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 const txEvoInitialView = <?= json_encode($evo_view) ?>;
+const txYoyHistoryAvailable = <?= $tx_yoy_cobertura ? 'true' : 'false' ?>;
 const txEvoCatalogOk = <?= $tx_evo_fuente_catalogo_ok ? 'true' : 'false' ?>;
 window.txEvoViewCache = txEvoViewCache;
 try {
@@ -6908,6 +7328,7 @@ const pluginTotalesArriba = {
             let hasData = false;
 
             for (let k = 0; k < chart.data.datasets.length; k++) {
+                if (chart.data.datasets[k].txYoyHistorical) continue;
                 const meta = chart.getDatasetMeta(k);
                 const val = chart.data.datasets[k].data[index];
                 if (chart.isDatasetVisible(k) && val > 0) {
@@ -6953,9 +7374,9 @@ function txRoundedAxisMax(maxValue){
     return Math.ceil(padded / step) * step;
 }
 
-function makeStackOpts(matrix){
+function makeStackOpts(matrix, historicalTotals = []){
     const totals = txStackTotals(matrix);
-    const maxTotal = totals.length ? Math.max(...totals) : 0;
+    const maxTotal = Math.max(0, ...(totals.length?totals:[0]), ...(historicalTotals||[]));
     const axisMax = txRoundedAxisMax(maxTotal);
 
     return {
@@ -6982,14 +7403,15 @@ function makeStackOpts(matrix){
                     label: item => ' ' + item.dataset.label + ': ' + Number(item.parsed?.y || 0).toLocaleString('es-MX'),
                     footer: items => {
                         if (!items.length) return '';
-                        const total = items.reduce((s, item) => s + Number(item.parsed?.y || 0), 0);
+                        const total = items.filter(item => !item.dataset.txYoyHistorical)
+                            .reduce((s, item) => s + Number(item.parsed?.y || 0), 0);
                         const tipo = txWeeklyMode ? 'SEMANAL' : (txDailyMode ? 'DIARIO' : 'MENSUAL');
                         return 'TOTAL ' + tipo + ': ' + total.toLocaleString('es-MX');
                     }
                 }
             },
             datalabels: { 
-                display: (context) => !txCompactMode && context.dataset.data[context.dataIndex] > 0, 
+                display: (context) => !txCompactMode && !context.dataset.txYoyHistorical && context.dataset.data[context.dataIndex] > 0,
                 color: '#ffffff',
                 font: { weight: 'bold', size: 11 },
                 textShadowColor: 'rgba(0, 0, 0, 0.5)',
@@ -7056,13 +7478,22 @@ function txEvoMatrix(view, source){
     };
 }
 
-function txEvoDatasets(matrix){
-    return matrix.labels.map((label, i) => ({
+function txEvoDatasets(matrix, historicalTotals=[]){
+    const actual = matrix.labels.map((label, i) => ({
         label,
         data: matrix.data[i],
         backgroundColor: canalColores[label] || txBrandColors.grisClaro,
         borderRadius: i === matrix.labels.length - 1 ? 4 : 0,
     }));
+    if (txYoyEnabled && historicalTotals && historicalTotals.length && historicalTotals.some(v=>v>0)) {
+        actual.push({
+            type: 'line', txYoyHistorical:true, label:'Total año anterior',
+            data:historicalTotals, borderColor:'#475569', backgroundColor:'#475569',
+            pointRadius:1.5, pointHoverRadius:4, borderDash:[6,4], borderWidth:2,
+            tension:0.2, fill:false, stack:'historico', order:0
+        });
+    }
+    return actual;
 }
 
 const txEvoSortState = {
@@ -7088,6 +7519,8 @@ function txRenderEvoTable(view, source){
     const cfg = txEvoViewCache[view] || txEvoViewCache.canal;
     const matrix = cfg[source] || {};
     const totals = txEvoTotals(matrix);
+    const previous = txYoyEnabled ? (cfg['yoy_' + source] || {}) : {};
+    const totalsPrevious = txYoyEnabled ? (cfg['yoy_' + source + '_totales'] || []) : [];
     const stateKey = source === 'vent' ? 'vent' : 'inst';
     const state = txEvoSortState[stateKey];
     const thead = document.getElementById(source === 'vent' ? 'txEvoVentThead' : 'txEvoInstThead');
@@ -7101,7 +7534,10 @@ function txRenderEvoTable(view, source){
             '<button type="button" class="tx-evo-sort-btn" data-evo-source="' + stateKey + '" data-evo-idx="' + idx + '" style="border:0;background:transparent;color:#000;display:inline-flex;gap:4px;align-items:center;justify-content:center;font-weight:700;cursor:pointer;white-space:nowrap;">' +
             txEscapeHtml(label) + ' <span>' + arrow(idx) + '</span></button></th>').join('') + '</tr>';
 
-    const entries = Object.entries(matrix).filter(([, vals]) => (vals || []).reduce((a,v)=>a+Number(v||0),0) > 0);
+    const names = [...new Set([...Object.keys(matrix), ...Object.keys(previous)])];
+    const entries = names.map(name => [name, matrix[name] || Array(labels6.length).fill(0)])
+        .filter(([name,vals]) => (vals || []).reduce((a,v)=>a+Number(v||0),0)>0 ||
+            ((previous[name]||[]).reduce((a,v)=>a+Number(v||0),0)>0));
     entries.sort((a,b) => {
         const av = Number((a[1] || [])[state.idx] || 0);
         const bv = Number((b[1] || [])[state.idx] || 0);
@@ -7115,12 +7551,24 @@ function txRenderEvoTable(view, source){
         labels6.forEach((_, i) => {
             const v = Number((vals || [])[i] || 0);
             const pct = totals[i] > 0 ? Math.round((v / totals[i]) * 1000) / 10 : 0;
-            html += '<td style="text-align:center;padding:6px 8px;color:' + (pct > 0 ? '#1a2540' : '#9ca3af') + ';">' + (pct > 0 ? pct.toLocaleString('es-MX',{maximumFractionDigits:1}) + '%' : '—') + '</td>';
+            let cell = pct > 0 ? pct.toLocaleString('es-MX',{maximumFractionDigits:1}) + '%' : '—';
+            if (txYoyEnabled) {
+                const oldVal = Number((previous[name] || [])[i] || 0);
+                const oldTotal = Number(totalsPrevious[i] || 0);
+                if (oldTotal > 0) {
+                    const oldPct = oldVal / oldTotal * 100;
+                    const delta = pct - oldPct;
+                    const sign = delta > 0 ? '+' : '';
+                    cell += '<span class="tx-yoy-table-prior">AA ' + oldVal.toLocaleString('es-MX') + ' (' + oldPct.toLocaleString('es-MX',{maximumFractionDigits:1}) + '%) · '+sign+delta.toLocaleString('es-MX',{maximumFractionDigits:1})+' pp</span>';
+                } else cell += '<span class="tx-yoy-table-prior">AA sin datos</span>';
+            }
+            html += '<td style="text-align:center;padding:6px 8px;color:' + (pct > 0 ? '#1a2540' : '#9ca3af') + ';">' + cell + '</td>';
         });
         html += '</tr>';
     });
     html += '<tr style="background:#e8f0fe;font-weight:700;"><td style="padding:6px 10px;color:#2b57a7;">Total</td>' +
-        totals.map(t => '<td style="text-align:center;padding:6px 8px;color:#2b57a7;">' + Number(t).toLocaleString('es-MX') + '</td>').join('') + '</tr>';
+        totals.map((t,i) => '<td style="text-align:center;padding:6px 8px;color:#2b57a7;">' + Number(t).toLocaleString('es-MX') +
+            (txYoyEnabled ? '<span class="tx-yoy-table-prior">AA ' + (Number(totalsPrevious[i]||0)>0 ? Number(totalsPrevious[i]).toLocaleString('es-MX') : 'sin datos') + '</span>' : '') + '</td>').join('') + '</tr>';
     tbody.innerHTML = html;
 
     thead.querySelectorAll('.tx-evo-sort-btn').forEach(btn => {
@@ -7159,12 +7607,14 @@ function txApplyEvoView(view, updateUrl = true){
     const inst = txEvoMatrix(view, 'inst');
     const vent = txEvoMatrix(view, 'vent');
 
-    txInstEvoChart.data.datasets = txEvoDatasets(inst);
-    txInstEvoChart.options = makeStackOpts(inst.data);
+    const historyInst = txYoyEnabled ? (cfg.yoy_inst_totales || []) : [];
+    const historyVent = txYoyEnabled ? (cfg.yoy_vent_totales || []) : [];
+    txInstEvoChart.data.datasets = txEvoDatasets(inst, historyInst);
+    txInstEvoChart.options = makeStackOpts(inst.data, historyInst);
     txInstEvoChart.update();
 
-    txVentEvoChart.data.datasets = txEvoDatasets(vent);
-    txVentEvoChart.options = makeStackOpts(vent.data);
+    txVentEvoChart.data.datasets = txEvoDatasets(vent, historyVent);
+    txVentEvoChart.options = makeStackOpts(vent.data, historyVent);
     txVentEvoChart.update();
 
     if (txWeeklyMode) {
