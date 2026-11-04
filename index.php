@@ -2393,7 +2393,7 @@ foreach ($tmp as $r) {
     $cumplimiento_inferior_res_pct[] = $r['res_pct'] ?? null;
     $cumplimiento_inferior_neg_pct[] = $r['neg_pct'] ?? null;
     $cumplimiento_inferior_mix_total[] = (int)($r['mix_total'] ?? 0);
-    $cumplimiento_inferior_yoy_context[] = ['distrito'=>$r['yoy_distrito']??null, 'folios'=>$r['yoy_folios']??[]];
+    $cumplimiento_inferior_yoy_context[] = ['distrito'=>$r['yoy_distrito']??null, 'folios'=>$r['yoy_folios']??[], 'pos'=>$r['yoy_pos']??null];
     $cumplimiento_inferior_visual_pct[] = (($r['meta_fuente'] ?? '') === 'sin_meta' && $max_real_sin_meta > 0)
         ? round(((int)$r['real'] / $max_real_sin_meta) * 100, 1)
         : (float)$r['pct'];
@@ -4552,6 +4552,10 @@ function tx_index_filas_comparativas(array $actual, array $previo, bool $hayPrev
 
 $tx_comp_distritos=[]; $tx_comp_canales=[];
 $tx_comp_error=null;
+// Sólo en el nivel de Director Distrital, la primera comparativa será de líderes.
+// Incluye la vista propia y la consulta jerárquica autorizada (scope_pos).
+$tx_comp_es_director = ($nivel_actual_dashboard === 'director_distrital');
+$tx_comp_inferior_error = null;
 $tx_comp_scope = $scope_canal_sql; // Ya autorizado para Admin/Regional/Distrital.
 if ($mostrar_cumplimiento_canal) {
     $cmpActualDist=tx_index_resumen_comparativo_inst($conexion,$fecha_inicio_dashboard,$fecha_fin_dashboard,
@@ -4600,6 +4604,66 @@ if ($mostrar_cumplimiento_canal) {
             $cmpActualCan['datos'],$cmpPrevioCan['datos'],
             (!$tx_yoy_enabled || $tx_yoy_week_valid) && $cmpPrevioCan['filas']>0,
             $tx_comp_orden_canales ?: array_keys(tx_canales_cumplimiento_dashboard()));
+    }
+}
+
+// FIX 04-NOV-2026: Director Distrital -> comparativo NIVEL INFERIOR (LÍDERES).
+// Mismo orden, renglones y reales actuales que Cumplimiento del nivel inferior.
+// Comparación anterior: Motor HC certificado, no conteo textual ni folios sueltos.
+// No cambia las comparativas regionales por distrito ni las de canal de venta.
+if ($tx_comp_es_director && $mostrar_cumplimiento_canal) {
+    $tx_comp_distritos = [];
+    if (!$tx_stg_hc_ok || !isset($tx_stg_motor_hc) || !($tx_stg_motor_hc instanceof RankingAtribucionServiceV06)) {
+        $tx_comp_inferior_error = 'Motor HC no disponible para comparar líderes.';
+    } elseif ($tx_yoy_enabled && !$tx_yoy_week_valid) {
+        $tx_comp_inferior_error = 'La semana ISO no tiene equivalente válido en el año anterior.';
+    } else {
+        try {
+            $tx_comp_hist = $tx_stg_motor_hc->obtenerInstalacionesJerarquia($tx_cmp_inicio, $tx_cmp_fin);
+            if (empty($tx_comp_hist['conciliacion_comercial']['verificada'])) {
+                throw new RuntimeException('La conciliación HC del período comparado no fue verificada');
+            }
+            $tx_comp_lideres_prev = [];
+            $tx_comp_distrito_prev = RankingAtribucionServiceV06::normalizarDistrito((string)$root_dashboard_distrito);
+            $tx_comp_hay_prev = false;
+            foreach (($tx_comp_hist['cuentas'] ?? []) as $tx_comp_evento) {
+                $fechaEvento = substr((string)($tx_comp_evento['fecha'] ?? ''), 0, 10);
+                if ($fechaEvento < $tx_cmp_inicio || $fechaEvento > $tx_cmp_fin) continue;
+                if ($tx_cmp_dias_iso && !in_array((int)date('N',strtotime($fechaEvento)), $tx_cmp_dias_iso, true)) continue;
+                $idLider = (string)($tx_comp_evento['lider_id'] ?? '');
+                $partesLider = explode('|', $idLider, 2);
+                if (($partesLider[0] ?? '') !== $tx_comp_distrito_prev) continue;
+                $tx_comp_hay_prev = true;
+                $tx_comp_lideres_prev[$idLider] = ($tx_comp_lideres_prev[$idLider] ?? 0) + 1;
+            }
+            $tx_comp_max_delta = 0;
+            foreach ($cumplimiento_inferior_items as $itemLider) {
+                $posLider = trim((string)($itemLider['yoy_context']['pos'] ?? ''));
+                if ($posLider === '') {
+                    throw new RuntimeException('Posición de líder no disponible para la comparativa');
+                }
+                $idLider = $tx_comp_distrito_prev.'|'.$posLider;
+                $actual = (int)($itemLider['real'] ?? 0);
+                $previo = $tx_comp_hay_prev ? (int)($tx_comp_lideres_prev[$idLider] ?? 0) : null;
+                $delta = $previo !== null ? $actual - $previo : null;
+                $tx_comp_max_delta = max($tx_comp_max_delta, abs($delta ?? 0));
+                $tx_comp_distritos[] = [
+                    'nombre'=>(string)$itemLider['nombre'], 'actual'=>$actual,
+                    'previo'=>$previo, 'delta'=>$delta,
+                    'porcentaje'=>$previo !== null && $previo > 0 ? 100.0*$delta/$previo : null,
+                    'ancho'=>0.0,
+                ];
+            }
+            foreach ($tx_comp_distritos as &$filaLider) {
+                $filaLider['ancho'] = ($tx_comp_max_delta > 0 && $filaLider['delta'] !== null)
+                    ? round(50.0 * abs($filaLider['delta'])/$tx_comp_max_delta, 2) : 0.0;
+            }
+            unset($filaLider);
+        } catch (Throwable $e) {
+            $tx_comp_distritos = [];
+            $tx_comp_inferior_error = 'No se pudo verificar la comparación de líderes con Motor HC.';
+            error_log('INDEX comparativo líderes Motor HC: '.$e->getMessage());
+        }
     }
 }
 
@@ -6692,14 +6756,16 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
 
 
     <?php if ($mostrar_cumplimiento_canal): ?>
-    <?php foreach (['distrito'=>['por distrito',$tx_comp_distritos],
+    <?php foreach (['distrito'=>[$tx_comp_es_director ? 'nivel inferior' : 'por distrito',$tx_comp_distritos],
                    'canal'=>['por canal de venta',$tx_comp_canales]] as $cmpTipo=>$cmpConfig): ?>
     <div class="evo-card tx-compare-card" aria-label="Comparativo de instalaciones <?= htmlspecialchars($cmpConfig[0]) ?>">
         <div class="chart-title">Comparativo <?= htmlspecialchars($cmpConfig[0]) ?></div>
         <div class="tx-compare-subtitle">
             <?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?>
         </div>
-        <?php if ($tx_comp_error !== null): ?>
+        <?php if ($cmpTipo === 'distrito' && $tx_comp_es_director && $tx_comp_inferior_error !== null): ?>
+            <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_inferior_error,ENT_QUOTES,'UTF-8') ?></div>
+        <?php elseif ($tx_comp_error !== null && !($cmpTipo === 'distrito' && $tx_comp_es_director)): ?>
             <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_error,ENT_QUOTES,'UTF-8') ?></div>
         <?php elseif (!$cmpConfig[1]): ?>
             <div class="tx-compare-empty">Sin instalaciones para mostrar en los períodos seleccionados.</div>
