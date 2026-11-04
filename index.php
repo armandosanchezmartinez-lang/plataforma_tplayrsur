@@ -4607,6 +4607,13 @@ if ($mostrar_cumplimiento_canal) {
     }
 }
 
+// Respaldo exclusivamente visual para Año Anterior sin HC histórico por líder.
+// Se conserva el comparativo consolidado del distrito (instalaciones por distrito),
+// calculado y filtrado previamente por el scope autorizado. No se atribuyen cuentas
+// de 2025 a líderes usando la plantilla vigente.
+$tx_comp_distritos_consolidado = $tx_comp_distritos;
+$tx_comp_fallback_distrito_anual = false;
+
 // FIX 04-NOV-2026: Director Distrital -> comparativo NIVEL INFERIOR (LÍDERES).
 // Mismo orden, renglones y reales actuales que Cumplimiento del nivel inferior.
 // Comparación anterior: Motor HC certificado, no conteo textual ni folios sueltos.
@@ -4664,6 +4671,40 @@ if ($tx_comp_es_director && $mostrar_cumplimiento_canal) {
             $tx_comp_inferior_error = 'No se pudo verificar la comparación de líderes con Motor HC.';
             error_log('INDEX comparativo líderes Motor HC: '.$e->getMessage());
         }
+    }
+}
+
+// FIX 04-NOV-2026: Sin HC anual desglosado, mostrar distrito consolidado.
+// Se activa SOLO para Director Distrital con Año Anterior marcado y únicamente
+// cuando NINGÚN líder dispone de un valor histórico certificado. Si una parte
+// del histórico es utilizable, no mezclamos universos a nivel de fila.
+// El fallback requiere un valor previo del distrito realmente consultado;
+// ante ausencia de instalaciones históricas mantiene N/D sin inventar cero.
+if ($tx_comp_es_director && $tx_yoy_enabled) {
+    $tx_comp_todos_nd = !empty($tx_comp_distritos);
+    foreach ($tx_comp_distritos as $tx_comp_fila_test) {
+        if (($tx_comp_fila_test['previo'] ?? null) !== null) {
+            $tx_comp_todos_nd = false;
+            break;
+        }
+    }
+    $tx_comp_sin_desglose = $tx_comp_inferior_error !== null
+        || empty($tx_comp_distritos) || $tx_comp_todos_nd;
+    $tx_comp_consolidado_valido = $tx_comp_error === null
+        && !empty($tx_comp_distritos_consolidado);
+    $tx_comp_consolidado_con_historia = false;
+    if ($tx_comp_consolidado_valido) {
+        foreach ($tx_comp_distritos_consolidado as $tx_comp_fila_dist) {
+            if (($tx_comp_fila_dist['previo'] ?? null) !== null) {
+                $tx_comp_consolidado_con_historia = true;
+                break;
+            }
+        }
+    }
+    if ($tx_comp_sin_desglose && $tx_comp_consolidado_con_historia) {
+        $tx_comp_distritos = $tx_comp_distritos_consolidado;
+        $tx_comp_inferior_error = null;
+        $tx_comp_fallback_distrito_anual = true;
     }
 }
 
@@ -6756,12 +6797,15 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
 
 
     <?php if ($mostrar_cumplimiento_canal): ?>
-    <?php foreach (['distrito'=>[$tx_comp_es_director ? 'nivel inferior' : 'por distrito',$tx_comp_distritos],
+    <?php foreach (['distrito'=>[($tx_comp_es_director && !$tx_comp_fallback_distrito_anual) ? 'nivel inferior' : 'por distrito',$tx_comp_distritos],
                    'canal'=>['por canal de venta',$tx_comp_canales]] as $cmpTipo=>$cmpConfig): ?>
     <div class="evo-card tx-compare-card" aria-label="Comparativo de instalaciones <?= htmlspecialchars($cmpConfig[0]) ?>">
         <div class="chart-title">Comparativo <?= htmlspecialchars($cmpConfig[0]) ?></div>
         <div class="tx-compare-subtitle">
             <?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?>
+            <?php if ($cmpTipo === 'distrito' && $tx_comp_fallback_distrito_anual): ?>
+                · Consolidado distrital (sin HC histórico por líder)
+            <?php endif; ?>
         </div>
         <?php if ($cmpTipo === 'distrito' && $tx_comp_es_director && $tx_comp_inferior_error !== null): ?>
             <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_inferior_error,ENT_QUOTES,'UTF-8') ?></div>
