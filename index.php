@@ -6524,7 +6524,6 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
         </div>
 
-        <?php if ($tx_yoy_enabled): ?><div class="tx-yoy-legend">Barra gris: instalaciones del año anterior (<?= htmlspecialchars(tx_index_etiqueta_periodo($tx_yoy_inicio,$tx_yoy_fin)) ?>). Para equipos se utilizan los folios de su línea vigente; no constituye una reconstrucción HC histórica. Las barras grises usan escala Meta/Actual/Anterior.</div><?php endif; ?>
         <div class="cumplimiento-list">
             <?php foreach ($cumplimiento_inferior_items as $item): ?>
                 <?php
@@ -6534,9 +6533,6 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     $meta_item = (int)($item['meta'] ?? 0);
                     $sin_meta_item = (($item['fuente'] ?? '') === 'sin_meta');
                     $bar_width = min($visual_pct_item, 100);
-                    if ($tx_yoy_enabled && isset($item['yoy_real'])) {
-                        $bar_width = round(100*$real_item/max(1,$real_item,$meta_item,(int)$item['yoy_real']),2);
-                    }
                     $bar_class = $sin_meta_item ? 'neutral' : (($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk'));
                 ?>
                 <div class="cumplimiento-row">
@@ -6547,27 +6543,9 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                         <div class="cumplimiento-track">
                             <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                <span class="cumplimiento-resneg-divider" style="left:<?= ($tx_yoy_enabled && isset($item['yoy_real'])) ? round($bar_width*(int)$item['res_pct']/100,2) : (int)$item['res_pct'] ?>%;"></span>
+                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
                             <?php endif; ?>
                         </div>
-                        <?php if ($tx_yoy_enabled):
-                            $prevYoyReal = $item['yoy_real'] ?? null;
-                            $scaleYoyReal = max(1, $real_item, $meta_item, (int)($prevYoyReal ?? 0));
-                            $yoyDiff = $prevYoyReal === null ? null : $real_item - (int)$prevYoyReal;
-                            $yoyPct = ($prevYoyReal === null || (int)$prevYoyReal <= 0)
-                                ? null : 100.0 * $yoyDiff / (int)$prevYoyReal;
-                            $yoyState = $yoyDiff === null ? 'na' : ($yoyDiff > 0 ? 'up' : ($yoyDiff < 0 ? 'down' : 'flat'));
-                        ?>
-                        <div class="tx-yoy-secondary">
-                            <span>Año anterior · Instalaciones</span>
-                            <div class="tx-yoy-secondary-values"><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
-                        </div>
-                        <div class="tx-yoy-secondary-detail">
-                            <span class="tx-yoy-pill <?= $yoyState ?>">Dif. <?= $yoyDiff === null ? 'N/D' : sprintf('%+d', $yoyDiff) ?></span>
-                            <span class="tx-yoy-pill <?= $yoyState ?>">% <?= $yoyPct === null ? 'N/D' : sprintf('%+.2f%%', $yoyPct) ?></span>
-                        </div>
-                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100 * $prevYoyReal / $scaleYoyReal, 2) ?>%"></div></div>
-                        <?php endif; ?>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
                                 🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
@@ -6647,7 +6625,6 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
         </div>
 
-        <?php if ($tx_yoy_enabled): ?><div class="tx-yoy-legend">Barra gris: instalaciones del mismo período anterior, normalizadas contra el mayor de Meta/Real actual/Real anterior. No compara metas históricas.</div><?php endif; ?>
         <div class="cumplimiento-list">
             <?php foreach ($cumplimiento_canal_items as $item): ?>
                 <?php
@@ -6656,9 +6633,6 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     $real_item = (int)($item['real'] ?? 0);
                     $meta_item = (int)($item['meta'] ?? 0);
                     $bar_width = min($visual_pct_item, 100);
-                    if ($tx_yoy_enabled && isset($item['yoy_real'])) {
-                        $bar_width = round(100*$real_item/max(1,$real_item,$meta_item,(int)$item['yoy_real']),2);
-                    }
                     $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
                 ?>
                 <div class="cumplimiento-row">
@@ -6669,27 +6643,9 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                         <div class="cumplimiento-track">
                             <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                <span class="cumplimiento-resneg-divider" style="left:<?= ($tx_yoy_enabled && isset($item['yoy_real'])) ? round($bar_width*(int)$item['res_pct']/100,2) : (int)$item['res_pct'] ?>%;"></span>
+                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
                             <?php endif; ?>
                         </div>
-                        <?php if ($tx_yoy_enabled):
-                            $prevYoyReal = $item['yoy_real'] ?? null;
-                            $scaleYoyReal = max(1, $real_item, $meta_item, (int)($prevYoyReal ?? 0));
-                            $yoyDiff = $prevYoyReal === null ? null : $real_item - (int)$prevYoyReal;
-                            $yoyPct = ($prevYoyReal === null || (int)$prevYoyReal <= 0)
-                                ? null : 100.0 * $yoyDiff / (int)$prevYoyReal;
-                            $yoyState = $yoyDiff === null ? 'na' : ($yoyDiff > 0 ? 'up' : ($yoyDiff < 0 ? 'down' : 'flat'));
-                        ?>
-                        <div class="tx-yoy-secondary">
-                            <span>Año anterior · Instalaciones</span>
-                            <div class="tx-yoy-secondary-values"><strong><?= $prevYoyReal === null ? 'Sin datos' : number_format((int)$prevYoyReal) ?></strong></div>
-                        </div>
-                        <div class="tx-yoy-secondary-detail">
-                            <span class="tx-yoy-pill <?= $yoyState ?>">Dif. <?= $yoyDiff === null ? 'N/D' : sprintf('%+d', $yoyDiff) ?></span>
-                            <span class="tx-yoy-pill <?= $yoyState ?>">% <?= $yoyPct === null ? 'N/D' : sprintf('%+.2f%%', $yoyPct) ?></span>
-                        </div>
-                        <div class="tx-yoy-prev-track"><div class="tx-yoy-prev-fill" style="width:<?= $prevYoyReal === null ? 0 : round(100 * $prevYoyReal / $scaleYoyReal, 2) ?>%"></div></div>
-                        <?php endif; ?>
                         <div class="cumplimiento-mix">
                             <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
                                 🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
