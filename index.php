@@ -807,7 +807,16 @@ if ($periodo === 'semanal') {
     $tx_cmp_inicio = (new DateTimeImmutable($fecha_inicio_dashboard))->modify('-7 days')->format('Y-m-d');
     $tx_cmp_fin = (new DateTimeImmutable($fecha_fin_dashboard))->modify('-7 days')->format('Y-m-d');
     $tx_cmp_dias_iso = $tx_dashboard_dias_iso;
+} elseif ($rango_mode === 'custom') {
+    // Fechas personalizadas: comparar contra el bloque INMEDIATAMENTE anterior
+    // con la misma cantidad de días calendario, incluso cuando cruza meses.
+    $tx_cmp_inicio = (new DateTimeImmutable($fecha_inicio_dashboard))
+        ->modify('-'.(int)$dias_rango_dashboard.' days')->format('Y-m-d');
+    $tx_cmp_fin = (new DateTimeImmutable($fecha_inicio_dashboard))
+        ->modify('-1 day')->format('Y-m-d');
+    $tx_cmp_dias_iso = [];
 } else {
+    // Mes / MTD: conserva los mismos días de calendario del mes previo.
     $tx_cmp_inicio = tx_index_mes_previo_fecha($fecha_inicio_dashboard);
     $tx_cmp_fin = tx_index_mes_previo_fecha($fecha_fin_dashboard);
     $tx_cmp_dias_iso = [];
@@ -4462,6 +4471,141 @@ if ($tx_yoy_enabled && $tx_yoy_week_valid && $mostrar_cumplimiento_canal && $cum
 }
 
 
+// ── COMPARATIVOS EJECUTIVOS POR DISTRITO Y CANAL ─────────────────────────────
+// El calendario, los días ISO y los permisos vienen del comparativo KPI ya
+// calculado. No se reescribe ningún conteo de las tarjetas existentes.
+function tx_index_resumen_comparativo_inst(
+    mysqli $conexion, string $desde, string $hasta, array $diasIso,
+    string $scopeSql, string $dimension
+): array {
+    $esDistrito = $dimension === 'distrito';
+    $colSub = $esDistrito ? '' : tx_subcanal_column_instalaciones($conexion);
+    $subExpr = $colSub !== '' ? '`'.str_replace('`','',$colSub).'`' : "''";
+    $columnas = $esDistrito ? 'distrito' : "origen_prospecto AS canal, $subExpr AS subcanal";
+    $groupBy = $esDistrito ? 'distrito' : 'origen_prospecto'.($colSub !== '' ? ',`'.$colSub.'`' : '');
+    $where = "fecha >= ? AND fecha <= ? AND origen_prospecto IS NOT NULL AND origen_prospecto <> '-'";
+    if ($diasIso) {
+        $mysqlDays = array_map(static fn($d) => (int)$d === 7 ? 1 : (int)$d+1, $diasIso);
+        $where .= ' AND DAYOFWEEK(fecha) IN ('.implode(',',array_unique($mysqlDays)).')';
+    }
+    if ($scopeSql !== '') $where .= " AND distrito IN ($scopeSql)";
+    $sql = "SELECT $columnas, COUNT(cuenta) AS n FROM instalaciones WHERE $where GROUP BY $groupBy";
+    $st = mysqli_prepare($conexion,$sql);
+    if (!$st) {
+        error_log('INDEX comparativo '.$dimension.': no se pudo preparar SQL');
+        return ['ok'=>false,'datos'=>[],'filas'=>0];
+    }
+    mysqli_stmt_bind_param($st,'ss',$desde,$hasta);
+    if (!mysqli_stmt_execute($st)) {
+        error_log('INDEX comparativo '.$dimension.': error de consulta');
+        mysqli_stmt_close($st);
+        return ['ok'=>false,'datos'=>[],'filas'=>0];
+    }
+    $res = mysqli_stmt_get_result($st);
+    $datos=[]; $filas=0;
+    $reglas = $esDistrito ? [] : tx_canales_cumplimiento_dashboard();
+    while ($res && ($row = mysqli_fetch_assoc($res))) {
+        ++$filas;
+        $n=(int)$row['n'];
+        if ($esDistrito) {
+            $nombre=strtoupper(trim((string)($row['distrito']??'')));
+            if (in_array($nombre,['COATZA MINA','COATZA / MINA','COATZA-MINA'],true)) $nombre='COATZA / MINA';
+            if ($nombre!=='') $datos[$nombre]=($datos[$nombre]??0)+$n;
+            continue;
+        }
+        $origen=strtoupper(trim((string)($row['canal']??'')));
+        $sub=strtoupper(trim((string)($row['subcanal']??'')));
+        foreach ($reglas as $nombre=>$regla) {
+            $reales=array_map(static fn($v)=>strtoupper(trim((string)$v)),$regla['real']??[]);
+            if (!in_array($origen,$reales,true)) continue;
+            $only=array_map(static fn($v)=>strtoupper(trim((string)$v)),$regla['only_subcanal']??[]);
+            $exclude=array_map(static fn($v)=>strtoupper(trim((string)$v)),$regla['exclude_subcanal']??[]);
+            // Misma separación de CALL CENTER vs VENTA TÉCNICO de Cumplimiento.
+            if ($colSub!=='' && $only && !in_array($sub,$only,true)) continue;
+            if ($colSub!=='' && $exclude && in_array($sub,$exclude,true)) continue;
+            $datos[$nombre]=($datos[$nombre]??0)+$n;
+        }
+    }
+    mysqli_stmt_close($st);
+    return ['ok'=>true,'datos'=>$datos,'filas'=>$filas];
+}
+
+function tx_index_filas_comparativas(array $actual, array $previo, bool $hayPrevio, array $orden=[]): array {
+    $nombres=array_values(array_unique(array_merge($orden,array_keys($actual),array_keys($previo))));
+    $filas=[]; $maxDelta=0;
+    foreach ($nombres as $nombre) {
+        $a=(int)($actual[$nombre]??0);
+        $p=(int)($previo[$nombre]??0);
+        if ($a===0 && $p===0) continue;
+        $delta=$hayPrevio ? $a-$p : null;
+        $maxDelta=max($maxDelta,abs($delta??0));
+        $filas[]=['nombre'=>$nombre,'actual'=>$a,'previo'=>$hayPrevio?$p:null,
+            'delta'=>$delta,'porcentaje'=>($hayPrevio && $p>0) ? 100.0*($a-$p)/$p : null];
+    }
+    foreach ($filas as &$fila) {
+        $fila['ancho']=($maxDelta>0 && $fila['delta']!==null)
+            ? round(50.0*abs($fila['delta'])/$maxDelta,2) : 0.0;
+    }
+    unset($fila);
+    return $filas;
+}
+
+$tx_comp_distritos=[]; $tx_comp_canales=[];
+$tx_comp_error=null;
+$tx_comp_scope = $scope_canal_sql; // Ya autorizado para Admin/Regional/Distrital.
+if ($mostrar_cumplimiento_canal) {
+    $cmpActualDist=tx_index_resumen_comparativo_inst($conexion,$fecha_inicio_dashboard,$fecha_fin_dashboard,
+        $tx_dashboard_dias_iso,$tx_comp_scope,'distrito');
+    $cmpPrevioDist=tx_index_resumen_comparativo_inst($conexion,$tx_cmp_inicio,$tx_cmp_fin,
+        $tx_cmp_dias_iso,$tx_comp_scope,'distrito');
+    $cmpActualCan=tx_index_resumen_comparativo_inst($conexion,$fecha_inicio_dashboard,$fecha_fin_dashboard,
+        $tx_dashboard_dias_iso,$tx_comp_scope,'canal');
+    $cmpPrevioCan=tx_index_resumen_comparativo_inst($conexion,$tx_cmp_inicio,$tx_cmp_fin,
+        $tx_cmp_dias_iso,$tx_comp_scope,'canal');
+    if (!$cmpActualDist['ok'] || !$cmpPrevioDist['ok'] || !$cmpActualCan['ok'] || !$cmpPrevioCan['ok']) {
+        $tx_comp_error='No se pudo verificar el comparativo. Consulta el registro de errores.';
+    } else {
+        $tx_comp_hay_previo = (!$tx_yoy_enabled || $tx_yoy_week_valid)
+            && $cmpPrevioDist['filas']>0;
+        $tx_comp_distritos=tx_index_filas_comparativas(
+            $cmpActualDist['datos'],$cmpPrevioDist['datos'],$tx_comp_hay_previo,
+            ['CANCUN','COATZA / MINA','MERIDA','TUXTLA','VILLAHERMOSA']);
+        $tx_comp_canales=tx_index_filas_comparativas(
+            $cmpActualCan['datos'],$cmpPrevioCan['datos'],
+            (!$tx_yoy_enabled || $tx_yoy_week_valid) && $cmpPrevioCan['filas']>0,
+            array_keys(tx_canales_cumplimiento_dashboard()));
+    }
+}
+
+// Misma clasificación 2P/3P de Motor Comercial. El check YOY reutiliza el mix
+// histórico YA consultado; sin check se lee exclusivamente el período previo.
+$tx_mix_previo=null; $tx_mix_previo_error=null;
+if ($mostrar_cumplimiento_canal) {
+    if ($tx_yoy_enabled) {
+        $tx_mix_previo=$tx_yoy_week_valid ? $tx_yoy_mix : null;
+    } else {
+        try {
+            require_once __DIR__.'/includes/motor_comercial.php';
+            if (!class_exists('MotorComercial')) throw new RuntimeException('Motor Comercial no disponible');
+            $motorPrev=new MotorComercial($conexion);
+            $scopePrev=$tx_stg_gerencial ? $tx_stg_scope_gerencial : ['tipo'=>'FOLIOS','folios'=>$folio_ids];
+            $dataPrev=$motorPrev->seriesDiariasPorCatalogo($tx_cmp_inicio,$tx_cmp_fin,$scopePrev);
+            $sumaPrev=['2P'=>0,'3P'=>0,'Sin clasificar'=>0];
+            foreach ($sumaPrev as $play=>&$cantidad) {
+                foreach (($dataPrev['datos']['play']['instalaciones'][$play]??[]) as $fecha=>$n) {
+                    if ($tx_cmp_dias_iso && !in_array((int)(new DateTimeImmutable((string)$fecha))->format('N'),$tx_cmp_dias_iso,true)) continue;
+                    $cantidad+=(int)$n;
+                }
+            }
+            unset($cantidad);
+            if (array_sum($sumaPrev)>0) $tx_mix_previo=$sumaPrev;
+        } catch (Throwable $ex) {
+            $tx_mix_previo_error=$ex->getMessage();
+            error_log('INDEX Mix período previo: '.$tx_mix_previo_error);
+        }
+    }
+}
+
 // Layout dinámico del dashboard:
  // En Admin / Regional / Director Distrital se muestra Cumplimiento por Canal y HC en el renglón superior.
  // En Líder / Coach / Vendedor no aplica Cumplimiento por Canal; por legibilidad,
@@ -5354,6 +5498,65 @@ if ($tx_geo_sum_count > 0) {
         }
         .dashboard-analytics-grid.with-channel .chart-card:last-child .chart-wrap{
             min-height:245px;
+        }
+
+        /* FIX 04-NOV-2026: dos niveles analíticos, sin comprimir ARPU ni Mix. */
+        .dashboard-analytics-grid.with-channel{
+            grid-template-columns:minmax(0,30fr) minmax(0,30fr) minmax(0,20fr) minmax(0,20fr);
+            align-items:stretch;
+        }
+        .dashboard-insight-grid{
+            display:grid;
+            grid-template-columns:minmax(0,2.2fr) minmax(0,1fr) minmax(0,1fr);
+            gap:18px;
+            align-items:stretch;
+            margin:0 0 22px;
+            width:100%;
+        }
+        .dashboard-insight-grid > .chart-card{
+            min-width:0;min-height:290px;max-width:100%;margin:0;
+            box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;
+        }
+        .dashboard-insight-grid .chart-wrap{min-height:245px;max-width:100%;}
+        .dashboard-insight-grid .arpu-card .chart-wrap{min-height:255px;}
+        .dashboard-insight-grid .tx-historical-scroll{min-width:0;max-width:100%;}
+        .tx-compare-card{padding:17px 13px;}
+        .tx-compare-card .chart-title{font-size:.84rem;line-height:1.24;font-weight:900;}
+        .tx-compare-subtitle{font-size:.67rem;color:#64748b;line-height:1.3;margin:5px 0 10px;}
+        .tx-compare-list{display:flex;flex-direction:column;gap:14px;}
+        .tx-compare-item{display:flex;flex-direction:column;gap:5px;min-width:0;}
+        .tx-compare-line{display:flex;align-items:baseline;justify-content:space-between;gap:5px;}
+        .tx-compare-name{font-weight:900;font-size:.69rem;color:#17213d;line-height:1.2;
+            overflow-wrap:anywhere;min-width:0;}
+        .tx-compare-values{font-size:.64rem;font-weight:800;color:#475569;white-space:nowrap;text-align:right;}
+        .tx-compare-graph{position:relative;height:10px;background:#edf1fa;border-radius:8px;overflow:hidden;}
+        .tx-compare-graph:after{content:'';position:absolute;top:0;bottom:0;left:50%;width:1px;background:#98a6c4;z-index:2;}
+        .tx-compare-bar{position:absolute;top:0;bottom:0;border-radius:6px;min-width:2px;}
+        .tx-compare-bar.positive{left:50%;background:linear-gradient(90deg,#1dabf4,#00d6e9);}
+        .tx-compare-bar.negative{right:50%;background:linear-gradient(270deg,#fb4384,#ff006c);}
+        .tx-compare-bar.flat{left:calc(50% - 1px);background:#94a3b8;}
+        .tx-compare-delta{display:flex;justify-content:space-between;align-items:center;gap:7px;font-size:.67rem;}
+        .tx-compare-delta strong{font-weight:950;white-space:nowrap;}
+        .tx-compare-delta .positive{color:#068caa;}
+        .tx-compare-delta .negative{color:#dc236a;}
+        .tx-compare-delta .flat{color:#64748b;}
+        .tx-compare-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:.64rem;color:#64748b;}
+        .tx-compare-footer{margin-top:auto;padding-top:13px;font-size:.67rem;line-height:1.35;color:#64748b;}
+        .tx-compare-empty{font-size:.76rem;line-height:1.4;color:#64748b;padding:10px 0;}
+        .tx-mix-prev-summary{font-size:.74rem;color:#40506c;display:flex;justify-content:center;gap:12px;flex-wrap:wrap;padding:8px 0;}
+        .tx-mix-prev-summary strong{color:#182443;}
+        .tx-mix-prev-change{font-size:.70rem;color:#64748b;text-align:center;line-height:1.5;}
+        @media(max-width:1420px){
+            .dashboard-analytics-grid.with-channel{grid-template-columns:repeat(2,minmax(0,1fr));}
+            .dashboard-insight-grid{grid-template-columns:minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr);}
+        }
+        @media(max-width:1040px){
+            .dashboard-insight-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+            .dashboard-insight-grid .arpu-card{grid-column:1 / -1;}
+        }
+        @media(max-width:760px){
+            .dashboard-analytics-grid.with-channel,.dashboard-insight-grid{grid-template-columns:minmax(0,1fr);}
+            .dashboard-insight-grid .arpu-card{grid-column:auto;}
         }
 
         .cumplimiento-panel{
@@ -6506,6 +6709,49 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
     <?php endif; ?>
 
 
+    <?php if ($mostrar_cumplimiento_canal): ?>
+    <?php foreach (['distrito'=>['por distrito',$tx_comp_distritos],
+                   'canal'=>['por canal de venta',$tx_comp_canales]] as $cmpTipo=>$cmpConfig): ?>
+    <div class="evo-card tx-compare-card" aria-label="Comparativo de instalaciones <?= htmlspecialchars($cmpConfig[0]) ?>">
+        <div class="chart-title">Comparativo <?= htmlspecialchars($cmpConfig[0]) ?></div>
+        <div class="tx-compare-subtitle">
+            <?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?>
+        </div>
+        <?php if ($tx_comp_error !== null): ?>
+            <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_error,ENT_QUOTES,'UTF-8') ?></div>
+        <?php elseif (!$cmpConfig[1]): ?>
+            <div class="tx-compare-empty">Sin instalaciones para mostrar en los períodos seleccionados.</div>
+        <?php else: ?>
+        <div class="tx-compare-list">
+        <?php foreach ($cmpConfig[1] as $cmpFila):
+            $cmpDif=$cmpFila['delta'];
+            $cmpClase=$cmpDif===null?'flat':($cmpDif>0?'positive':($cmpDif<0?'negative':'flat'));
+        ?>
+            <div class="tx-compare-item">
+                <div class="tx-compare-line">
+                    <span class="tx-compare-name" title="<?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?></span>
+                    <span class="tx-compare-values"><?= number_format($cmpFila['actual']) ?> / <?= $cmpFila['previo']===null?'N/D':number_format($cmpFila['previo']) ?></span>
+                </div>
+                <div class="tx-compare-graph" aria-hidden="true">
+                    <?php if ($cmpDif!==null): ?>
+                    <div class="tx-compare-bar <?= $cmpClase ?>" style="width:<?= number_format((float)$cmpFila['ancho'],2,'.','') ?>%"></div>
+                    <?php endif; ?>
+                </div>
+                <div class="tx-compare-delta">
+                    <strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':sprintf('%+d',$cmpDif) ?> INS</strong>
+                    <strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':($cmpFila['porcentaje']===null?'N/D':sprintf('%+.1f%%',$cmpFila['porcentaje'])) ?></strong>
+                </div>
+            </div>
+        <?php endforeach; ?>
+        </div>
+        <div class="tx-compare-footer">Actual / comparación · Barras: diferencia en instalaciones · % respecto al período comparado.</div>
+        <?php endif; ?>
+    </div>
+    <?php endforeach; ?>
+    </div><!-- dashboard-analytics-grid: cumplimiento + comparativos -->
+    <div class="dashboard-insight-grid"><!-- ARPU y Mix en segunda fila -->
+    <?php endif; ?>
+
         <div class="chart-card arpu-card">
             <div class="chart-title"><?= ($tx_evo_daily_custom ? 'ARPU — Evolución diaria del rango seleccionado' : ($periodo === 'semanal' && $tx_evo_week_keys ? 'ARPU — Tendencia semanal ISO desde S01 de 2026' : ($tx_stg_aplicable ? 'ARPU — Tendencia desde enero 2026' : 'ARPU — Tendencia 6 meses'))) ?></div>
 
@@ -6552,7 +6798,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
                     <div style="font-size:11px;color:#64748b;padding:4px 0;">Sin clasificar: <?= number_format((int)$tx_stg_mix_sin_clasificar) ?> instalación(es); se muestran separadas.</div>
                 <?php endif; ?>
             <?php endif; ?>
-            <?php if ($tx_yoy_enabled):
+            <?php if ($tx_yoy_enabled && !$mostrar_cumplimiento_canal):
                 $mixPrevTotal=$tx_yoy_mix !== null ? array_sum($tx_yoy_mix) : 0;
                 $mixActualTotal=(int)$inst_2p+(int)$inst_3p+(int)($tx_stg_mix_sin_clasificar??0);
             ?>
@@ -6573,6 +6819,34 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <?php endif; ?>
             <div class="chart-wrap"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cInstMix"></canvas></div>
         </div>
+
+        <?php if ($mostrar_cumplimiento_canal): ?>
+        <div class="chart-card tx-mix-previous-card">
+            <div class="chart-title">Mix 2P y 3P — <?= $tx_yoy_enabled ? 'Año anterior' : 'Período anterior' ?></div>
+            <div class="tx-compare-subtitle"><?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?></div>
+            <?php if ($tx_mix_previo === null || array_sum($tx_mix_previo)===0 || ($tx_stg_aplicable && !$tx_stg_ok)): ?>
+                <div class="tx-compare-empty"><?= $tx_mix_previo_error!==null ? 'No se pudo verificar el Mix del período anterior.' : 'Sin información comparable clasificada en el Motor Comercial.' ?></div>
+            <?php else:
+                $tx_mix_previo_total=array_sum($tx_mix_previo);
+                $tx_mix_actual_total=(int)$inst_2p+(int)$inst_3p+(int)($tx_stg_mix_sin_clasificar??0);
+                $tx_mix_prev_pct2=100.0*(int)$tx_mix_previo['2P']/$tx_mix_previo_total;
+                $tx_mix_prev_pct3=100.0*(int)$tx_mix_previo['3P']/$tx_mix_previo_total;
+                $tx_mix_actual_pct2=$tx_mix_actual_total>0 ? 100.0*$inst_2p/$tx_mix_actual_total : null;
+                $tx_mix_actual_pct3=$tx_mix_actual_total>0 ? 100.0*$inst_3p/$tx_mix_actual_total : null;
+            ?>
+                <div class="tx-mix-prev-summary"><strong><?= number_format($tx_mix_previo_total) ?> INS</strong>
+                    <span>2P: <?= number_format($tx_mix_previo['2P']) ?></span>
+                    <span>3P: <?= number_format($tx_mix_previo['3P']) ?></span>
+                    <?php if ($tx_mix_previo['Sin clasificar']>0): ?><span>Sin clasificar: <?= number_format($tx_mix_previo['Sin clasificar']) ?></span><?php endif; ?>
+                </div>
+                <div class="chart-wrap"><canvas id="cInstMixPrev"></canvas></div>
+                <div class="tx-mix-prev-change">
+                    Cambio vs actual: 2P <?= $tx_mix_actual_pct2===null?'N/D':sprintf('%+.1f pp',$tx_mix_actual_pct2-$tx_mix_prev_pct2) ?>
+                    · 3P <?= $tx_mix_actual_pct3===null?'N/D':sprintf('%+.1f pp',$tx_mix_actual_pct3-$tx_mix_prev_pct3) ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
 
     </div>
 
@@ -7207,6 +7481,28 @@ new Chart(document.getElementById('cInstMix'), {
     options: donutOpts(),
     plugins: [ChartDataLabels]
 });
+// La segunda dona usa exactamente la misma clasificación del Motor Comercial.
+const txPrevMixCanvas = document.getElementById('cInstMixPrev');
+if (txPrevMixCanvas) {
+    const txPrevMixData = <?= json_encode($tx_mix_previo ?? [],JSON_UNESCAPED_UNICODE) ?>;
+    const txPrevSinClasificar = Number(txPrevMixData['Sin clasificar'] || 0);
+    new Chart(txPrevMixCanvas, {
+        type:'doughnut',
+        data: {
+            labels: txPrevSinClasificar>0 ? ['2P','3P','Sin clasificar'] : ['2P','3P'],
+            datasets: [{
+                data: txPrevSinClasificar>0
+                    ? [Number(txPrevMixData['2P']||0),Number(txPrevMixData['3P']||0),txPrevSinClasificar]
+                    : [Number(txPrevMixData['2P']||0),Number(txPrevMixData['3P']||0)],
+                backgroundColor: txPrevSinClasificar>0
+                    ? [txBrandColors.azulElectrico,txBrandColors.cian,'#94a3b8']
+                    : [txBrandColors.azulElectrico,txBrandColors.cian],
+                borderWidth:0
+            }]
+        },
+        options:donutOpts(), plugins:[ChartDataLabels]
+    });
+}
 const txWeeklyMode = <?= ($periodo === 'semanal' && (bool)$tx_evo_week_keys) ? 'true' : 'false' ?>;
 const txDailyMode = <?= $tx_evo_daily_custom ? 'true' : 'false' ?>;
 const txCompactMode = txWeeklyMode || txDailyMode;
