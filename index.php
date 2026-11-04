@@ -12,6 +12,8 @@ if (!isset($_SESSION['usuario'])) {
 }
 
 include 'conexion.php';
+// Equivalencia puntual de líneas de reporte: conserva HC/HIC históricos intactos.
+require_once __DIR__ . '/includes/jerarquia_excepciones_sur.php';
 
 // --- CONFIGURACIÓN DE USUARIO Y ROLES ---
 $rol            = $_SESSION['rol'] ?? 'vendedor';
@@ -48,14 +50,18 @@ function getSubordinados($conexion, $id_pos, $semana = null, $anio = null) {
     }
 
     $ph = implode(',', array_fill(0, count($posiciones_lr), '?'));
+    // Sólo reconoce dos directores distritales SUR que HC liga a la referencia 1740346.
+    // No homologa globalmente esas posiciones ni modifica ninguna fila histórica.
+    $extra_lr_sur = tx_sur_hc_relacion_excepcional_sql((string)$id_pos, $anio !== null ? (int)$anio : null);
+    $condicion_lr = "(posicion_lr IN ($ph)$extra_lr_sur)";
 
     if ($semana && $anio) {
-        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr IN ($ph) AND numero_talento_gs NOT LIKE '%VACANTE%' AND semana = ? AND anio = ?");
+        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE $condicion_lr AND numero_talento_gs NOT LIKE '%VACANTE%' AND semana = ? AND anio = ?");
         $tipos = str_repeat('s', count($posiciones_lr)) . 'ii';
         $bind = array_merge(array_values($posiciones_lr), [(int)$semana, (int)$anio]);
         mysqli_stmt_bind_param($stmt, $tipos, ...$bind);
     } else {
-        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE posicion_lr IN ($ph) AND numero_talento_gs NOT LIKE '%VACANTE%'");
+        $stmt = mysqli_prepare($conexion, "SELECT DISTINCT id_posicion FROM hc WHERE $condicion_lr AND numero_talento_gs NOT LIKE '%VACANTE%'");
         $tipos = str_repeat('s', count($posiciones_lr));
         mysqli_stmt_bind_param($stmt, $tipos, ...array_values($posiciones_lr));
     }
@@ -1312,10 +1318,11 @@ function tx_real_inst_distrito($conexion, $distrito, $mes, $anio, $cond_dia_fech
 
 function tx_direct_children($conexion, $root_id, $semana, $anio, $target_nivel = '') {
     $root = mysqli_real_escape_string($conexion, (string)$root_id);
+    $extra_lr_sur = tx_sur_hc_relacion_excepcional_sql((string)$root_id, $anio !== null ? (int)$anio : null);
     $sql = "
         SELECT DISTINCT id_posicion, nombre_colaborador, posicion, puesto_lr, distrito
         FROM hc
-        WHERE posicion_lr = '$root'
+        WHERE (posicion_lr = '$root'$extra_lr_sur)
           AND semana = ".(int)$semana."
           AND anio = ".(int)$anio."
           AND nombre_colaborador <> 'VACANTE'
