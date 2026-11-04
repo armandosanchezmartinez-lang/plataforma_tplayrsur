@@ -4565,15 +4565,41 @@ if ($mostrar_cumplimiento_canal) {
     if (!$cmpActualDist['ok'] || !$cmpPrevioDist['ok'] || !$cmpActualCan['ok'] || !$cmpPrevioCan['ok']) {
         $tx_comp_error='No se pudo verificar el comparativo. Consulta el registro de errores.';
     } else {
+        // Alineación horizontal: los comparativos heredan el orden por % de
+        // cumplimiento ya calculado en las dos tarjetas de la izquierda.
+        // Para un Director Distrital la tarjeta inferior es de LÍDERES, no de
+        // distritos: se conserva el orden distrital predeterminado en esa vista.
+        $tx_comp_orden_distritos = [];
+        if ($tx_consulta_regional) {
+            foreach ($cumplimiento_inferior_items as $filaCumplimiento) {
+                $nombre = trim((string)($filaCumplimiento['nombre'] ?? ''));
+                $nombre = strtoupper(strtr($nombre, [
+                    'Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U',
+                    'á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u',
+                ]));
+                if (in_array($nombre, ['COATZA MINA','COATZA / MINA','COATZA-MINA'], true)) {
+                    $nombre = 'COATZA / MINA';
+                }
+                if ($nombre !== '') $tx_comp_orden_distritos[] = $nombre;
+            }
+        }
+        $tx_comp_orden_canales = [];
+        foreach ($cumplimiento_canal_items as $filaCanalCumplimiento) {
+            $nombre = trim((string)($filaCanalCumplimiento['nombre'] ?? ''));
+            if ($nombre !== '') $tx_comp_orden_canales[] = $nombre;
+        }
+
+        // tx_index_filas_comparativas conserva al final los elementos que
+        // aparecen solo en el comparativo y no en la tarjeta de cumplimiento.
         $tx_comp_hay_previo = (!$tx_yoy_enabled || $tx_yoy_week_valid)
             && $cmpPrevioDist['filas']>0;
         $tx_comp_distritos=tx_index_filas_comparativas(
             $cmpActualDist['datos'],$cmpPrevioDist['datos'],$tx_comp_hay_previo,
-            ['CANCUN','COATZA / MINA','MERIDA','TUXTLA','VILLAHERMOSA']);
+            $tx_comp_orden_distritos ?: ['CANCUN','COATZA / MINA','MERIDA','TUXTLA','VILLAHERMOSA']);
         $tx_comp_canales=tx_index_filas_comparativas(
             $cmpActualCan['datos'],$cmpPrevioCan['datos'],
             (!$tx_yoy_enabled || $tx_yoy_week_valid) && $cmpPrevioCan['filas']>0,
-            array_keys(tx_canales_cumplimiento_dashboard()));
+            $tx_comp_orden_canales ?: array_keys(tx_canales_cumplimiento_dashboard()));
     }
 }
 
