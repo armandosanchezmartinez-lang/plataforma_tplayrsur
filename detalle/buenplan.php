@@ -1,6 +1,6 @@
 <?php
 /**
- * TalIA / TotalXpedient — Promociones / Buen Plan v1.2.0
+ * TalIA / TotalXpedient — Promociones / Buen Plan v1.2.1
  * Ruta propuesta: /plataforma/detalle/buenplan.php
  * Solo lectura. NO modifica sidebar, BD ni motores.
  * Identifica 250 MB desde catálogo, Play/Tipo desde catálogo y precio PP desde instalaciones.
@@ -62,7 +62,7 @@ $playSel=(string)($_GET['play']??'AMBOS');if(!in_array($playSel,['AMBOS','2P','3
 $preWeeks=max(1,min(12,(int)($_GET['pre_semanas']??4)));
 $preMonths=max(1,min(6,(int)($_GET['pre_meses']??1)));
 $cutArg=(string)($_GET['corte']??'');
-$error='';$warn=[];$events=[];$lastDay=null;$confirmed=0;$unmatched=0;$duplicate=0;$noCatalog=0;$flagPromoAvailable=false;
+$error='';$warn=[];$events=[];$lastDay=null;$confirmed=0;$unmatched=0;$duplicate=0;$noCatalog=0;$flagPromoAvailable=false;$duplicateExact=0;$duplicateConflict=0;$missingDetail=0;$auditBreakdown=['REPETIDA_IDENTICA'=>0,'PLAN_DIFERENTE'=>0,'PRECIO_DIFERENTE'=>0,'ATRIBUTOS_CATALOGO_DIFERENTES'=>0,'FECHA_DIFERENTE'=>0,'SIN_DETALLE'=>0];
 $comercialVersion='';$hcVersion='';$countsByPeriod=[];$reco='';
 try {
     if (!($conexion instanceof mysqli))throw new RuntimeException('Conexión mysqli no disponible');
@@ -123,12 +123,40 @@ try {
         while($r=$rs->fetch_assoc())$records[(string)$r['cuenta']][]=$r;
     }
     foreach($wanted as $account=>$meta){
-        $rr=$records[$account]??[];if(count($rr)!==1){if(count($rr)>1)$duplicate++;else$unmatched++;continue;}
-        $r=$rr[0];$day=substr((string)$r['fecha'],0,10);if(!bp_date($day)){$unmatched++;continue;}
+        $rr=$records[$account]??[];
+        if(!$rr){$unmatched++;$missingDetail++;$auditBreakdown['SIN_DETALLE']++;continue;}
+        if(count($rr)>1){
+            // No adjudicar arbitrariamente una cuenta con planes, precios, fechas o
+            // clasificaciones de catálogo distintos. Repeticiones idénticas se
+            // consolidan como UNA cuenta y quedan documentadas en auditoría.
+            $signatures=[];
+            foreach($rr as $record){
+                $signature=json_encode([
+                    substr((string)($record['fecha']??''),0,10),bp_n($record['plan']??''),
+                    (string)($record['precio_pp']??''),(string)($record['precio_lista']??''),
+                    bp_n($record['velocidad_agrupada']??''),bp_n($record['play']??''),
+                    bp_n($record['tipo']??'')
+                ],JSON_UNESCAPED_UNICODE);
+                $signatures[$signature]=true;
+            }
+            if(count($signatures)===1){
+                $duplicateExact++;$auditBreakdown['REPETIDA_IDENTICA']++;
+            }else{
+                $duplicate++;$duplicateConflict++;
+                foreach(['plan'=>'PLAN_DIFERENTE','precio_pp'=>'PRECIO_DIFERENTE',
+                          'precio_lista'=>'PRECIO_DIFERENTE',
+                          'fecha'=>'FECHA_DIFERENTE','velocidad_agrupada'=>'ATRIBUTOS_CATALOGO_DIFERENTES',
+                          'play'=>'ATRIBUTOS_CATALOGO_DIFERENTES','tipo'=>'ATRIBUTOS_CATALOGO_DIFERENTES'] as $column=>$reason){
+                    $distinct=[];foreach($rr as $record)$distinct[json_encode($record[$column]??null)]=true;
+                    if(count($distinct)>1)$auditBreakdown[$reason]++;
+                }
+                continue;
+            }
+        }
+        $r=$rr[0];$day=substr((string)$r['fecha'],0,10);if(!bp_date($day)){$unmatched++;$missingDetail++;$auditBreakdown['SIN_DETALLE']++;continue;}
         $promoPlay=bp_promo_play((string)$r['plan']);
         if($r['match_catalogo']===null){$noCatalog++;}
         $tipo=bp_n($r['tipo']??'');
-        // Sólo 250 MB residencial con clasificación respaldada por catálogo.
         if($tipo!=='RESIDENCIAL')continue;
         $pl=bp_n($r['play']??'');$pl=str_contains($pl,'DOBLE')?'2P':(str_contains($pl,'TRIPLE')?'3P':'ND');
         if($playSel!=='AMBOS' && $pl!==$playSel)continue;
@@ -142,7 +170,6 @@ try {
         $validPeriod=bp_is_promo($day);
         $confirmed=$validPeriod && $speed===250 && $correctName && $priceSignal;
         $nameHasNetflix=str_contains(bp_n($r['plan']??''),'NETFLIX');
-        // Un 250 MB Netflix histórico sin precio promocional no prueba Buen Plan.
         $candidate=$validPeriod && $speed===250 && !$confirmed && ($priceSignal || $promoPlay!==null || $nameHasNetflix);
         $priceConflict=$validPeriod && $speed===250 && $correctName && $pp!==null && !$priceSignal;
         $events[]=['day'=>$day,'dist'=>$meta['dist'],'play'=>$pl,'speed'=>$speed,'pp'=>$pp,
@@ -151,7 +178,8 @@ try {
            'price_conflict'=>$priceConflict,'classified'=>($pl!=='ND'&&$speed!==null)];
     }
     if($noCatalog)$warn[]='Hay '.number_format($noCatalog).' cuenta(s) sin coincidencia en catalogo_paquetes; no se clasifican como residencial ni como 250 MB.';
-    if($duplicate || $unmatched)$warn[]='Conciliación de detalle: '.number_format($duplicate).' cuenta(s) con múltiples registros y '.number_format($unmatched).' sin instalación recuperable. No se atribuyen a ningún paquete.';
+    // Los pormenores se muestran en panel de auditoría, sin saturar las tarjetas ejecutivas.
+    if($duplicate || $unmatched)$warn[]='Atención: '.number_format($duplicate+$unmatched).' cuenta(s) no conciliadas en detalle. Consultar auditoría al final del tablero.';
     $warn[]='Buen Plan confirmado exige 250 MB residencial + Play del catálogo + nombre promocional exacto + PP histórico ($600/$739) + vigencia. Una señal parcial queda como candidato; no se infiere velocidad por TURBO.';
 } catch(Throwable $e){$error=$e->getMessage();}
 $series=[];$daily=[];$preDaily=[];$promoDaily=[];$postDaily=[];
@@ -169,26 +197,35 @@ if(!$error){
     }
     ksort($series);ksort($daily);
 }
-// PRE semanal: promedio de 4 semanas; PRE mensual: promedio de meses completos;
-// diario: promedio de los días cargados dentro de ventana elegida.
+// Base comparable: mismo conjunto de días ISO que la campaña transcurrida.
+// En mensual se usa la tasa diaria de meses PRE COMPLETOS multiplicada por
+// los días efectivos, en lugar de dividir arbitrariamente entre 30.
 $preUnits=$mode==='mensual'?$preMonths:$preWeeks;
-$preReference=bp_blank();foreach($pre as $k=>$v)$preReference[$k]=$v;
-$preNorm=$preUnits>0?$pre['v250']/$preUnits:0;
-$promoDur=$lastDay?max(0,min(7,($lastDay>='2026-11-03' ? ((int)$promoStart->diff(new DateTimeImmutable($lastDay))->days+1) : 0))):0;
-if($lastDay && $lastDay<'2026-11-03')$promoDur=0;
-$promoDays=$promoDur;
-// Comparador PRE por días ISO equivalentes, evitando campañas parciales vs semanas completas.
+$promoDays=$lastDay && $lastDay>='2026-11-03'
+    ? min(7, (int)$promoStart->diff(new DateTimeImmutable($lastDay))->days+1) : 0;
+$isoDays=[];
+for($i=0;$i<$promoDays;$i++)$isoDays[(int)$promoStart->modify('+'.$i.' days')->format('N')]=true;
 $comparablePre=bp_blank();
+$preActualDays=0;
+if($mode==='mensual'){
+    for($d=$start;$d<$promoStart;$d=$d->modify('+1 day')){
+        // El PRE mensual acaba el 31 de octubre y es un mes calendario completo.
+        if($d->format('Y-m-d')<'2026-11-01')$preActualDays++;
+    }
+}
 foreach($events as $ev){
     if(($district!=='SUR' && $district!==$ev['dist']) || bp_phase($ev['day'])!=='PRE')continue;
-    if($mode==='mensual')continue;
-    $w=(int)(new DateTimeImmutable($ev['day']))->format('N');
-    if($promoDays>0 && in_array($w,array_map(static fn($j)=>(($j+1)%7)+1,range(0,$promoDays-1)),true))bp_add($comparablePre,$ev);
+    if($mode==='mensual'){
+        if($ev['day']<'2026-11-01')bp_add($comparablePre,$ev);
+    } elseif(isset($isoDays[(int)(new DateTimeImmutable($ev['day']))->format('N')])) bp_add($comparablePre,$ev);
 }
-$base250=$mode==='mensual'?($preUnits ? $pre['v250']/$preUnits*($promoDays/30.0):0):($preUnits?$comparablePre['v250']/$preUnits:0);
+$baseFactor=$mode==='mensual'
+    ? ($preActualDays>0?$promoDays/$preActualDays:0.0)
+    : ($preUnits>0?1.0/$preUnits:0.0);
+$base250=$comparablePre['v250']*$baseFactor;
 $comparison250=$promo['v250'];$targetRate=$base250;
 $change250=$promoDays>0?bp_delta($comparison250,$targetRate):null;
-$baseTotal=$mode==='mensual'?($preUnits?$pre['total']/$preUnits*($promoDays/30.0):0):($preUnits?$comparablePre['total']/$preUnits:0);
+$baseTotal=$comparablePre['total']*$baseFactor;
 $promoTotal=$promo['total'];
 $changeTotal=$promoDays>0?bp_delta($promoTotal,$baseTotal):null;
 $sharePre=bp_pct($pre['v250'],$pre['total']);$sharePromo=bp_pct($promo['v250'],$promo['total']);
@@ -196,10 +233,10 @@ $shareDiff=($sharePre!==null&&$sharePromo!==null)?$sharePromo-$sharePre:null;
 $arpuPre=$pre['income250_n']?$pre['income250']/$pre['income250_n']:null;
 $arpuPromo=$promo['income250_n']?$promo['income250']/$promo['income250_n']:null;
 $arpudelta=($arpuPre!==null&&$arpuPromo!==null)?bp_delta($arpuPromo,$arpuPre):null;
-$targetVal=$mode==='mensual'?($preUnits?$pre['income250']/$preUnits*($promoDays/30.0):0):($preUnits?$comparablePre['income250']/$preUnits:0);
+$targetVal=$comparablePre['income250']*$baseFactor;
 $promoVal=$promo['income250'];
 $valueDelta=$promoDays>0&&$targetVal>0?bp_delta($promoVal,$targetVal):null;
-$speeds=[];foreach([$pre,$promo] as $a)foreach(['2P','3P'] as $p)foreach($a['speeds'][$p] as $s=>$n)$speeds[(int)$s]=true;ksort($speeds,SORT_NUMERIC);
+$speeds=[];foreach([$comparablePre,$promo] as $a)foreach(['2P','3P'] as $p)foreach($a['speeds'][$p] as $s=>$n)$speeds[(int)$s]=true;ksort($speeds,SORT_NUMERIC);
 $chartData=[];
 foreach($series as $key=>$a){
     $d=$mode==='semanal'?(new DateTimeImmutable('2026-01-01'))->setISODate((int)substr($key,0,4),(int)substr($key,-2),1):($mode==='mensual'?new DateTimeImmutable($key.'-01'):new DateTimeImmutable($key));
@@ -208,7 +245,14 @@ foreach($series as $key=>$a){
     $chartData[]=['key'=>$key,'label'=>bp_lab($key,$mode),'total'=>$a['total'],'v250'=>$a['v250'],'p2'=>$a['p2_250'],'p3'=>$a['p3_250'],'phase'=>$phase,'promo'=>$a['promo']];
 }
 $chartJson=json_encode($chartData,JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
-$barData=[];foreach(array_keys($speeds) as $s){$p2Pre=($pre['speeds']['2P'][$s]??0)/$preUnits;$p3Pre=($pre['speeds']['3P'][$s]??0)/$preUnits;$p2Now=$promo['speeds']['2P'][$s]??0;$p3Now=$promo['speeds']['3P'][$s]??0;$barData[]=['speed'=>$s,'delta'=>($p2Now+$p3Now)-($p2Pre+$p3Pre)];}
+$barData=[];
+foreach(array_keys($speeds) as $s){
+    $p2Pre=($comparablePre['speeds']['2P'][$s]??0)*$baseFactor;
+    $p3Pre=($comparablePre['speeds']['3P'][$s]??0)*$baseFactor;
+    $p2Now=$promo['speeds']['2P'][$s]??0;
+    $p3Now=$promo['speeds']['3P'][$s]??0;
+    $barData[]=['speed'=>$s,'delta'=>($p2Now+$p3Now)-($p2Pre+$p3Pre)];
+}
 $barJson=json_encode($barData,JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
 // Comparación por distritos, siempre muestra ambos incluso con filtro individual.
 // El PRE se normaliza por el número de semanas/meses seleccionados.
@@ -221,19 +265,19 @@ foreach(['TUXTLA','VILLAHERMOSA'] as $distName){
         if($ev['dist']!==$distName)continue;
         if(bp_phase($ev['day'])==='PROMO')bp_add($allP,$ev);
         if(bp_phase($ev['day'])==='PRE'){
-            bp_add($allB,$ev);
+            if($mode!=='mensual' || $ev['day']<'2026-11-01')bp_add($allB,$ev);
             if($promoDays>0 && $mode!=='mensual'){
                 // Intervalo PRE semanal comienza lunes, campaña inicia martes.
                 $isoDow=(int)(new DateTimeImmutable($ev['day']))->format('N');
-                if(in_array($isoDow,array_map(static fn($j)=>(($j+1)%7)+1,range(0,$promoDays-1)),true))bp_add($refComparable,$ev);
-            }
+                if(isset($isoDays[$isoDow]))bp_add($refComparable,$ev);
+            }elseif($mode==='mensual' && $ev['day']<'2026-11-01')bp_add($refComparable,$ev);
         }
     }
-    $reference=$mode==='mensual'?($preUnits ? $allB['v250']/$preUnits * ($promoDays/30.0):0):($preUnits?$refComparable['v250']/$preUnits:0);
-    $baseTotalComparable=$mode==='mensual'?($preUnits?$allB['total']/$preUnits*($promoDays/30.0):0):($preUnits?$refComparable['total']/$preUnits:0);
+    $reference=$refComparable['v250']*$baseFactor;
+    $baseTotalComparable=$refComparable['total']*$baseFactor;
     $districtComparison[$distName]=[
       'pre250'=>$reference,'campaign250'=>$allP['v250'],
-      'growth'=>bp_delta($allP['v250'],$reference),
+      'growth'=>$promoDays>0?bp_delta($allP['v250'],$reference):null,
       'pre_total'=>$baseTotalComparable,'campaign_total'=>$allP['total'],
       'pre_mix'=>bp_pct($allB['v250'],$allB['total']),
       'promo_mix'=>bp_pct($allP['v250'],$allP['total']),
@@ -270,7 +314,7 @@ $params=$_GET;function bp_href(array $change):string {return '?'.http_build_quer
 <div class="metric"><div class="label">MIX 250 MB RESIDENCIAL</div><strong class="<?=($shareDiff??-1)>=0?'good':''?>"><?=$shareDiff===null?'ND':(($shareDiff>=0?'+':'').bp_fmt($shareDiff,1).' pp')?></strong><small><?=bp_fmt($sharePromo,1)?>% vs <?=bp_fmt($sharePre,1)?>% PRE</small></div>
 <div class="metric"><div class="label">SUMA PP 250 MB</div><strong class="<?=($valueDelta??-1)>=0?'good':''?>"><?=$valueDelta===null?'ND':(($valueDelta>=0?'+':'').bp_fmt($valueDelta,1).'%')?></strong><small>$<?=bp_fmt($promoVal,0)?> vs $<?=bp_fmt($targetVal,0)?> PRE</small></div>
 <div class="metric"><div class="label">INSTALACIONES TOTAL RESIDENCIAL</div><strong class="<?=($changeTotal??-1)>=0?'good':''?>"><?=$changeTotal===null?'ND':(($changeTotal>=0?'+':'').bp_fmt($changeTotal,1).'%')?></strong><small><?=bp_fmt($promoTotal,2)?> vs <?=bp_fmt($baseTotal,2)?> PRE</small></div></div>
-<div class="note">Lectura: el universo total de 250 Mbps incluye paquetes regulares y Buen Plan; la adopción se identifica por nombre de plan. El ARPU usa <b>precio pronto pago histórico de instalaciones</b>, sin dividir por IVA. La suma PP es un indicador comercial de valor contratado, <b>no ingreso facturado</b>. El periodo PROMO está <?= $promoDays<7?'parcial':'completo' ?> (<?=$promoDays?> de 7 días al corte). Comparaciones semanal/mensual se muestran con esta advertencia cuando el periodo está incompleto.</div>
+<div class="note">Lectura: el universo total de 250 Mbps incluye paquetes regulares y Buen Plan; la adopción se identifica por nombre de plan. El ARPU usa <b>precio pronto pago histórico de instalaciones</b>, sin dividir por IVA. La suma PP es un indicador comercial de valor contratado, <b>no ingreso facturado</b>. El periodo PROMO está <?= $promoDays<7?'parcial':'completo' ?> (<?=$promoDays?> de 7 días al corte). Las variaciones de volumen por velocidad usan el mismo PRE equivalente de las tarjetas y del comparativo distrital.</div>
 <h2 class="section">2 · Buen Plan identificado por paquete · 03–09 noviembre</h2>
 <div class="cards" style="grid-template-columns:repeat(4,minmax(130px,1fr))">
 <div class="metric"><div class="label">BUEN PLAN · CONFIRMADO</div><strong class="good"><?=bp_fmt($promoIdentified)?></strong><small>Nombre + 250 MB + Play + precio PP</small></div>
@@ -281,7 +325,7 @@ $params=$_GET;function bp_href(array $change):string {return '?'.http_build_quer
 <div class="note">Confirmado: <b>nombre exacto + velocidad 250 MB + Play residencial por catálogo + precio PP observado $600/$739 + vigencia</b>. El nombre TURBO existente está catalogado como 350 MB y no se reclasifica. Medimos contrataciones clasificadas por paquete, <b>no la activación técnica del beneficio Netflix</b>.</div>
 <div class="note"><b>Candidatos por validar:</b> <?=bp_fmt($promoCandidates)?> en el filtro seleccionado. Requieren verificación; no se suman a Buen Plan confirmado. <b>Corte común:</b> <?=bp_h($lastDay)?> (Tuxtla <?=bp_h($districtCuts['TUXTLA']??'ND')?> · Villahermosa <?=bp_h($districtCuts['VILLAHERMOSA']??'ND')?>). Los días posteriores sin carga no cuentan como cero.</div>
 <h2 class="section">3 · Comparativo ejecutivo entre distritos participantes</h2>
-<div class="panel scroll"><h3>Tuxtla vs Villahermosa vs consolidado de ambos</h3><div class="sub">250 Mbps residencial · campaña al corte seleccionado vs PRE en días equivalentes de semana (en mensual, referencia proporcional ilustrativa de 30 días). Nunca sumar porcentajes de distritos.</div>
+<div class="panel scroll"><h3>Tuxtla vs Villahermosa vs consolidado de ambos</h3><div class="sub">250 Mbps residencial · campaña al corte seleccionado vs PRE en días equivalentes de semana (en mensual, proporcional a días reales de los meses PRE). Nunca sumar porcentajes de distritos.</div>
 <table class="stats"><thead><tr><th>Distrito</th><th>250 PRE comparable</th><th>250 campaña</th><th>Δ instalaciones</th><th>Mix 250 PRE</th><th>Mix 250 campaña</th><th>Confirmado</th><th>Candidato</th><th>2P</th><th>3P</th><th>% Buen Plan / 250</th><th>Señal precio sin nombre</th></tr></thead><tbody>
 <?php foreach(['TUXTLA'=>'Tuxtla','VILLAHERMOSA'=>'Villahermosa','TOTAL'=>'TOTAL SUR participante'] as $k=>$label):$row=$k==='TOTAL'?$districtTotal:$districtComparison[$k];?>
 <tr><td><b><?=bp_h($label)?></b></td><td><?=bp_fmt($row['pre250'],2)?></td><td><?=bp_fmt($row['campaign250'])?></td>
@@ -301,11 +345,19 @@ $params=$_GET;function bp_href(array $change):string {return '?'.http_build_quer
 ] as $row):?><div class="panel"><h3><?=bp_h($row[0])?> · PRE vs PROMO</h3><table class="stats"><thead><tr><th>Segmento</th><th>PRE</th><th>PROMO</th><th>Var.</th></tr></thead><tr><td>250 MB · <?=bp_h($playSel)?></td><td><?=bp_h($row[1])?></td><td><?=bp_h($row[2])?></td><td class="<?=($row[3]??0)>=0?'positive':'negative'?>"><?=$row[3]===null?'ND':(($row[3]>=0?'+':'').bp_fmt($row[3],1).$row[4])?></td></tr></table></div><?php endforeach;?>
 <div class="panel"><h3>Desglose por distrito participante</h3><table class="stats"><thead><tr><th>Distrito</th><th>Total en ventana</th><th>250 MB</th><th>Mix</th></tr></thead><tbody><?php foreach($byDistrict as $dis=>$a):?><tr><td><?=bp_h($dis)?></td><td><?=$a['total']?></td><td><?=$a['v250']?></td><td><?=bp_fmt(bp_pct($a['v250'],$a['total']),1)?>%</td></tr><?php endforeach;?></tbody></table></div>
 </div></div>
-<h2 class="section">5 · Comportamiento por velocidad</h2><div class="layout"><div class="panel scroll"><h3>Instalaciones 2P · comparativo por velocidad</h3><?=bp_render_speed_table('2P',$pre,$promo,$preUnits,$playSel)?>
-<h3 style="margin-top:18px">Instalaciones 3P · comparativo por velocidad</h3><?=bp_render_speed_table('3P',$pre,$promo,$preUnits,$playSel)?></div><div>
-<div class="panel"><h3>Velocidad | Cambio total 2P + 3P</h3><div class="sub">Δ instalaciones campaña vs promedio PRE de períodos completos; no homologado por días (solo descriptivo)</div><div class="chart" id="speedChart"></div></div>
+<h2 class="section">5 · Comportamiento por velocidad</h2><div class="layout"><div class="panel scroll"><h3>Instalaciones 2P · comparativo por velocidad</h3><?=bp_render_speed_table('2P',$comparablePre,$promo,$baseFactor,$playSel)?>
+<h3 style="margin-top:18px">Instalaciones 3P · comparativo por velocidad</h3><?=bp_render_speed_table('3P',$comparablePre,$promo,$baseFactor,$playSel)?></div><div>
+<div class="panel"><h3>Velocidad | Cambio total 2P + 3P</h3><div class="sub">Δ instalaciones campaña vs PRE comparable: mismos días ISO (semanal/diario) o tasa diaria de meses completos (mensual)</div><div class="chart" id="speedChart"></div></div>
 <div class="panel"><h3>Condiciones comerciales de la promoción</h3><p>Vigencia: <b>03 al 09 de noviembre de 2026</b>. Clientes nuevos, distritos seleccionados, 250 Mbps 2P o 3P con Netflix Estándar con anuncios. Beneficio especial indefinido mientras se mantenga el plan.</p><p><b>Exclusiones:</b> Más Apps, promoción segmentada distrital, descuento a empleado, otras promociones sobre el mismo adicional. Se pierde al cambiar de plan.</p><span class="badge">Promoción documentada · instalación elegible ≠ adopción confirmada</span></div></div></div>
-<h2 class="section">6 · Lectura ejecutiva</h2><div class="smallcards"><div class="smallcard"><b>1 · Volumen</b><p><?= $promoDays?('A corte '.$lastDay.', 250 Mbps registra '.bp_fmt($promo['v250']).' instalaciones elegibles durante la promoción, vs '.bp_fmt($base250,2).' por período PRE.'):'La campaña aún no tiene días con registros al corte elegido.'?></p></div><div class="smallcard"><b>2 · Participación</b><p>Mix PRE <?=bp_fmt($sharePre,1)?>%; PROMO <?=bp_fmt($sharePromo,1)?>%. <?= $shareDiff===null?'Sin base suficiente para variación.':('Cambio '.($shareDiff>=0?'+':'').bp_fmt($shareDiff,1).' puntos porcentuales.')?></p></div><div class="smallcard"><b>3 · Calidad del indicador</b><p>Universo clasificado: <?=bp_fmt(count($events))?> instalaciones residenciales; <?=bp_fmt($duplicate+$unmatched)?> cuentas sin detalle inequívoco. Confirmación comercial exige coincidencia de paquete, velocidad, Play y precio; no comprueba activación técnica de Netflix.</p></div></div>
+<h2 class="section">6 · Lectura ejecutiva</h2><div class="smallcards"><div class="smallcard"><b>1 · Volumen</b><p><?= $promoDays?('A corte '.$lastDay.', 250 Mbps registra '.bp_fmt($promo['v250']).' instalaciones elegibles durante la promoción, vs '.bp_fmt($base250,2).' por período PRE.'):'La campaña aún no tiene días con registros al corte elegido.'?></p></div><div class="smallcard"><b>2 · Participación</b><p>Mix PRE <?=bp_fmt($sharePre,1)?>%; PROMO <?=bp_fmt($sharePromo,1)?>%. <?= $shareDiff===null?'Sin base suficiente para variación.':('Cambio '.($shareDiff>=0?'+':'').bp_fmt($shareDiff,1).' puntos porcentuales.')?></p></div><div class="smallcard"><b>3 · Calidad del indicador</b><p>Universo clasificado: <?=bp_fmt(count($events))?> instalaciones residenciales; <?=bp_fmt($duplicate+$unmatched)?> cuentas excluidas por detalle ambiguo/ausente; <?=bp_fmt($duplicateExact)?> repetidas idénticas deduplicadas. Confirmación comercial exige coincidencia de paquete, velocidad, Play y precio; no comprueba activación técnica de Netflix.</p></div></div>
+<details class="panel" style="margin-top:14px"><summary style="font-weight:800;color:#0878ef;cursor:pointer">Auditoría de conciliación · <?=bp_fmt($duplicate+$unmatched)?> excluidas · <?=bp_fmt($duplicateExact)?> repeticiones idénticas consolidadas</summary>
+<p class="sub" style="margin-top:10px">Una cuenta certificada por Motor HC se contabiliza una sola vez. Filas idénticas de una misma cuenta se consolidan sin cambiar plan ni precio; si existen diferencias, la cuenta no se atribuye a ninguna categoría hasta investigar la fuente.</p>
+<table class="stats"><thead><tr><th>Control</th><th>Cuentas / incidencias</th></tr></thead><tbody>
+<tr><td>Cuenta sin detalle recuperable o fecha válida</td><td><?=bp_fmt($missingDetail)?></td></tr>
+<tr><td>Cuentas con detalle contradictorio (excluidas)</td><td><?=bp_fmt($duplicateConflict)?></td></tr>
+<tr><td>Repeticiones idénticas (consolidadas a una cuenta)</td><td><?=bp_fmt($duplicateExact)?></td></tr>
+<?php foreach($auditBreakdown as $reason=>$n):if($n===0)continue;?><tr><td><?=bp_h(str_replace('_',' ',$reason))?></td><td><?=bp_fmt($n)?></td></tr><?php endforeach;?>
+</tbody></table><p class="sub">Las incidencias por campo pueden superponerse. Si el problema continúa, revisar la cuenta en SQL por cuenta y fecha antes de corregir origen.</p></details>
 <div class="foot">Fuente: Motor HC <?=bp_h($hcVersion)?> · Motor Comercial <?=bp_h($comercialVersion)?> · catálogo_paquetes. Corte <?=bp_h($lastDay)?>. PRE: <?=bp_h($preLabel)?>; campaña 03–09 nov; POST desde 10 nov. Registros y cifras de Motor Comercial solo lectura, sin modificar atribución ni motores. Buen Plan confirmado sólo con evidencia íntegra; no equivale a activación técnica de Netflix.</div>
 <?php endif;?></main>
 <script>
@@ -323,13 +375,13 @@ drawChart('mainChart',mainData,'main');drawChart('speedChart',speedData,'speed')
 </script></body></html>
 <?php
 /** Esta función se declara aquí para desacoplar la representación de la base de datos. */
-function bp_render_speed_table(string $play,array $pre,array $current,int $n,string $selection):string {
+function bp_render_speed_table(string $play,array $pre,array $current,float $factor,string $selection):string {
     if($selection!=='AMBOS' && $selection!==$play)return '<p class="secondary">Oculto por filtro de play</p>';
     $speeds=array_unique(array_merge(array_keys($pre['speeds'][$play]),array_keys($current['speeds'][$play])));sort($speeds,SORT_NUMERIC);
-    $baseTotal=($play==='2P'?$pre['p2']:$pre['p3'])/$n;$actualTotal=($play==='2P'?$current['p2']:$current['p3']);
-    $html='<table class="stats"><thead><tr><th>Velocidad</th><th>PRE prom.</th><th>PROMO</th><th>Δ inst.</th><th>Δ %</th><th>Mix PROMO</th><th>Δ mix pp</th></tr></thead><tbody>';
-    foreach($speeds as $speed){$b=($pre['speeds'][$play][$speed]??0)/$n;$a=$current['speeds'][$play][$speed]??0;$delta=$a-$b;$pc=bp_delta($a,$b);$mix=bp_pct($a,$actualTotal);$oldMix=bp_pct($b,$baseTotal);$dp=($mix!==null&&$oldMix!==null)?$mix-$oldMix:null;
+    $baseTotal=($play==='2P'?$pre['p2']:$pre['p3'])*$factor;$actualTotal=($play==='2P'?$current['p2']:$current['p3']);
+    $html='<table class="stats"><thead><tr><th>Velocidad</th><th>PRE equivalente</th><th>PROMO</th><th>Δ inst.</th><th>Δ %</th><th>Mix PROMO</th><th>Δ mix pp</th></tr></thead><tbody>';
+    foreach($speeds as $speed){$b=($pre['speeds'][$play][$speed]??0)*$factor;$a=$current['speeds'][$play][$speed]??0;$delta=$a-$b;$pc=bp_delta($a,$b);$mix=bp_pct($a,$actualTotal);$oldMix=bp_pct($b,$baseTotal);$dp=($mix!==null&&$oldMix!==null)?$mix-$oldMix:null;
         $html.='<tr><td>'.bp_h($speed).' MB</td><td>'.bp_fmt($b,2).'</td><td>'.bp_fmt($a).'</td><td class="'.($delta>=0?'positive':'negative').'">'.($delta>=0?'+':'').bp_fmt($delta,2).'</td><td>'.($pc===null?'ND':(($pc>=0?'+':'').bp_fmt($pc,1).'%')).'</td><td>'.bp_fmt($mix,1).'%</td><td>'.($dp===null?'ND':(($dp>=0?'+':'').bp_fmt($dp,1).' pp')).'</td></tr>';
     }
-    $diff=$actualTotal-$baseTotal;$html.='</tbody><tfoot><tr><td>TOTAL '.$play.'</td><td>'.bp_fmt($baseTotal,2).'</td><td>'.bp_fmt($actualTotal).'</td><td>'.($diff>=0?'+':'').bp_fmt($diff,2).'</td><td>'.bp_fmt(bp_delta($actualTotal,$baseTotal),1).'%</td><td>'.($actualTotal>0?'100.0%':'ND').'</td><td>0.0 pp</td></tr></tfoot></table>';return $html;
+    $diff=$actualTotal-$baseTotal;$html.='</tbody><tfoot><tr><td>TOTAL '.$play.'</td><td>'.bp_fmt($baseTotal,2).'</td><td>'.bp_fmt($actualTotal).'</td><td>'.($diff>=0?'+':'').bp_fmt($diff,2).'</td><td>'.($baseTotal>0?bp_fmt(bp_delta($actualTotal,$baseTotal),1).'%':'ND').'</td><td>'.($actualTotal>0?'100.0%':'ND').'</td><td>0.0 pp</td></tr></tfoot></table>';return $html;
 }
