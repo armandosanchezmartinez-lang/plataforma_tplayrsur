@@ -1,6 +1,6 @@
 <?php
 /**
- * TalIA / TotalXpedient — Promociones / Buen Plan v1.4.0
+ * TalIA / TotalXpedient — Promociones / Buen Plan v1.5.2
  * Ruta propuesta: /plataforma/detalle/buenplan.php
  * Solo lectura. NO modifica sidebar, BD ni motores.
  * Identifica 250 MB desde catálogo, Play/Tipo desde catálogo y precio PP desde instalaciones.
@@ -76,23 +76,60 @@ $playSel=(string)($_GET['play']??'AMBOS');if(!in_array($playSel,['AMBOS','2P','3
 $preWeeks=max(1,min(12,(int)($_GET['pre_semanas']??4)));
 $preMonths=max(1,min(6,(int)($_GET['pre_meses']??1)));
 $cutArg=(string)($_GET['corte']??'');
+// Navegación cronológica al estilo INDEX: calendario diario/mensual y semana ISO.
+$weekParam=max(0,min(53,(int)($_GET['semana']??0)));
+$weekYearParam=max(2020,min(2100,(int)($_GET['anio_semana']??2026)));
+$rangeFromArg=(string)($_GET['fecha_inicio']??'');
+$rangeToArg=(string)($_GET['fecha_fin']??'');
+$isoArg=(string)($_GET['dias_semana']??'');
+$selectedDates=[];$selectionStart=null;$selectionEnd=null;$selectedIso=[];
+$dataMaxDay=null;$districtCuts=[];
 $error='';$warn=[];$auditRows=[];$events=[];$lastDay=null;$confirmed=0;$unmatched=0;$duplicate=0;$noCatalog=0;$flagPromoAvailable=false;$duplicateExact=0;$duplicateConflict=0;$missingDetail=0;$auditBreakdown=['REPETIDA_IDENTICA'=>0,'PLAN_DIFERENTE'=>0,'PRECIO_DIFERENTE'=>0,'ATRIBUTOS_CATALOGO_DIFERENTES'=>0,'FECHA_DIFERENTE'=>0,'SIN_DETALLE'=>0];
 $comercialVersion='';$hcVersion='';$countsByPeriod=[];$reco='';
 try {
     if (!($conexion instanceof mysqli))throw new RuntimeException('Conexión mysqli no disponible');
-    $latest=$conexion->query("SELECT UPPER(TRIM(distrito)) AS distrito, MAX(fecha) AS fecha FROM instalaciones WHERE fecha IS NOT NULL AND fecha <= CURDATE() AND UPPER(TRIM(distrito)) IN ('TUXTLA','VILLAHERMOSA') GROUP BY UPPER(TRIM(distrito))");
-    $districtCuts=[];while($latest && ($r=$latest->fetch_assoc()))$districtCuts[$r['distrito']]=$r['fecha'];
-    $dbMax=(isset($districtCuts['TUXTLA'],$districtCuts['VILLAHERMOSA'])) ? min($districtCuts['TUXTLA'],$districtCuts['VILLAHERMOSA']) : null;
-    if(!$dbMax)$warn[]='Falta carga en uno de los dos distritos participantes; se suspende el comparativo hasta tener corte común.';
-    if (!$dbMax || !bp_date($dbMax))throw new RuntimeException('No se encontraron instalaciones con fechas válidas');
+    // INDEX utiliza MAX(fecha) en instalaciones como fecha operativa global.
+    // La vista Buen Plan aplica el máximo ENTRE DISTRITOS PARTICIPANTES para no
+    // bloquear el 05/11 cuando uno de ellos aún no tiene registros ese día.
+    $latest=$conexion->query("SELECT UPPER(TRIM(distrito)) AS distrito, DATE(MAX(fecha)) AS fecha FROM instalaciones WHERE fecha IS NOT NULL AND fecha <= CURDATE() AND UPPER(TRIM(distrito)) IN ('TUXTLA','VILLAHERMOSA') GROUP BY UPPER(TRIM(distrito))");
+    while($latest && ($r=$latest->fetch_assoc()))$districtCuts[$r['distrito']]=$r['fecha'];
+    $dbMax=$districtCuts?max(array_values($districtCuts)):null;
+    if (!$dbMax || !bp_date($dbMax))throw new RuntimeException('No se encontraron instalaciones con fechas válidas en los distritos participantes');
     $maxDate=bp_date($dbMax);$today=new DateTimeImmutable('today');if($maxDate>$today)$maxDate=$today;
+    $dataMaxDay=$maxDate->format('Y-m-d');
     $userCut=bp_date($cutArg);$cut=$userCut??$maxDate;
-    if($cut>$maxDate){$cut=$maxDate;$warn[]='El corte solicitado excede la última fecha cargada; se ajustó automáticamente.';}
+    if($cut>$maxDate)$cut=$maxDate;
     $lastDay=$cut->format('Y-m-d');
-    // La ventana histórica incluye PRE, campaña y POST. Un mes PRE = mes(es) calendario antes de noviembre.
-    $preStart=$mode==='mensual' ? (new DateTimeImmutable('2026-11-01'))->modify('-'.$preMonths.' months') : (new DateTimeImmutable('2026-11-03'))->modify('-'.($preWeeks*7).' days');
+    $preStart=$mode==='mensual' ? (new DateTimeImmutable('2026-11-01'))->modify('-'.$preMonths.' months') : $promoStart->modify('-'.($preWeeks*7).' days');
     $start=$preStart;
-    if($mode==='diario')$start=(new DateTimeImmutable('2026-11-03'))->modify('-'.($preWeeks*7).' days');
+    // El filtro afecta el período POST del 03/11 en adelante; PRE continúa
+    // íntegro según semanas/meses configurados para evolución y referencia.
+    if($mode==='semanal'){
+        $anchor=($weekParam>0 && isset($_GET['anio_semana']))
+          ? (new DateTimeImmutable('2026-01-01'))->setISODate($weekYearParam,$weekParam,1)
+          : $cut->modify('monday this week');
+        if($anchor>$maxDate->modify('monday this week'))$anchor=$maxDate->modify('monday this week');
+        $weekParam=(int)$anchor->format('W');$weekYearParam=(int)$anchor->format('o');
+        $selectionStart=$anchor;$selectionEnd=$anchor->modify('+6 days');
+        if($selectionEnd>$maxDate)$selectionEnd=$maxDate;
+        $available=[];
+        for($d=$anchor;$d<=$selectionEnd;$d=$d->modify('+1 day'))$available[]=(int)$d->format('N');
+        $requestDays=trim($isoArg)!==''?array_unique(array_map('intval',explode(',',$isoArg))):$available;
+        $selectedIso=array_values(array_intersect($available,$requestDays));sort($selectedIso);
+        if(!$selectedIso)$selectedIso=$available;
+        foreach($selectedIso as $n){$d=$anchor->modify('+'.($n-1).' days');if($d<=$maxDate)$selectedDates[$d->format('Y-m-d')]=true;}
+        $cut=$selectionEnd;$lastDay=$cut->format('Y-m-d');
+    }else{
+        $defaultStart=$mode==='mensual'?$cut->modify('first day of this month'):$cut;
+        $from=bp_date($rangeFromArg)??$defaultStart;
+        $to=bp_date($rangeToArg)??$cut;
+        if($from>$to){$temp=$from;$from=$to;$to=$temp;}
+        if($to>$maxDate)$to=$maxDate;
+        if($from>$to)$from=$to;
+        $selectionStart=$from;$selectionEnd=$to;
+        $cut=$to;$lastDay=$to->format('Y-m-d');
+        for($d=$from;$d<=$to;$d=$d->modify('+1 day'))$selectedDates[$d->format('Y-m-d')]=true;
+    }
     if($start>$cut)$start=$cut;
     // No cerrar el intervalo en 09-nov: el POST se habilita al existir cortes reales posteriores.
     // Vista gerencial: TODOS los canales de ambos distritos. No se limita al universo
@@ -187,36 +224,43 @@ $months=[];$weeks=[];$days=[];$pre=bp_blank();$promo=bp_blank();$post=bp_blank()
 if(!$error){
     foreach($events as $e){
         if($district!=='SUR' && $district!==$e['dist'])continue;
-        $day=$e['day'];if($mode==='mensual' && $day>='2026-11-01' && $day<'2026-11-03')continue; $d=new DateTimeImmutable($day);$g=bp_group($d,$mode);
+        $day=$e['day'];
+        if($day>='2026-11-03' && !isset($selectedDates[$day]))continue;
+        $d=new DateTimeImmutable($day);$g=bp_group($d,$mode).'|'.($day<'2026-11-03'?'PRE':'POST');
         $series[$g]??=bp_blank();bp_add($series[$g],$e);
         $daily[$day]??=bp_blank();bp_add($daily[$day],$e);
-        $phase=bp_phase($day);if($phase==='PRE')bp_add($pre,$e);elseif($phase==='PROMO')bp_add($promo,$e);else bp_add($post,$e);
+        $phase=bp_phase($day);if($phase==='PRE')bp_add($pre,$e);elseif($phase==='PROMO')bp_add($promo,$e);else {bp_add($post,$e);bp_add($promo,$e);}
         $byDistrict[$e['dist']]??=bp_blank();bp_add($byDistrict[$e['dist']],$e);
         $byDistrictPhase[$e['dist']][$phase]??=bp_blank();bp_add($byDistrictPhase[$e['dist']][$phase],$e);
         $byPlay[$e['play']]??=bp_blank();bp_add($byPlay[$e['play']],$e);
     }
-    ksort($series);ksort($daily);
+    // Orden cronológico; cuando un mes/semana cruza el 03/11, PRE va primero.
+    uksort($series,static function($a,$b){
+        [$ak,$ap]=explode('|',$a,2);[$bk,$bp]=explode('|',$b,2);
+        return strcmp($ak,$bk) ?: (($ap==='PRE'?0:1)<=>($bp==='PRE'?0:1));
+    });
+    ksort($daily);
 }
 // Base comparable: mismo conjunto de días ISO que la campaña transcurrida.
 // En mensual se usa la tasa diaria de meses PRE COMPLETOS multiplicada por
 // los días efectivos, en lugar de dividir arbitrariamente entre 30.
 $preUnits=$mode==='mensual'?$preMonths:$preWeeks;
-$promoDays=$lastDay && $lastDay>='2026-11-03'
-    ? min(7, (int)$promoStart->diff(new DateTimeImmutable($lastDay))->days+1) : 0;
+$selectedPostDays=array_filter(array_keys($selectedDates),static fn($d)=>$d>='2026-11-03');
+$promoDays=count($selectedPostDays);
 $isoDays=[];
-for($i=0;$i<$promoDays;$i++)$isoDays[(int)$promoStart->modify('+'.$i.' days')->format('N')]=true;
+foreach($selectedPostDays as $day)$isoDays[(int)(new DateTimeImmutable($day))->format('N')]=true;
 $comparablePre=bp_blank();
 $preActualDays=0;
 if($mode==='mensual'){
     for($d=$start;$d<$promoStart;$d=$d->modify('+1 day')){
         // El PRE mensual acaba el 31 de octubre y es un mes calendario completo.
-        if($d->format('Y-m-d')<'2026-11-01')$preActualDays++;
+        if($d->format('Y-m-d')<'2026-11-03')$preActualDays++;
     }
 }
 foreach($events as $ev){
     if(($district!=='SUR' && $district!==$ev['dist']) || bp_phase($ev['day'])!=='PRE')continue;
     if($mode==='mensual'){
-        if($ev['day']<'2026-11-01')bp_add($comparablePre,$ev);
+        if($ev['day']<'2026-11-03')bp_add($comparablePre,$ev);
     } elseif(isset($isoDays[(int)(new DateTimeImmutable($ev['day']))->format('N')])) bp_add($comparablePre,$ev);
 }
 $baseFactor=$mode==='mensual'
@@ -239,11 +283,13 @@ $valueDelta=$promoDays>0&&$targetVal>0?bp_delta($promoVal,$targetVal):null;
 $speeds=[];foreach([$comparablePre,$promo] as $a)foreach(['2P','3P'] as $p)foreach($a['speeds'][$p] as $s=>$n)$speeds[(int)$s]=true;ksort($speeds,SORT_NUMERIC);
 $chartData=[];
 foreach($series as $key=>$a){
-    $d=$mode==='semanal'?(new DateTimeImmutable('2026-01-01'))->setISODate((int)substr($key,0,4),(int)substr($key,-2),1):($mode==='mensual'?new DateTimeImmutable($key.'-01'):new DateTimeImmutable($key));
-    $dt=$d?:$promoStart;
-    $phase=($mode==='mensual' && $key==='2026-11')||($mode==='semanal' && $key==='2026-W45')?'PROMO':bp_phase($dt->format('Y-m-d'));
-    $chartData[]=['key'=>$key,'label'=>bp_lab($key,$mode),'total'=>$a['total'],'v250'=>$a['v250'],'p2'=>$a['p2_250'],'p3'=>$a['p3_250'],'phase'=>$phase,'promo'=>$a['promo']];
+    [$groupKey,$stage]=explode('|',$key,2);
+    $d=$mode==='semanal'?(new DateTimeImmutable('2026-01-01'))->setISODate((int)substr($groupKey,0,4),(int)substr($groupKey,-2),1):($mode==='mensual'?new DateTimeImmutable($groupKey.'-01'):new DateTimeImmutable($groupKey));
+    $phase=$stage==='PRE'?'PRE':($d && $d->format('Y-m-d')>='2026-11-10'?'POST':'PROMO');
+    $label=bp_lab($groupKey,$mode).($mode==='diario'?'':($stage==='PRE'?' · PRE':' · DESDE 03'));
+    $chartData[]=['key'=>$key,'label'=>$label,'total'=>$a['total'],'v250'=>$a['v250'],'p2'=>$a['p2_250'],'p3'=>$a['p3_250'],'phase'=>$phase,'promo'=>$a['promo']];
 }
+
 $chartJson=json_encode($chartData,JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
 $barData=[];
 foreach(array_keys($speeds) as $s){
@@ -262,15 +308,15 @@ $districtComparison=[];
 foreach(['TUXTLA','VILLAHERMOSA'] as $distName){
     $allP=bp_blank();$allB=bp_blank();$refComparable=bp_blank();
     foreach($events as $ev){
-        if($ev['dist']!==$distName)continue;
-        if(bp_phase($ev['day'])==='PROMO')bp_add($allP,$ev);
+        if($ev['dist']!==$distName || ($ev['day']>='2026-11-03'&&!isset($selectedDates[$ev['day']])))continue;
+        if(bp_phase($ev['day'])!=='PRE')bp_add($allP,$ev);
         if(bp_phase($ev['day'])==='PRE'){
-            if($mode!=='mensual' || $ev['day']<'2026-11-01')bp_add($allB,$ev);
+            bp_add($allB,$ev);
             if($promoDays>0 && $mode!=='mensual'){
                 // Intervalo PRE semanal comienza lunes, campaña inicia martes.
                 $isoDow=(int)(new DateTimeImmutable($ev['day']))->format('N');
                 if(isset($isoDays[$isoDow]))bp_add($refComparable,$ev);
-            }elseif($mode==='mensual' && $ev['day']<'2026-11-01')bp_add($refComparable,$ev);
+            }elseif($mode==='mensual' && $ev['day']<'2026-11-03')bp_add($refComparable,$ev);
         }
     }
     $reference=$refComparable['v250']*$baseFactor;
@@ -305,11 +351,16 @@ foreach($phaseSummary as $ph=>$r) $phaseArpu[$ph]=$r['income250_n']>0 ? $r['inco
 $channelStats=[];
 $channelPromoByDistrict=[];
 foreach($events as $ev){
-    if($district!=='SUR' && $ev['dist']!==$district)continue;
+    if(($district!=='SUR' && $ev['dist']!==$district)||($ev['day']>='2026-11-03'&&!isset($selectedDates[$ev['day']])))continue;
     $c=$ev['channel']??'SIN CANAL';$ph=bp_phase($ev['day']);
     $channelStats[$c][$ph]??=['total'=>0,'v250'=>0,'p2'=>0,'p3'=>0,'promo'=>0];
     $channelStats[$c][$ph]['total']++;
     if($ev['speed']===250){$channelStats[$c][$ph]['v250']++;if($ev['play']==='2P')$channelStats[$c][$ph]['p2']++;if($ev['play']==='3P')$channelStats[$c][$ph]['p3']++;}
+    if($ph==='POST'){
+        $channelStats[$c]['PROMO']??=['total'=>0,'v250'=>0,'p2'=>0,'p3'=>0,'promo'=>0];
+        $channelStats[$c]['PROMO']['total']++;
+        if($ev['speed']===250){$channelStats[$c]['PROMO']['v250']++;if($ev['play']==='2P')$channelStats[$c]['PROMO']['p2']++;if($ev['play']==='3P')$channelStats[$c]['PROMO']['p3']++;}
+    }
     if($ev['promo']){
         $channelStats[$c][$ph]['promo']++;
         $channelPromoByDistrict[$ev['dist']][$c]=($channelPromoByDistrict[$ev['dist']][$c]??0)+1;
@@ -373,13 +424,23 @@ $bpPhases=[];
 foreach(['PRE','PROMO','POST'] as $p){$r=$phaseRows[$p];$bpPhases[$p]=['total'=>$r['total'],'v250'=>$r['v250'],'promo'=>$r['promo'],
   'mix'=>$r['mix'],'arpu'=>$r['arpu']];}
 $bpArpuDistrict=[];
-foreach(['TUXTLA','VILLAHERMOSA'] as $name){$p=$byDistrictPhase[$name]['PRE']??bp_blank();$a=$byDistrictPhase[$name]['PROMO']??bp_blank();
+foreach(['TUXTLA','VILLAHERMOSA'] as $name){$p=$byDistrictPhase[$name]['PRE']??bp_blank();$a=bp_sum([$byDistrictPhase[$name]['PROMO']??bp_blank(),$byDistrictPhase[$name]['POST']??bp_blank()]);
  $bpArpuDistrict[]=['name'=>$name==='TUXTLA'?'Tuxtla':'Villahermosa',
  'pre'=>$p['income250_n']>0?$p['income250']/$p['income250_n']:null,
  'now'=>$a['income250_n']>0?$a['income250']/$a['income250_n']:null];}
+// Evolución ARPU con granularidad idéntica a los filtros, basada en PP válido.
+$bpArpuSeries=[];
+foreach($series as $key=>$r){
+    $bpArpuSeries[]=['key'=>$key,'label'=>bp_lab(explode('|',$key)[0],$mode).($mode==='diario'?'':((explode('|',$key)[1]??'')==='PRE'?' · PRE':' · DESDE 03')),
+      'arpu'=>$r['income250_n']>0?round($r['income250']/$r['income250_n'],2):null,
+      'total'=>$r['total'],'v250'=>$r['v250'],'promo'=>$r['promo'],
+      'phase'=>$key];
+}
+$selectedStartLabel=$selectionStart?$selectionStart->format('Y-m-d'):null;
+$selectedEndLabel=$selectionEnd?$selectionEnd->format('Y-m-d'):null;
 $bpView=[
  'error'=>$error, 'cut'=>$lastDay,'start'=>isset($start)?$start->format('Y-m-d'):null,'district'=>$district,'play'=>$playSel,
- 'period'=>$mode,'preWeeks'=>$preWeeks,'preMonths'=>$preMonths,'promoDays'=>$promoDays,
+ 'period'=>$mode,'preWeeks'=>$preWeeks,'preMonths'=>$preMonths,'promoDays'=>$promoDays,'arpuSeries'=>$bpArpuSeries,'selectedStart'=>$selectedStartLabel,'selectedEnd'=>$selectedEndLabel,
  'kpi'=>['p2'=>$promo2,'p3'=>$promo3,'promo'=>$promoIdentified,
   'v250'=>$promo['v250'],'growth250'=>$change250,'base250'=>$base250,
   'arpu'=>$arpuPromo,'arpuPre'=>$arpuPre,'arpuGrowth'=>$arpudelta,
@@ -450,6 +511,9 @@ body { font-family: 'Poppins','Segoe UI',Arial,sans-serif; font-size:14px; color
 @media(max-width:1380px){.main{padding:16px}.kpi .head{font-size:12px}.kpi .note{font-size:11px}.kpi .glyph{width:38px;height:38px;min-width:38px}.metric,.kpi .note{margin-left:50px}.tabs button{font-size:11px;padding:11px 8px}.bp-donut{width:130px}}
 @media(max-width:1100px){.sidebar{width:174px;min-width:174px}.main{width:calc(100% - 174px)}.grid.panorama-grid{grid-template-columns:1fr 1fr}.panorama-grid>.panel,.panorama-grid>.panel:nth-child(4),.panorama-grid>.panel:nth-child(5){grid-column:auto}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:780px){.sidebar{display:none}.main{width:100%;padding:12px}.top h1{font-size:23px}.kpis{grid-template-columns:repeat(2,1fr)}.grid.panorama-grid{grid-template-columns:1fr}.panorama-grid>.panel,.panorama-grid>.panel:nth-child(4),.panorama-grid>.panel:nth-child(5){grid-column:auto}.bp-donut-wrap{flex-wrap:wrap}}
+
+/* v1.5.2 · Calendarios institucionales (sin datepicker del navegador) */
+.bp-date-filter{position:relative;min-width:215px}.bp-calendar-toggle{height:39px;width:100%;border:1px solid #d8e1f0;border-radius:13px;padding:0 11px;background:#fff;color:#26365d;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:750;gap:10px}.bp-calendar-popup{position:absolute;top:calc(100% + 9px);right:0;z-index:99;background:white;width:342px;max-width:min(94vw,342px);border:1px solid #e0def1;border-radius:20px;box-shadow:0 16px 45px #2415533b;padding:16px}.bp-cal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:13px}.bp-cal-head button{border:1px solid #ece6f5;background:#fbf9ff;border-radius:11px;width:33px;height:33px;color:#862ad9;font-size:23px}.bp-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}.bp-calendar-grid>span{text-align:center;font-size:10px;font-weight:850;color:#667496;padding:7px 0}.bp-calendar-grid button,.bp-week-days button{border:1px solid #ebedf5;background:#f8faff;color:#39466a;font-size:11px;font-weight:700;border-radius:10px;padding:10px 0}.bp-calendar-grid button.active,.bp-week-days button.active{color:#fff;border-color:#a62bdf;background:linear-gradient(125deg,#9822ed,#dd09ba)}.bp-calendar-grid button.in-range{background:#f2e5ff;border-color:#cbb0f8;color:#722cc7}.bp-calendar-grid button:disabled{color:#ccd2e0;background:#f9f9fb;cursor:not-allowed}.bp-calendar-grid button.other{opacity:.55}.bp-week-days{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}.bp-help{margin:12px 0;color:#73829d;font-size:11px;font-weight:500;line-height:1.4}.bp-calendar-actions{display:flex;justify-content:space-between;margin-top:10px;gap:7px}.bp-calendar-actions button{padding:10px 14px;border-radius:13px;border:1px solid #eadcf5;background:#f6eaff;font-weight:800;font-size:12px;color:#812cc5}.bp-calendar-actions #bpApplyCalendar{color:#fff;border:0;background:linear-gradient(105deg,#8328f5,#f007ad)}
 </style></head>
 <body><div class="app">
 <aside class="sidebar">
@@ -475,7 +539,21 @@ body { font-family: 'Poppins','Segoe UI',Arial,sans-serif; font-size:14px; color
 <label class="filter">MESES PRE<input type="number" name="pre_meses" min="1" max="6" value="<?=$preMonths?>" style="width:70px"></label>
 <input type="hidden" name="periodo" id="periodInput" value="<?=bp_h($mode)?>">
 <div class="filter"><div>PERÍODO</div><div class="period"><?php foreach(['diario'=>'Diario','semanal'=>'Semanal','mensual'=>'Mensual'] as $key=>$text):?><button type="button" class="<?=$mode===$key?'active':''?>" data-period="<?=$key?>"><?=$text?></button><?php endforeach;?></div></div>
-<label class="filter grow">FECHA DE CORTE<input id="cutoff" name="corte" type="date" value="<?=bp_h($lastDay??'')?>" max="<?=bp_h($lastDay??'')?>"></label>
+<input type="hidden" name="corte" id="bpCut" value="<?=bp_h($dataMaxDay??$lastDay??'')?>">
+<input type="hidden" name="semana" id="bpWeek" value="<?=bp_h($weekParam)?>">
+<input type="hidden" name="anio_semana" id="bpWeekYear" value="<?=bp_h($weekYearParam)?>">
+<input type="hidden" name="dias_semana" id="bpWeekDays" value="<?=bp_h(implode(',',$selectedIso))?>">
+<input type="hidden" name="fecha_inicio" id="bpFrom" value="<?=bp_h($selectedStartLabel??'')?>">
+<input type="hidden" name="fecha_fin" id="bpTo" value="<?=bp_h($selectedEndLabel??'')?>">
+<div class="filter grow bp-date-filter"><div>RANGO DE FECHAS</div>
+ <button type="button" id="bpCalendarToggle" class="bp-calendar-toggle" aria-expanded="false">&#128197; <span id="bpCalendarLabel"><?=bp_h(($selectedStartLabel??'').($selectedStartLabel!==$selectedEndLabel?' a '.($selectedEndLabel??''):''))?></span> <span>▾</span></button>
+ <div class="bp-calendar-popup" id="bpCalendarPopup" hidden>
+   <div class="bp-cal-head"><button type="button" id="bpPrev" aria-label="Anterior">‹</button><b id="bpCalMonth"></b><button type="button" id="bpNext" aria-label="Siguiente">›</button></div>
+   <div id="bpWeekPicker" hidden><div class="bp-week-days" id="bpWeekDaysButtons"></div><div class="bp-help">Selecciona los días ISO para comparar exactamente esos mismos días en cada semana PRE.</div></div>
+   <div id="bpDatePicker"><div class="bp-calendar-grid" id="bpCalendarGrid"></div><div class="bp-help" id="bpDateHelp">Selecciona fecha inicial y final; vuelve a tocar para iniciar otro rango.</div></div>
+   <div class="bp-calendar-actions"><button type="button" id="bpResetRange">Restablecer</button><button type="button" id="bpApplyCalendar">Aplicar</button></div>
+ </div>
+</div>
 <button type="submit" class="apply">Aplicar filtros</button>
 </form>
 <?php if($error): ?><div class="panel" style="border-color:#eeabc0"><h3>No se pudieron cargar los indicadores</h3><p><?=bp_h($error)?></p><p class="small">No se muestran métricas simuladas.</p></div><?php else: ?>
@@ -492,10 +570,10 @@ body { font-family: 'Poppins','Segoe UI',Arial,sans-serif; font-size:14px; color
 <div id="content"></div>
 <details class="panel auditwrap"><summary>Auditoría y conciliación de datos</summary>
 <div class="status">Motor Comercial <?=bp_h($comercialVersion)?> · estado <?=bp_h($bpMotorAudit['estado'])?> · registros fuente <?=bp_fmt($bpMotorAudit['registros'])?> · diferencia contra cuentas únicas <?=bp_fmt($bpMotorAudit['diferencia'])?>. El motor cuenta registros y esta página deduplica día/distrito/cuenta; el conteo puede variar también por exclusiones de segmento, canal y catálogo.</div>
-<div class="status">Registros idénticos consolidados: <?=bp_fmt($duplicateExact)?> · paquetes sin catálogo: <?=bp_fmt($noCatalog)?> · conflictos excluidos: <?=bp_fmt(count($auditRows))?>.</div>
+<div class="status">Registros idénticos consolidados: <?=bp_fmt($duplicateExact)?> · paquetes sin catálogo: <?=bp_fmt($noCatalog)?> · conflictos excluidos: <?=bp_fmt(count($auditRows))?> · última fecha Tuxtla: <?=bp_h($districtCuts['TUXTLA']??'ND')?> · Villahermosa: <?=bp_h($districtCuts['VILLAHERMOSA']??'ND')?>.</div>
 <div class="scrolltable"><table class="table"><thead><tr><th>Cuenta</th><th>Distrito</th><th>Motivo</th><th>Filas</th><th>Detalle</th></tr></thead><tbody>
 <?php if(!$auditRows):?><tr><td colspan="5">Sin conflictos que requieran revisión.</td></tr><?php else: foreach($auditRows as $r):?><tr><td><?=bp_h($r['cuenta'])?></td><td><?=bp_h($r['distrito'])?></td><td><?=bp_h($r['motivo'])?></td><td><?=bp_fmt($r['filas'])?></td><td><?=bp_h($r['detalle'])?></td></tr><?php endforeach;endif;?></tbody></table></div></details>
-<div class="footer">TotalXpedient · Buen Plan v1.5.1 · Instalaciones comerciales de todos los canales de Tuxtla y Villahermosa. Catálogo oficial de paquetes para velocidad, Play y tipo. Promoción por nombre exacto del paquete VELOZ Netflix (2P/3P), del 03 al 09/11/2026. ARPU basado en precio pronto pago histórico válido, sin dividir IVA. POST solo con fechas realmente cargadas. Reporte de instalaciones, no activaciones de Netflix.</div>
+<div class="footer">TotalXpedient · Buen Plan v1.5.2 · Instalaciones comerciales de todos los canales de Tuxtla y Villahermosa. Catálogo oficial de paquetes para velocidad, Play y tipo. Promoción por nombre exacto del paquete VELOZ Netflix (2P/3P), del 03 al 09/11/2026. ARPU basado en precio pronto pago histórico válido, sin dividir IVA. POST solo con fechas realmente cargadas. Reporte de instalaciones, no activaciones de Netflix.</div>
 <?php endif;?></main></div>
 <script>
 const D=<?=bp_json($bpView)?>;
@@ -538,13 +616,24 @@ const districtTable=()=>{
 const promoTable=()=>tabler(['Distrito','Buen Plan 2P','Buen Plan 3P','Total'],[...D.districts.map(r=>[esc(r.name),fmt(r.p2),fmt(r.p3),fmt(r.p2+r.p3)]),['Región participante',fmt(D.districtTotal.promo2),fmt(D.districtTotal.promo3),fmt(D.districtTotal.promo)]]);
 const phases=()=>`<div class="step">${['PRE','PROMO','POST'].map(k=>{let p=D.phases[k];return `<div class="phase"><b>${k}</b><div class="number">${k==='POST'&&D.cut<'2026-11-10'?'—':fmt(p.v250)}</div><div class="sub">Instalaciones 250 Mbps · ${k==='PRE'?'ventana histórica (sin prorratear)':k==='PROMO'?'03–09 nov al corte':'desde 10 nov'}<div>Mix: ${p.mix==null?'ND':fmt(p.mix,1)+'%'}</div><div>ARPU: ${usd(p.arpu)}</div></div></div>`}).join('')}</div>`;
 const arpuSvg=()=>{
- let vals=[D.kpi.arpuPre,D.kpi.arpu],w=530,h=225,lo=Math.min(...vals.filter(x=>x!=null),600)-10,hi=Math.max(...vals.filter(x=>x!=null),700)+10;
- if(!vals.some(v=>v!=null))return chartmsg('Sin pronto pago válido para ARPU');
- if(hi<=lo)hi=lo+20;
- let points=vals.map((v,i)=>[130+i*275,v==null?null:179-(v-lo)/(hi-lo)*125]);
- let path=points.every(p=>p[1]!==null)?`<path d="M${points[0].join(' ')} L${points[1].join(' ')}" stroke="#af22df" stroke-width="4" fill="none"/>`:'';
- return `<div class="chart"><svg viewBox="0 0 ${w} ${h}"><line x1="65" y1="180" x2="480" y2="180" stroke="#ccd6e4"/>${path}${points.map((p,i)=>p[1]===null?'':`<circle cx="${p[0]}" cy="${p[1]}" r="6" fill="white" stroke="#a127e0" stroke-width="3"/><text x="${p[0]}" y="${p[1]-15}" font-size="14" text-anchor="middle" font-weight="800">${usd(vals[i])}</text>`).join('')}<text x="130" y="210" text-anchor="middle">PRE</text><text x="405" y="210" text-anchor="middle">PROMO</text></svg></div>`;
+ const rows=(D.arpuSeries||[]).filter(r=>r.arpu!=null);
+ if(!rows.length)return chartmsg('Sin registros válidos para la evolución del ARPU');
+ const w=660,h=235,l=54,r=18,t=31,b=45,iw=w-l-r,ih=h-t-b;
+ const vals=rows.map(x=>Number(x.arpu)),lo=Math.floor(Math.min(...vals)*.97/10)*10,hi=Math.ceil(Math.max(...vals)*1.03/10)*10;
+ const ymin=hi<=lo?lo-10:lo,ymax=hi<=lo?hi+10:hi;
+ const x=i=>l+(rows.length===1?iw/2:i*iw/(rows.length-1));
+ const y=v=>t+ih-(v-ymin)/(ymax-ymin)*ih;
+ const pts=rows.map((row,i)=>[x(i),y(row.arpu)]);
+ let svg=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Tendencia del precio pronto pago promedio">`;
+ for(let i=0;i<=4;i++){const v=ymin+(ymax-ymin)*i/4,Y=y(v);svg+=`<line x1="${l}" y1="${Y}" x2="${w-r}" y2="${Y}" stroke="#e3e9f4"/><text x="${l-6}" y="${Y+4}" text-anchor="end" font-size="10" fill="#697795">$${fmt(v,0)}</text>`;}
+ const path=pts.map((p,i)=>(i?'L':'M')+p.join(',')).join(' ');
+ if(pts.length>1)svg+=`<path d="${path} L ${pts.at(-1)[0]} ${h-b} L ${pts[0][0]} ${h-b} Z" fill="#f8d8ec" opacity=".75"/>`;
+ svg+=`<path d="${path}" fill="none" stroke="#ff0078" stroke-width="3"/>`;
+ pts.forEach((p,i)=>{svg+=`<circle cx="${p[0]}" cy="${p[1]}" r="${rows.length>16?2:4}" stroke="#ff0078" fill="white" stroke-width="2"/>`;
+  if(rows.length<13||i%Math.ceil(rows.length/9)===0||i===rows.length-1){svg+=`<text x="${p[0]}" y="${Math.max(12,p[1]-10)}" text-anchor="middle" fill="#243053" font-size="10" font-weight="800">$${fmt(rows[i].arpu,0)}</text><text x="${p[0]}" y="${h-12}" text-anchor="middle" fill="#667490" font-size="10">${esc(rows[i].label)}</text>`;}});
+ return `<div class="chart">${svg}</svg></div><div class="legend"><span><i class="swatch" style="background:#ff0078"></i>ARPU 250 Mbps · PRE hasta 02/11, POST desde 03/11</span></div>`;
 };
+
 const velocity=()=>{
  const cols=D.play==='AMBOS'?['2P','3P','AMBOS']:[D.play,'AMBOS'];
  return `<div class="panels3">${cols.map(p=>{
@@ -560,7 +649,7 @@ const evolution=()=>{
  const rows=D.series.map(r=>({...r,label:r.label}));
  return `<div class="grid">${panel('Evolución de Buen Plan','Paquetes VELOZ Netflix · '+esc(D.period),lined(rows,'promo','Paquetes Buen Plan'))}${panel('Evolución 250 Mbps','Instalaciones residenciales de 250 Mbps',lined(rows,'v250','250 Mbps'))}${panel('Residencial total','Todas las velocidades y Plays del filtro seleccionado',lined(rows,'total','Residencial total'),true)}</div>`;
 };
-const arpuDistrict=()=>tabler(['Distrito','ARPU PRE','ARPU PROMO','Var.'],D.arpuDistrict.map(r=>[esc(r.name),usd(r.pre),usd(r.now),showpct(r.now!=null&&r.pre!=null?pct(r.now,r.pre):null)]));
+const arpuDistrict=()=>tabler(['Distrito','ARPU PRE','ARPU POST','Var.'],D.arpuDistrict.map(r=>[esc(r.name),usd(r.pre),usd(r.now),showpct(r.now!=null&&r.pre!=null?pct(r.now,r.pre):null)]));
 
 /* Panorama institucional: gráficos compactos del prototipo, sin cifras simuladas. */
 const bpDonut=()=>{
@@ -577,10 +666,17 @@ const bpChannelCompact=()=>{
  return tabler(['Canal','Inst. 250','Buen Plan','Mix BP'],list.map(r=>[esc(r.label),fmt(r.now),fmt(r.promo),r.now>0?fmt(r.promo/r.now*100,1)+'%':'—']));
 };
 const bpEvoCompact=()=>{
- const a=D.daily.filter(r=>r.date>='2026-11-03'&&r.date<=D.cut).map(r=>({label:r.date.slice(8)+'/'+r.date.slice(5,7),date:r.date,promo:r.promo}));
- if(!a.length)return chartmsg('No hay instalaciones en el periodo PROMO al corte');
- return lined(a,'promo','Evolución de Buen Plan en campaña');
+ const rows=(D.series||[]);if(!rows.length)return chartmsg('Sin instalaciones cargadas para el período');
+ const fields=[['total','#17a8ec','Venta general'],['v250','#772fe0','Venta 250 Mbps'],['promo','#ff008a','Buen Plan']];
+ const w=760,h=244,l=43,r=14,t=19,b=44,ih=h-t-b,iw=w-l-r,max=Math.max(1,...rows.map(z=>z.total));
+ const x=i=>l+(rows.length===1?iw/2:iw*i/(rows.length-1)),y=v=>t+ih-(v/max)*ih;
+ let svg=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Evolución comparativa por periodo">`;
+ for(let j=0;j<=4;j++){const Y=y(max*j/4);svg+=`<line x1="${l}" x2="${w-r}" y1="${Y}" y2="${Y}" stroke="#e7eafa"/><text x="${l-7}" y="${Y+3}" text-anchor="end" font-size="10" fill="#71809b">${fmt(max*j/4,0)}</text>`;}
+ fields.forEach(([key,col])=>{const pts=rows.map((z,i)=>[x(i),y(z[key]||0)]);svg+=`<path d="${pts.map((p,i)=>(i?'L':'M')+p.join(',')).join(' ')}" fill="none" stroke="${col}" stroke-width="${key==='promo'?3:2.4}"/>`;pts.forEach(p=>svg+=`<circle cx="${p[0]}" cy="${p[1]}" r="2.8" fill="${col}"/>`);});
+ rows.forEach((z,i)=>{if(rows.length<=11||i%Math.ceil(rows.length/11)===0||i===rows.length-1)svg+=`<text x="${x(i)}" y="${h-12}" font-size="10" text-anchor="middle" fill="#6f7893">${esc(z.label)}</text>`;});
+ return `<div class="chart">${svg}</svg></div><div class="legend">${fields.map(([k,c,n])=>`<span><i class="swatch" style="background:${c}"></i>${n}</span>`).join('')}</div>`;
 };
+
 const bpArpuChange=()=>{
  const v=D.kpi.arpuGrowth;
  return arpuSvg()+(v==null?'':`<div class="bp-line-legend"><span><i style="background:#a125df"></i>ARPU PRE</span><span>Variación: <b class="${color(v)}">${showpct(v)}</b></span></div>`);
@@ -591,7 +687,7 @@ const panorama=()=>`<div class="grid panorama-grid">
  ${panel('Evolución del ARPU (Precio Pronto Pago)','250 Mbps · Región participante',bpArpuChange())}
  ${panel('Instalaciones por velocidad','Mix comercial residencial · 2P + 3P',bpDonut())}
  ${panel('Desempeño por canal de venta','250 Mbps · instalaciones de campaña',bpChannelCompact())}
- ${panel('Evolución de las instalaciones','Paquetes Buen Plan · 03 al 09 de noviembre',bpEvoCompact())}
+ ${panel('Evolución de las instalaciones','Venta general · 250 Mbps · paquetes Buen Plan',bpEvoCompact())}
  </div>`;
 const render=()=>{
  const k=D.kpi;
@@ -603,7 +699,7 @@ const render=()=>{
  const views={
  panorama:panorama,
  distritos:()=>`<div class="grid">${panel('Comportamiento por distrito y región','250 Mbps · PRE vs campaña',districtTable())}${panel('Comparativo gráfico','Volumen comparable',bargroups(D.districts))}${panel('Promoción Buen Plan','Adopción de 2P y 3P',promoTable(),true)}</div>`,
- prepost:()=>`<div class="grid">${panel('Periodos PRE · PROMO · POST','250 Mbps residencial · PRE histórico vs PROMO parcial',phases(),true)}${panel('PRE frente a promoción','Comparación homologada al número de días transcurridos',tabler(['Indicador','PRE comparable','PROMO','Δ'],[['Instalaciones 250 Mbps',fmt(k.base250,2),fmt(k.v250),showpct(k.growth250)],['ARPU PP 250',usd(k.arpuPre),usd(k.arpu),showpct(k.arpuGrowth)],['Mix 250',fmt(k.mixPre,1)+'%',fmt(k.mix,1)+'%',showpct(k.mixGrowth,' pp')]]))}${panel('Detalle de promoción','Instalaciones identificadas por paquete y distrito',promoTable())}</div>`,
+ prepost:()=>`<div class="grid">${panel('Periodos PRE · POST','250 Mbps residencial · POST inicia 03/11; distinguir campaña y después',phases(),true)}${panel('PRE frente a promoción','Comparación homologada al número de días transcurridos',tabler(['Indicador','PRE comparable','PROMO','Δ'],[['Instalaciones 250 Mbps',fmt(k.base250,2),fmt(k.v250),showpct(k.growth250)],['ARPU PP 250',usd(k.arpuPre),usd(k.arpu),showpct(k.arpuGrowth)],['Mix 250',fmt(k.mixPre,1)+'%',fmt(k.mix,1)+'%',showpct(k.mixGrowth,' pp')]]))}${panel('Detalle de promoción','Instalaciones identificadas por paquete y distrito',promoTable())}</div>`,
  arpu:()=>`<div class="grid">${panel('Comportamiento del ARPU','Precio pronto pago por instalación válida',arpuSvg())}${panel('ARPU por distrito','Tuxtla y Villahermosa',arpuDistrict())}${panel('ARPU por etapa','PRE · PROMO · POST',tabler(['Etapa','ARPU PP','Instalaciones 250'],['PRE','PROMO','POST'].map(key=>[key,usd(D.phases[key].arpu),fmt(D.phases[key].v250)])),true)}</div>`,
  velocidades:velocity,canales:channels,evolucion:evolution
  };
@@ -615,5 +711,73 @@ const updateNav=()=>document.querySelectorAll('[data-tab]').forEach(b=>b.classLi
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{activeTab=b.dataset.tab;history.replaceState({},'',location.pathname+'?'+new URLSearchParams([...new URLSearchParams(location.search).entries()].filter(([k])=>k!=='vista').concat([['vista',activeTab]])).toString());updateNav();render()}));
 updateNav();render();
 }
-document.querySelectorAll('[data-period]').forEach(b=>b.addEventListener('click',()=>{document.querySelector('#periodInput').value=b.dataset.period;document.querySelectorAll('[data-period]').forEach(x=>x.classList.toggle('active',x===b));document.getElementById('filterForm').requestSubmit()}));
+
+// Navegación y selector TalIA: sin abrir el calendario nativo de Chrome.
+(()=>{
+ const form=document.getElementById('filterForm');if(!form)return;
+ const mode=document.getElementById('periodInput').value;
+ const max='<?=bp_h($dataMaxDay??$lastDay??'')?>';
+ const box=document.getElementById('bpCalendarPopup'),toggle=document.getElementById('bpCalendarToggle');
+ const from=document.getElementById('bpFrom'),to=document.getElementById('bpTo'),days=document.getElementById('bpWeekDays');
+ const dayIso=d=>((d.getDay()+6)%7)+1;
+ const isoDate=d=>{let y=d.getFullYear(),m=('0'+(d.getMonth()+1)).slice(-2),n=('0'+d.getDate()).slice(-2);return `${y}-${m}-${n}`};
+ const parse=d=>new Date(d+'T12:00:00');
+ let start=from.value,end=to.value;
+ let view=parse(end||max);view=new Date(view.getFullYear(),view.getMonth(),1,12);
+ let picks=(days.value||'').split(',').map(Number).filter(n=>n>=1&&n<=7);
+ const fmtDate=d=>d?d.slice(8)+'/'+d.slice(5,7)+'/'+d.slice(0,4):'—';
+ const label=()=>{document.getElementById('bpCalendarLabel').textContent=mode==='semanal'
+  ? `S${document.getElementById('bpWeek').value} · ${fmtDate(start)} – ${fmtDate(end)}`
+  : fmtDate(start)+(start!==end?' – '+fmtDate(end):'');};
+ label();
+ const weekDate=()=>parse(start||max);
+ function render(){
+   const week=mode==='semanal';document.getElementById('bpWeekPicker').hidden=!week;document.getElementById('bpDatePicker').hidden=week;
+   document.getElementById('bpCalMonth').textContent=week?`Semana ${document.getElementById('bpWeek').value} · ${document.getElementById('bpWeekYear').value}`:view.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
+   if(week){const a=weekDate();const mon=new Date(a);mon.setDate(mon.getDate()-(dayIso(mon)-1));
+     document.getElementById('bpWeekDaysButtons').innerHTML=['LUN','MAR','MIÉ','JUE','VIE','SÁB','DOM'].map((name,i)=>{
+       const d=new Date(mon);d.setDate(mon.getDate()+i);const valid=isoDate(d)<=max;
+       return `<button type="button" data-iso="${i+1}" ${valid?'':'disabled'} class="${picks.includes(i+1)?'active':''}">${name}</button>`;}).join('');
+     document.querySelectorAll('[data-iso]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.iso);picks=picks.includes(n)?picks.filter(x=>x!==n):[...picks,n].sort();b.classList.toggle('active');});
+     return;
+   }
+   const monthStart=new Date(view.getFullYear(),view.getMonth(),1,12);
+   const offset=dayIso(monthStart)-1;const grid=document.getElementById('bpCalendarGrid');
+   const headers=['LUN','MAR','MIÉ','JUE','VIE','SÁB','DOM'].map(d=>`<span>${d}</span>`).join('');
+   let html=headers;
+   for(let i=0;i<42;i++){
+      const d=new Date(monthStart);d.setDate(1-offset+i);const v=isoDate(d);
+      const active=v===start||v===end,range=v>start&&v<end;
+      html+=`<button type="button" data-day="${v}" ${v>max?'disabled':''} class="${active?'active':range?'in-range':''} ${d.getMonth()!==view.getMonth()?'other':''}">${d.getDate()}</button>`;
+   }
+   grid.innerHTML=html;
+   grid.querySelectorAll('[data-day]').forEach(b=>b.onclick=()=>{const v=b.dataset.day;
+      if(!start||start!==end||v<start){start=v;end=v;}else{end=v;}
+      if(mode==='diario' && start!==end){document.getElementById('bpDateHelp').textContent='Rango diario personalizado: '+fmtDate(start)+' – '+fmtDate(end);}
+      render();});
+ }
+ toggle.onclick=()=>{box.hidden=!box.hidden;toggle.setAttribute('aria-expanded',String(!box.hidden));if(!box.hidden)render()};
+ document.getElementById('bpPrev').onclick=()=>{if(mode==='semanal'){
+     const m=weekDate();m.setDate(m.getDate()-7);start=isoDate(m);end=isoDate(new Date(m.getFullYear(),m.getMonth(),m.getDate()+6,12));
+     const d=parse(start);const jan4=new Date(d.getFullYear(),0,4,12);const mon4=new Date(jan4);mon4.setDate(jan4.getDate()-(dayIso(jan4)-1));
+     const th=new Date(d);th.setDate(d.getDate()+4-dayIso(d));const yr=th.getFullYear();const j4=new Date(yr,0,4,12);j4.setDate(j4.getDate()-(dayIso(j4)-1));document.getElementById('bpWeek').value=1+Math.floor((d-j4)/604800000);document.getElementById('bpWeekYear').value=yr;
+   }else view=new Date(view.getFullYear(),view.getMonth()-1,1,12);render();};
+ document.getElementById('bpNext').onclick=()=>{if(mode==='semanal'){
+    const d=weekDate();d.setDate(d.getDate()+7);if(isoDate(d)>max)return;
+    start=isoDate(d);const w=new Date(d);w.setDate(d.getDate()+6);end=isoDate(w)>max?max:isoDate(w);
+    const isoThursday=new Date(d);isoThursday.setDate(d.getDate()+4-dayIso(d));const y=isoThursday.getFullYear();const jan4=new Date(y,0,4,12);jan4.setDate(jan4.getDate()-(dayIso(jan4)-1));
+    document.getElementById('bpWeek').value=1+Math.floor((d-jan4)/604800000);document.getElementById('bpWeekYear').value=y;
+   }else{const n=new Date(view.getFullYear(),view.getMonth()+1,1,12);if(isoDate(n)>max)return;view=n;}render();};
+ document.getElementById('bpResetRange').onclick=()=>{if(mode==='semanal'){picks=[1,2,3,4,5,6,7].filter(n=>{const w=weekDate();w.setDate(w.getDate()-(dayIso(w)-1)+n-1);return isoDate(w)<=max;});}
+ else{end=max;start=mode==='diario'?max:max.slice(0,8)+'01';view=new Date(parse(end).getFullYear(),parse(end).getMonth(),1,12);}render();};
+ document.getElementById('bpApplyCalendar').onclick=()=>{if(mode==='semanal' && picks.length===0){alert('Selecciona al menos un día.');return;}from.value=start;to.value=end;days.value=picks.join(',');box.hidden=true;form.requestSubmit();};
+ document.addEventListener('pointerdown',e=>{if(!box.contains(e.target)&&!toggle.contains(e.target)){box.hidden=true;toggle.setAttribute('aria-expanded','false')}});
+ document.querySelectorAll('[data-period]').forEach(b=>b.addEventListener('click',()=>{
+   document.getElementById('periodInput').value=b.dataset.period;
+   // Al cambiar periodo, tomar el último corte disponible sin heredar un rango obsoleto.
+   from.value='';to.value='';days.value='';document.getElementById('bpWeek').value='0';
+   form.requestSubmit();
+ }));
+})();
+
 </script></body></html>
