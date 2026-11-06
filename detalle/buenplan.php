@@ -411,10 +411,49 @@ function bp_json($data):string {return json_encode($data, JSON_HEX_TAG|JSON_HEX_
 .auditwrap{margin-top:18px}.auditwrap summary{cursor:pointer;font-weight:800;padding:8px}
 .status{font-size:11px;color:#677893;padding:8px 0}
 @media(max-width:1050px){.panels3{grid-template-columns:1fr}}
+
+/* v1.5.1 · Homologación visual al prototipo aprobado de TalIA TotalXpedient. */
+:root { --navy:#171735; --mute:#7986a3; --line:#e3e3f1; --violet:#9c19f2; --magenta:#dd08bb; }
+body { font-family: 'Poppins','Segoe UI',Arial,sans-serif; font-size:14px; color:#161b3a;
+ background: radial-gradient(ellipse at 15% 42%, rgba(246,201,247,.62) 0,transparent 43%),linear-gradient(115deg,#f8f1fe 0%,#eef6ff 96%); }
+.sidebar { width:194px; min-width:194px; background:linear-gradient(165deg,#38213f,#21193d 62%,#181936); padding:24px 11px; }
+.brand { margin-bottom:32px; gap:16px; }
+.brand-icon { width:88px;height:88px;border-radius:25px;font-size:22px;position:relative;background:linear-gradient(135deg,#f528ca 4%,#8225ed 57%,#00c6ff); }
+.bp-logo-stack { display:grid;place-items:center;width:45px;height:42px;border:2px solid #efceff;border-radius:7px;background:linear-gradient(135deg,#ad39e7aa,#009cfab9);box-shadow:9px 7px 0 #5729d488,-7px -4px 0 #e323d399;transform:translate(-2px,-2px) }
+.bp-logo-cube {color:white;font-size:20px;text-shadow:0 1px 4px #1b124c}
+.brand-name {font-size:12px;letter-spacing:2px;font-weight:900}
+.menuitem { font-size:13px; min-height:44px; margin:5px 0; font-weight:650; border-radius:16px;padding:11px 13px; }
+.menuitem.selected {border:1px solid #7857ce7b;background:linear-gradient(110deg,#9b258d96,#00508a70)}
+.main { width:calc(100% - 194px);max-width:none;padding:16px 25px 44px; }
+.top {margin-bottom:15px;align-items:center}.top h1 {font-size:29px;font-weight:800;letter-spacing:-.8px;line-height:1.15}.subtitle{font-size:14px;color:#667697;margin-top:6px}
+.user{padding:9px 17px 9px 9px;font-size:12px;border-radius:35px;max-width:340px}.user b{display:block;max-width:255px;overflow:hidden;text-overflow:ellipsis}.avatar{width:38px;height:38px;font-size:16px}
+.filters { border-radius:22px; padding:14px 16px;gap:9px;box-shadow:0 8px 28px #291e5612;min-height:82px; }
+.filter {min-width:102px;font-size:10px;letter-spacing:.15px;gap:5px}.filter select,.filter input { height:39px; font-size:12px; font-weight:650; border-radius:12px; max-width:210px }
+.cut{min-width:182px}.cut strong{font-size:17px}.period button{font-size:12px}.apply{padding:12px 18px;white-space:nowrap}
+.kpis {gap:11px;margin:14px 0 17px;grid-template-columns:repeat(5,minmax(0,1fr))}
+.kpi{border-radius:22px;min-height:137px;padding:17px 14px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 8px 21px #4c316018;border:1px solid #ffffffea}
+.kpi .head{font-size:13px;line-height:1.25;gap:12px;font-weight:750}
+.kpi .glyph {width:44px;min-width:44px;height:44px;border-radius:17px;font-size:24px;background:#f4dcff;color:#a025da}
+.metric{font-size:33px;letter-spacing:-.8px;line-height:1.14;margin:4px 0 2px 55px;font-weight:850}
+.kpi .note{margin:0 0 0 55px;font-size:12px;line-height:1.4;color:#45577a}
+.tabs{border-radius:23px;min-height:48px;padding:5px;margin:15px 0 19px;gap:2px}.tabs button{border-radius:18px;padding:12px 13px;font-size:12px;letter-spacing:0;font-weight:750}.tabs button.active{background:linear-gradient(100deg,#9821ed,#db0abf);box-shadow:0 6px 13px #aa2bce22}
+.grid{gap:14px}.grid.panorama-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
+.panorama-grid>.panel{grid-column:span 2}.panorama-grid>.panel:nth-child(4),.panorama-grid>.panel:nth-child(5){grid-column:span 3}
+.panel {border:1px solid #e0dfef;border-radius:21px;background:#ffffffee;padding:18px 20px;box-shadow:0 8px 25px #39275310;min-height:0;margin-bottom:0}
+.panel h3{font-size:17px;font-weight:800;letter-spacing:-.25px;line-height:1.23}.panel .desc{font-size:12px;margin:4px 0 13px}
+.panorama-grid>.panel:nth-child(-n+3) {min-height:265px}.panorama-grid>.panel:nth-child(n+4){min-height:240px}
+.chart{height:205px;overflow:visible}.chart svg{display:block;width:100%;height:100%;overflow:visible}
+.legend {font-size:11px;gap:11px;margin-top:8px}.table{font-size:12px}.table th{background:#eeedfa;color:#28345d;font-size:11px;padding:10px 7px}.table td{padding:10px 7px}.table tr:last-child td{background:#f0e3fa}
+.phase{padding:14px;min-height:132px;border-radius:16px}.phase .number{font-size:26px}.step{gap:9px}
+.bp-donut-wrap{display:flex;align-items:center;gap:18px;justify-content:space-evenly;min-height:176px}.bp-donut{width:165px;min-width:130px;aspect-ratio:1;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#9e22e5 0 var(--bp-fill),#ece5f7 var(--bp-fill) 100%);position:relative}.bp-donut:before{content:'';position:absolute;inset:22%;border-radius:50%;background:white}.bp-donut-center{z-index:1;text-align:center;font-size:22px;font-weight:850;line-height:1.1}.bp-donut-center small{font-size:11px;font-weight:700}.bp-donut-list{flex:1;max-width:210px;font-size:12px}.bp-donut-row{display:flex;justify-content:space-between;gap:9px;padding:9px 0;border-bottom:1px solid #eceaf5}.bp-donut-row:last-child{border:0}.bp-dot{height:10px;width:10px;border-radius:50%;display:inline-block;background:#ae21e8;margin-right:6px}
+.bp-line-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#5e6b87;padding-top:7px}.bp-line-legend i{height:10px;width:10px;display:inline-block;border-radius:3px;margin-right:4px}
+@media(max-width:1380px){.main{padding:16px}.kpi .head{font-size:12px}.kpi .note{font-size:11px}.kpi .glyph{width:38px;height:38px;min-width:38px}.metric,.kpi .note{margin-left:50px}.tabs button{font-size:11px;padding:11px 8px}.bp-donut{width:130px}}
+@media(max-width:1100px){.sidebar{width:174px;min-width:174px}.main{width:calc(100% - 174px)}.grid.panorama-grid{grid-template-columns:1fr 1fr}.panorama-grid>.panel,.panorama-grid>.panel:nth-child(4),.panorama-grid>.panel:nth-child(5){grid-column:auto}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:780px){.sidebar{display:none}.main{width:100%;padding:12px}.top h1{font-size:23px}.kpis{grid-template-columns:repeat(2,1fr)}.grid.panorama-grid{grid-template-columns:1fr}.panorama-grid>.panel,.panorama-grid>.panel:nth-child(4),.panorama-grid>.panel:nth-child(5){grid-column:auto}.bp-donut-wrap{flex-wrap:wrap}}
 </style></head>
 <body><div class="app">
 <aside class="sidebar">
- <div class="brand"><div class="brand-icon">▣</div><div class="brand-name">TOTALXPEDIENT</div></div>
+ <div class="brand"><div class="brand-icon"><span class="bp-logo-stack"><span class="bp-logo-cube">▶</span></span></div><div class="brand-name">TOTALXPEDIENT</div></div>
  <div class="menuitem"><a href="../index.php"><span class="mi">▦</span> Dashboard</a></div>
  <div class="menuitem"><span class="mi">🏆</span> Ranking</div>
  <div class="menuitem"><span class="mi">◉</span> Pulso</div>
@@ -427,7 +466,7 @@ function bp_json($data):string {return json_encode($data, JSON_HEX_TAG|JSON_HEX_
 </aside>
 <main class="main">
 <header class="top"><div><h1>Promociones | Buen Plan</h1><div class="subtitle">Región SUR · Tuxtla + Villahermosa · 250 Mbps + Netflix Estándar con anuncios</div></div>
-<div class="user"><span class="avatar">T</span><div><b>TalIA Xpedient</b><div class="small">Dashboard comercial · <?=bp_h(strtoupper($rol))?></div></div></div></header>
+<div class="user"><span class="avatar"><?=bp_h(mb_substr((string)($_SESSION['usuario']??'T'),0,1))?></span><div><b><?=bp_h((string)($_SESSION['nombre_completo']??$_SESSION['usuario']??'TalIA Xpedient'))?></b><div class="small"><?=bp_h($rol==='admin'?'Administrador':'Dirección Regional')?></div></div></div></header>
 <form method="get" class="filters" id="filterForm">
 <div class="cut"><div class="small" style="font-weight:800">CORTE OPERATIVO</div><strong><?=bp_h($lastDay?date('d/m/Y',strtotime($lastDay)):'Sin corte')?></strong></div>
 <label class="filter">DISTRITO<select name="distrito" id="district"><?php foreach(['SUR'=>'SUR participante','TUXTLA'=>'Tuxtla','VILLAHERMOSA'=>'Villahermosa'] as $key=>$text):?><option value="<?=$key?>" <?=$district===$key?'selected':''?>><?=$text?></option><?php endforeach;?></select></label>
@@ -443,7 +482,7 @@ function bp_json($data):string {return json_encode($data, JSON_HEX_TAG|JSON_HEX_
 <div class="kpis" id="kpis"></div>
 <nav class="tabs" aria-label="Secciones de Buen Plan">
 <button type="button" data-tab="panorama" class="active">▥ &nbsp; Panorama</button>
-<button type="button" data-tab="distritos">♧ &nbsp; Distrito y Región</button>
+<button type="button" data-tab="distritos">♙ &nbsp; Distrito y Región</button>
 <button type="button" data-tab="prepost">◷ &nbsp; PRE–PROMO–POST</button>
 <button type="button" data-tab="arpu">＄ &nbsp; ARPU</button>
 <button type="button" data-tab="velocidades">ϟ &nbsp; Velocidad</button>
@@ -456,7 +495,7 @@ function bp_json($data):string {return json_encode($data, JSON_HEX_TAG|JSON_HEX_
 <div class="status">Registros idénticos consolidados: <?=bp_fmt($duplicateExact)?> · paquetes sin catálogo: <?=bp_fmt($noCatalog)?> · conflictos excluidos: <?=bp_fmt(count($auditRows))?>.</div>
 <div class="scrolltable"><table class="table"><thead><tr><th>Cuenta</th><th>Distrito</th><th>Motivo</th><th>Filas</th><th>Detalle</th></tr></thead><tbody>
 <?php if(!$auditRows):?><tr><td colspan="5">Sin conflictos que requieran revisión.</td></tr><?php else: foreach($auditRows as $r):?><tr><td><?=bp_h($r['cuenta'])?></td><td><?=bp_h($r['distrito'])?></td><td><?=bp_h($r['motivo'])?></td><td><?=bp_fmt($r['filas'])?></td><td><?=bp_h($r['detalle'])?></td></tr><?php endforeach;endif;?></tbody></table></div></details>
-<div class="footer">TotalXpedient · Buen Plan v1.5.0 · Instalaciones comerciales de todos los canales de Tuxtla y Villahermosa. Catálogo oficial de paquetes para velocidad, Play y tipo. Promoción por nombre exacto del paquete VELOZ Netflix (2P/3P), del 03 al 09/11/2026. ARPU basado en precio pronto pago histórico válido, sin dividir IVA. POST solo con fechas realmente cargadas. Reporte de instalaciones, no activaciones de Netflix.</div>
+<div class="footer">TotalXpedient · Buen Plan v1.5.1 · Instalaciones comerciales de todos los canales de Tuxtla y Villahermosa. Catálogo oficial de paquetes para velocidad, Play y tipo. Promoción por nombre exacto del paquete VELOZ Netflix (2P/3P), del 03 al 09/11/2026. ARPU basado en precio pronto pago histórico válido, sin dividir IVA. POST solo con fechas realmente cargadas. Reporte de instalaciones, no activaciones de Netflix.</div>
 <?php endif;?></main></div>
 <script>
 const D=<?=bp_json($bpView)?>;
@@ -473,10 +512,11 @@ const color=(v)=>v==null?'':v<0?'negative':'positive';
 const tabler=(headers,rows)=>`<div class="scrolltable"><table class="table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.length?rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join(''):`<tr><td colspan="${headers.length}">Sin datos para este corte</td></tr>`}</tbody></table></div>`;
 const bargroups=(rows)=>{
  const w=550,h=240,bottom=192,top=22,max=Math.max(1,...rows.flatMap(r=>[r.pre,r.now]));
- const gap=(w-70)/Math.max(rows.length,1),bw=Math.min(27,gap*.24);
+ const gap=(w-70)/Math.max(rows.length,1),bw=Math.min(32,gap*.24);
  let svg=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Comparativo PRE y promoción">`;
+ for(let i=0;i<=4;i++){const y=bottom-i*160/4;svg+=`<line x1="32" y1="${y}" x2="${w-18}" y2="${y}" stroke="#e8edf7"/><text x="25" y="${y+4}" font-size="11" text-anchor="end" fill="#8b94aa">${fmt(max*i/4,1)}</text>`;}
  rows.forEach((r,i)=>{let x=44+gap*(i+.5),hp=r.pre/max*155,hn=r.now/max*155;
-  svg+=`<rect x="${x-bw-2}" y="${bottom-hp}" width="${bw}" height="${hp}" rx="4" fill="#9bd5fc"/><rect x="${x+2}" y="${bottom-hn}" width="${bw}" height="${hn}" rx="4" fill="#277bed"/><text x="${x-bw/2-2}" y="${bottom-hp-7}" font-size="12" text-anchor="middle" fill="#253759">${fmt(r.pre,2)}</text><text x="${x+bw/2+2}" y="${bottom-hn-7}" font-size="12" text-anchor="middle" fill="#253759">${fmt(r.now)}</text><text x="${x}" y="${bottom+24}" font-size="12" text-anchor="middle">${esc(r.name)}</text>`;
+ svg+=`<rect x="${x-bw-3}" y="${bottom-hp}" width="${bw}" height="${hp}" rx="4" fill="#9bd5fc"/><rect x="${x+3}" y="${bottom-hn}" width="${bw}" height="${hn}" rx="4" fill="#277bed"/><text x="${x-bw/2-3}" y="${bottom-hp-9}" font-size="12" font-weight="700" text-anchor="middle" fill="#253759">${fmt(r.pre,2)}</text><text x="${x+bw/2+3}" y="${bottom-hn-9}" font-size="12" font-weight="700" text-anchor="middle" fill="#253759">${fmt(r.now)}</text><text x="${x}" y="${bottom+24}" font-size="12" text-anchor="middle" fill="#263253">${esc(r.name)}</text>`;
  });return `<div class="chart">${svg}</svg></div><div class="legend"><span><i class="swatch" style="background:#9bd5fc"></i>PRE equivalente</span><span><i class="swatch" style="background:#277bed"></i>Campaña</span></div>`;
 };
 const lined=(rows,field='promo',title='Evolución')=>{
@@ -521,14 +561,45 @@ const evolution=()=>{
  return `<div class="grid">${panel('Evolución de Buen Plan','Paquetes VELOZ Netflix · '+esc(D.period),lined(rows,'promo','Paquetes Buen Plan'))}${panel('Evolución 250 Mbps','Instalaciones residenciales de 250 Mbps',lined(rows,'v250','250 Mbps'))}${panel('Residencial total','Todas las velocidades y Plays del filtro seleccionado',lined(rows,'total','Residencial total'),true)}</div>`;
 };
 const arpuDistrict=()=>tabler(['Distrito','ARPU PRE','ARPU PROMO','Var.'],D.arpuDistrict.map(r=>[esc(r.name),usd(r.pre),usd(r.now),showpct(r.now!=null&&r.pre!=null?pct(r.now,r.pre):null)]));
-const panorama=()=>`<div class="grid">${panel('Comportamiento por distrito','250 Mbps · PRE equivalente vs campaña',bargroups(D.districts))}${panel('Evolución del ARPU','Precio pronto pago histórico 250 Mbps',arpuSvg())}${panel('Buen Plan por distrito','Paquetes exactos 2P y 3P',promoTable())}${panel('PRE · PROMO · POST','Contexto del comportamiento comercial',phases())}${panel('Canal de venta','Instalaciones de 250 Mbps',tabler(['Canal','Campaña 250','Buen Plan'],D.channels.slice(0,7).map(r=>[esc(r.label),fmt(r.now),fmt(r.promo)])))}${panel('Evolución de la promoción','Serie temporal de instalaciones de Buen Plan',lined(D.series,'promo','Buen Plan'))}</div>`;
+
+/* Panorama institucional: gráficos compactos del prototipo, sin cifras simuladas. */
+const bpDonut=()=>{
+ const speeds=(D.speed.AMBOS||[]).filter(r=>r.now>0);
+ const n=speeds.reduce((x,r)=>x+Number(r.now||0),0);
+ const first=speeds[0]||null,colors=['#a323e6','#7f62ed','#3b9eff','#92c0f7','#d4c2f5'];
+ let sum=0;const arc=speeds.map((r,i)=>{const from=sum;sum+=r.now/n*100;return `${colors[i%colors.length]} ${from}% ${sum}%`;}).join(',');
+ const fill=n?`conic-gradient(${arc})`:'conic-gradient(#ebe8f3 0 100%)';
+ return `<div class="bp-donut-wrap"><div class="bp-donut" style="background:${fill}"><div class="bp-donut-center">${n?fmt(n):'—'}<br><small>Instalaciones</small></div></div><div class="bp-donut-list">${speeds.length?speeds.slice(0,5).map((r,i)=>`<div class="bp-donut-row"><span><i class="bp-dot" style="background:${colors[i%colors.length]}"></i>${fmt(r.speed)} Mbps</span><b>${fmt(r.now)} · ${fmt(r.now/n*100,1)}%</b></div>`).join(''):'<div class="small">Sin instalaciones en el corte</div>'}</div></div>`;
+};
+const bpChannelCompact=()=>{
+ const list=D.channels.filter(r=>r.now>0||r.promo>0).slice(0,5);
+ if(!list.length)return chartmsg('Sin registros por canal al corte');
+ return tabler(['Canal','Inst. 250','Buen Plan','Mix BP'],list.map(r=>[esc(r.label),fmt(r.now),fmt(r.promo),r.now>0?fmt(r.promo/r.now*100,1)+'%':'—']));
+};
+const bpEvoCompact=()=>{
+ const a=D.daily.filter(r=>r.date>='2026-11-03'&&r.date<=D.cut).map(r=>({label:r.date.slice(8)+'/'+r.date.slice(5,7),date:r.date,promo:r.promo}));
+ if(!a.length)return chartmsg('No hay instalaciones en el periodo PROMO al corte');
+ return lined(a,'promo','Evolución de Buen Plan en campaña');
+};
+const bpArpuChange=()=>{
+ const v=D.kpi.arpuGrowth;
+ return arpuSvg()+(v==null?'':`<div class="bp-line-legend"><span><i style="background:#a125df"></i>ARPU PRE</span><span>Variación: <b class="${color(v)}">${showpct(v)}</b></span></div>`);
+};
+
+const panorama=()=>`<div class="grid panorama-grid">
+ ${panel('Comportamiento por distrito','Instalaciones 250 Mbps · PRE vs campaña',bargroups(D.districts))}
+ ${panel('Evolución del ARPU (Precio Pronto Pago)','250 Mbps · Región participante',bpArpuChange())}
+ ${panel('Instalaciones por velocidad','Mix comercial residencial · 2P + 3P',bpDonut())}
+ ${panel('Desempeño por canal de venta','250 Mbps · instalaciones de campaña',bpChannelCompact())}
+ ${panel('Evolución de las instalaciones','Paquetes Buen Plan · 03 al 09 de noviembre',bpEvoCompact())}
+ </div>`;
 const render=()=>{
  const k=D.kpi;
  document.getElementById('kpis').innerHTML=metric('Instalaciones 250 Mbps',showpct(k.growth250),`${fmt(k.v250)} vs ${fmt(k.base250,2)} PRE comparable`,'◉',k.growth250>=0)+
- metric('ARPU (PP)',showpct(k.arpuGrowth),`${usd(k.arpu)} vs ${usd(k.arpuPre)}`,'♧',k.arpuGrowth>=0)+
- metric('Buen Plan 2P',fmt(k.p2),'VELOZ Netflix STD con anuncios','◈')+
- metric('Buen Plan 3P',fmt(k.p3),'VELOZ Netflix STD con anuncios TV','▥')+
- metric('Total Buen Plan',fmt(k.promo),`${fmt(k.adoption,1)}% de las instalaciones 250 Mbps`,'▣');
+ metric('ARPU (PP)',showpct(k.arpuGrowth),`${usd(k.arpu)} vs ${usd(k.arpuPre)}`,'♕',k.arpuGrowth>=0)+
+ metric('Buen Plan 2P',fmt(k.p2),'VELOZ Netflix STD con anuncios','◇')+
+ metric('Buen Plan 3P',fmt(k.p3),'VELOZ Netflix STD con anuncios TV','▣')+
+ metric('Total Buen Plan',fmt(k.promo),`${fmt(k.adoption,1)}% de las instalaciones 250 Mbps`,'◇');
  const views={
  panorama:panorama,
  distritos:()=>`<div class="grid">${panel('Comportamiento por distrito y región','250 Mbps · PRE vs campaña',districtTable())}${panel('Comparativo gráfico','Volumen comparable',bargroups(D.districts))}${panel('Promoción Buen Plan','Adopción de 2P y 3P',promoTable(),true)}</div>`,
