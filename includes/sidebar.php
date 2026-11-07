@@ -23,6 +23,14 @@ $txp_ranking_comercial_activo = $txp_script_actual === 'ranking_comercial.php';
 $txp_mix_velocidad_activo = $txp_script_actual === 'mix_comercial.php';
 $txp_pulso_activo = $txp_script_actual === 'pulso.php' || $current_page === 'pulso';
 
+// Promociones: visibilidad alineada con los roles que autoriza buenplan.php.
+$txp_buenplan_activo = $txp_script_actual === 'buenplan.php'
+    || $current_page === 'buenplan';
+$txp_promociones_activo = $txp_buenplan_activo || $current_page === 'promociones';
+$txp_promociones_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$txp_promociones_visible = !empty($_SESSION['usuario'])
+    && in_array($txp_promociones_rol, ['admin', 'director_regional'], true);
+
 // Adiciones Netas: menú visible solo para perfiles autorizados.
 $txp_addnetas_roles = ['admin','gerente_regional','director_regional','director_distrital'];
 $txp_addnetas_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
@@ -32,7 +40,7 @@ $txp_addnetas_fcst_activo = $txp_script_actual === 'fcst_add_netas.php';
 $txp_addnetas_activo = $txp_addnetas_dashboard_activo || $txp_addnetas_fcst_activo
     || in_array($current_page, ['add_netas','fcst_add_netas'], true);
 
-$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
+$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
 $root_path  = $is_detalle ? '../' : '';
 $det_path   = $is_detalle ? '' : 'detalle/';
 
@@ -172,6 +180,23 @@ function txp_nav_active($page, $current_page) {
     <a href="<?= $det_path ?>metas_fcst_dashboard.php" class="nav-item<?= txp_nav_active('fcst_dashboard', $current_page) ?>">
         <span class="nav-icon">🚦</span> Dashboard EJECUCION
     </a>
+    <?php if ($txp_promociones_visible): ?>
+    <!-- Promociones | se despliega automáticamente al visitar Buen Plan. -->
+    <details class="txp-ranking-group" <?= $txp_promociones_activo ? 'open' : '' ?>>
+        <summary class="nav-item txp-ranking-toggle<?= $txp_promociones_activo ? ' active' : '' ?>" aria-label="Desplegar submenú Promociones">
+            <span class="nav-icon">🎁</span>
+            <span class="txp-ranking-label">Promociones</span>
+            <span class="txp-ranking-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <nav class="txp-ranking-submenu" aria-label="Opciones de Promociones">
+            <a href="<?= $det_path ?>buenplan.php"
+               class="txp-ranking-subitem<?= $txp_buenplan_activo ? ' active' : '' ?>"
+               <?= $txp_buenplan_activo ? 'aria-current="page"' : '' ?>>
+                <span class="txp-ranking-subicon" aria-hidden="true">▸</span> Buen Plan
+            </a>
+        </nav>
+    </details>
+    <?php endif; ?>
     <div class="sidebar-bottom">
         <?php if ($is_detalle): ?>
             <a href="<?= $root_path ?>logout.php" class="logout-btn">⎋ Cerrar sesión</a>
