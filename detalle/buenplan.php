@@ -1,6 +1,6 @@
 <?php
 /**
- * TalIA / TotalXpedient — Promociones / Buen Plan v1.5.5
+ * TalIA / TotalXpedient — Promociones / Buen Plan v1.5.6
  * Ruta propuesta: /plataforma/detalle/buenplan.php
  * Solo lectura. NO modifica sidebar, BD ni motores.
  * Identifica 250 MB desde catálogo, Play/Tipo desde catálogo y precio PP desde instalaciones.
@@ -6055,7 +6055,20 @@ function bp_lab(string $key,string $mode):string {if($mode==='diario')return sub
 function bp_is_promo(string $day):bool{return $day>='2026-11-03' && $day<='2026-11-09';}
 function bp_phase(string $day):string {return $day<'2026-11-03'?'PRE':($day<='2026-11-09'?'PROMO':'POST');}
 $promoStart=new DateTimeImmutable('2026-11-03');$promoEnd=new DateTimeImmutable('2026-11-09');
-$mode=(string)($_GET['periodo']??'semanal');if(!in_array($mode,['semanal','mensual','diario'],true))$mode='semanal';
+/**
+ * Vista inicial automática: contar días calendario POST incluyendo el 03/11.
+ *   1-14 días = Diario; 15-31 = Semanal; 32+ = Mensual.
+ * Se aplica SOLO si el usuario no indicó un periodo explícito en la URL.
+ */
+function bp_periodo_inicial(DateTimeImmutable $corte,DateTimeImmutable $inicioPromo):string {
+    if($corte<$inicioPromo)return 'diario';
+    $diasPost=(int)$inicioPromo->diff($corte)->days+1;
+    return $diasPost>31?'mensual':($diasPost>14?'semanal':'diario');
+}
+$requestedPeriod=$_GET['periodo']??null;
+$hasExplicitPeriod=is_string($requestedPeriod) && in_array($requestedPeriod,['diario','semanal','mensual'],true);
+$mode=$hasExplicitPeriod?$requestedPeriod:'diario'; // Valor provisional hasta consultar MAX(fecha).
+
 $district=(string)($_GET['distrito']??'SUR');if(!in_array($district,['SUR','TUXTLA','VILLAHERMOSA'],true))$district='SUR';
 $playSel=(string)($_GET['play']??'AMBOS');if(!in_array($playSel,['AMBOS','2P','3P'],true))$playSel='AMBOS';
 $preDays=max(1,min(180,(int)($_GET['pre_dias']??28)));
@@ -6085,6 +6098,9 @@ try {
     $dataMaxDay=$maxDate->format('Y-m-d');
     $userCut=bp_date($cutArg);$cut=$userCut??$maxDate;
     if($cut>$maxDate)$cut=$maxDate;
+    // El modo de entrada se deriva del último corte disponible, no de la fecha del servidor.
+    // Respetar las selecciones manuales de diario/semanal/mensual en sucesivas visitas.
+    if(!$hasExplicitPeriod)$mode=bp_periodo_inicial($cut,$promoStart);
     $lastDay=$cut->format('Y-m-d');
     // Horizonte PRE ajustable y sin días posteriores al 02/11.
     // En mensual, un mes significa un mes calendario hacia atrás desde el 03/11 (03/10–02/11).
@@ -6112,7 +6128,13 @@ try {
         foreach($selectedIso as $n){$d=$anchor->modify('+'.($n-1).' days');if($d<=$maxDate)$selectedDates[$d->format('Y-m-d')]=true;}
         $cut=$selectionEnd;$lastDay=$cut->format('Y-m-d');
     }else{
-        $defaultStart=$mode==='mensual'?$cut->modify('first day of this month'):$cut;
+        // Solo Diario inicia desde la promoción al entrar sin rango indicado.
+        // Los rangos manuales conservan prioridad por fecha_inicio/fecha_fin.
+        $defaultStart=match($mode){
+            'diario'=>$cut>=$promoStart?$promoStart:$cut,
+            'mensual'=>$cut->modify('first day of this month'),
+            default=>$cut
+        };
         $from=bp_date($rangeFromArg)??$defaultStart;
         $to=bp_date($rangeToArg)??$cut;
         if($from>$to){$temp=$from;$from=$to;$to=$temp;}
@@ -6603,7 +6625,7 @@ body { font-family: 'Poppins','Segoe UI',Arial,sans-serif; font-size:14px; color
 .bp-comm-link:hover{border-color:#ad58e0;background:#f6eaff}
 @media(max-width:1180px){.bp-comm-link{order:0}}
 
-/* v1.5.5 — accesibilidad visual, doble anillo y mapa compatible con INDEX */
+/* v1.5.6 — accesibilidad visual, doble anillo y mapa compatible con INDEX */
 .bp-comm-below{margin-top:9px;display:flex;align-items:center}
 .bp-comm-below .bp-comm-link{order:0;font-size:11px;padding:6px 11px;box-shadow:none}
 .bp-combo-wrap{overflow-x:auto;overflow-y:visible;height:300px}
@@ -6698,7 +6720,7 @@ body { font-family: 'Poppins','Segoe UI',Arial,sans-serif; font-size:14px; color
 <div class="status">Registros idénticos consolidados: <?=bp_fmt($duplicateExact)?> · paquetes sin catálogo: <?=bp_fmt($noCatalog)?> · conflictos excluidos: <?=bp_fmt(count($auditRows))?> · última fecha Tuxtla: <?=bp_h($districtCuts['TUXTLA']??'ND')?> · Villahermosa: <?=bp_h($districtCuts['VILLAHERMOSA']??'ND')?>.</div>
 <div class="scrolltable"><table class="table"><thead><tr><th>Cuenta</th><th>Distrito</th><th>Motivo</th><th>Filas</th><th>Detalle</th></tr></thead><tbody>
 <?php if(!$auditRows):?><tr><td colspan="5">Sin conflictos que requieran revisión.</td></tr><?php else: foreach($auditRows as $r):?><tr><td><?=bp_h($r['cuenta'])?></td><td><?=bp_h($r['distrito'])?></td><td><?=bp_h($r['motivo'])?></td><td><?=bp_fmt($r['filas'])?></td><td><?=bp_h($r['detalle'])?></td></tr><?php endforeach;endif;?></tbody></table></div></details>
-<div class="footer">TotalXpedient · Buen Plan v1.5.5 · Instalaciones comerciales de todos los canales de Tuxtla y Villahermosa. Catálogo oficial de paquetes para velocidad, Play y tipo. Promoción por nombre exacto del paquete VELOZ Netflix (2P/3P), del 03 al 09/11/2026. ARPU basado en precio pronto pago histórico válido, sin dividir IVA. POST desde 03/11 solo con fechas seleccionadas y realmente cargadas; la identificación de Buen Plan respeta 03–09/11. Reporte de instalaciones, no activaciones de Netflix.</div>
+<div class="footer">TotalXpedient · Buen Plan v1.5.6 · Instalaciones comerciales de todos los canales de Tuxtla y Villahermosa. Catálogo oficial de paquetes para velocidad, Play y tipo. Promoción por nombre exacto del paquete VELOZ Netflix (2P/3P), del 03 al 09/11/2026. ARPU basado en precio pronto pago histórico válido, sin dividir IVA. POST desde 03/11 solo con fechas seleccionadas y realmente cargadas; la identificación de Buen Plan respeta 03–09/11. Reporte de instalaciones, no activaciones de Netflix.</div>
 <?php endif;?></main></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
@@ -7051,7 +7073,7 @@ updateNav();render();
     document.getElementById('bpWeek').value=1+Math.floor((d-jan4)/604800000);document.getElementById('bpWeekYear').value=y;
    }else{const n=new Date(view.getFullYear(),view.getMonth()+1,1,12);if(isoDate(n)>max)return;view=n;}render();};
  document.getElementById('bpResetRange').onclick=()=>{if(mode==='semanal'){picks=[1,2,3,4,5,6,7].filter(n=>{const w=weekDate();w.setDate(w.getDate()-(dayIso(w)-1)+n-1);return isoDate(w)<=max;});}
- else{end=max;start=mode==='diario'?max:max.slice(0,8)+'01';view=new Date(parse(end).getFullYear(),parse(end).getMonth(),1,12);}render();};
+ else{end=max;start=mode==='diario'?(max>='2026-11-03'?'2026-11-03':max):max.slice(0,8)+'01';view=new Date(parse(end).getFullYear(),parse(end).getMonth(),1,12);}render();};
  document.getElementById('bpApplyCalendar').onclick=()=>{if(mode==='semanal' && picks.length===0){alert('Selecciona al menos un día.');return;}from.value=start;to.value=end;days.value=picks.join(',');box.hidden=true;form.requestSubmit();};
  document.addEventListener('pointerdown',e=>{if(!box.contains(e.target)&&!toggle.contains(e.target)){box.hidden=true;toggle.setAttribute('aria-expanded','false')}});
  // Flechas de periodo como en INDEX: navegación y selector independientes.
