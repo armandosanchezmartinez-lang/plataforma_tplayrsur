@@ -1,7 +1,7 @@
 <?php
 /**
- * TotalXpedient | Importador Clusters_BDU v2.0 (2026-11-10)
- * Ubicacion prevista: /plataforma/import_clusters_bdu.php
+ * TotalXpedient | Importador Clusters_BDU v2.0.1 (2026-11-10)
+ * Ubicacion prevista: /plataforma/import/import_clusters_bdu.php
  * Requiere: /plataforma/conexion.php y /plataforma/includes/SimpleXLSX.php
  * IMPORTA EXCLUSIVAMENTE la hoja "Clusters". El catalogo se carga con el SQL 02.
  * La unidad de registro es: anio + periodo + numero_periodo + distrito + cluster_hijo.
@@ -16,15 +16,15 @@ header('Cache-Control: no-store, no-cache, must-revalidate');
 header('X-Content-Type-Options: nosniff');
 
 if (empty($_SESSION['usuario'])) {
-    header('Location: login.php');
+    header('Location: /plataforma/login.php');
     exit;
 }
 if (strtoupper(trim((string)($_SESSION['rol'] ?? ''))) !== 'ADMIN') {
     http_response_code(403);
     exit('Acceso restringido: se requiere perfil ADMIN.');
 }
-require_once __DIR__ . '/conexion.php';
-require_once __DIR__ . '/includes/SimpleXLSX.php';
+require_once dirname(__DIR__) . '/conexion.php';
+require_once dirname(__DIR__) . '/includes/SimpleXLSX.php';
 if (!isset($conexion) || !($conexion instanceof mysqli)) {
     http_response_code(500);
     exit('Conexion mysqli no disponible en conexion.php.');
@@ -375,7 +375,7 @@ button.secondary{background:#536d62}.notice{padding:15px;border-radius:8px;backg
 table{border-collapse:collapse;width:100%;margin-top:15px;font-size:14px}td,th{text-align:left;padding:9px;border-bottom:1px solid #e8eeee}
 code{background:#e8f4ee;padding:2px 5px;border-radius:4px}.small{font-size:13px}
 </style></head><body><main>
-<h1>Penetracion de Clusters | Importador v2.0</h1>
+<h1>Penetracion de Clusters | Importador v2.0.1</h1>
 <p>Importa <strong>solo la hoja Clusters</strong>. Reconoce los campos <code>PERIODO</code>, <code>NOMBRE PERIODO</code> y <code>AÑO</code>. Los cortes SEMANAL y MENSUAL se guardan independientemente; las claves existentes se actualizan sin generar duplicados.</p>
 <p class="small">CatalogoClusters se mantiene exclusivamente con SQL. La columna PLAZA (MUNICIPIO) de Clusters se conserva como dato de auditoria; el tablero debe consultar el municipio desde el Catalogo.</p>
 <?php if ($salida !== ''): ?>
