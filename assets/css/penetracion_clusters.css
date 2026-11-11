@@ -1,4 +1,4 @@
-/* TotalXpedient | Penetración v1.4 — hereda la identidad de xpedient-v2.css.
+/* TotalXpedient | Penetración v1.5 — hereda la identidad de xpedient-v2.css.
    Cargar después de ../assets/css/xpedient-v2.css; no redefinir sidebar,
    estilos globales ni tipografía corporativa Poppins. */
 :root{
@@ -97,3 +97,28 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 @media(max-width:1260px){.pc-threshold-settings{grid-column:span 2}}
 @media(max-width:850px){.pc-threshold-settings{grid-column:1/-1}.pc-page .tx-container{padding:16px 12px 26px!important}}
 @media(max-width:520px){.pc-threshold-settings{grid-template-columns:1fr}.pc-rank-head{flex-direction:column;align-items:flex-start}}
+
+/* v1.5: 3 segmentos × 2 filas ejecutivas, identidad Poppins/TalIA. */
+.pc-section-title{margin:15px 2px 10px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.pc-section-title h2{font-size:16px;color:#283155;font-weight:850}
+.pc-section-title p{font-size:11px;color:#73809f}
+.pc-segment-cards,.pc-objective-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin:0 0 17px}
+.pc-segment-card,.pc-objective-card{position:relative;min-width:0;background:rgba(255,255,255,.92);border:1px solid #e1e6f3;border-radius:16px;box-shadow:var(--pc-shadow);padding:15px 16px;overflow:hidden}
+.pc-segment-card:before,.pc-objective-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--seg-color,#7A2BFF)}
+.pc-segment-general{--seg-color:#7A2BFF}.pc-segment-normal{--seg-color:#0057FF}.pc-segment-a{--seg-color:#b026ff}
+.pc-segment-card h3,.pc-objective-card h3{font-size:13px;font-weight:850;color:#283155;margin:0 0 12px}
+.pc-segment-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.pc-segment-values>div,.pc-obj-grid>div{display:flex;flex-direction:column;gap:6px;min-width:0}
+.pc-segment-values span,.pc-obj-grid span{font-size:10px;color:#677595;font-weight:700}
+.pc-segment-values strong{font-size:clamp(15px,1.6vw,24px);line-height:1.2;color:#283155;white-space:nowrap}
+.pc-segment-card small,.pc-objective-card small{display:block;margin-top:12px;font-size:10px;line-height:1.45;color:#7785a5}
+.pc-obj-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.pc-obj-grid strong{font-size:clamp(13px,1.25vw,20px);line-height:1.15;color:#283155;font-weight:850}
+.pc-obj-grid .pc-objective-highlight{padding:9px 10px;margin:-9px -10px;border:1px solid rgba(122,43,255,.15);background:rgba(122,43,255,.07);border-radius:10px}
+.pc-obj-grid .pc-objective-highlight strong{color:#7A2BFF}
+.pc-quality-line{font-size:11px;color:#75809a;margin:0 3px 18px;line-height:1.55}
+.pc-quality-line strong{color:#a35b1d}
+.pc-source-note{display:block;margin-top:4px;font-size:10px;color:#9c47b7}
+@media(max-width:1250px){.pc-segment-cards,.pc-objective-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.pc-segment-cards,.pc-objective-cards{grid-template-columns:1fr}}
+@media(max-width:380px){.pc-segment-values{grid-template-columns:1fr}}

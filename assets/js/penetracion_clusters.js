@@ -11,7 +11,7 @@
   const W = 760, H = 468, L = 66, R = 24, T = 35, B = 68;
   const pw = W - L - R, ph = H - T - B;
   const all = [...(data.NORMAL || []), ...(data.CLUSTER_A || [])];
-  const limits = data.umbrales || {NORMAL:{pen:29,vel:5},CLUSTER_A:{pen:20,vel:7}};
+  const limits = data.umbrales || {NORMAL:{pen:30,vel:5},CLUSTER_A:{pen:20,vel:7}};
   const allLimits = Object.values(limits);
   const xMax = Math.ceil(Math.max(80, ...allLimits.map(l => Number(l.pen) + 12), ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
   const yMin = Math.floor(Math.min(-15, ...allLimits.map(l => Number(l.vel) - 10), ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
