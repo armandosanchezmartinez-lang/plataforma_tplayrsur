@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient | Penetración de Clústeres v1.3 | 2026-11-10
+ * TotalXpedient | Penetración de Clústeres v1.4 | 2026-11-10
  * Ubicación: /plataforma/detalle/penetracion_clusters.php
  * Solo lectura. Requiere Clusters_BDU y Clusters_BDU_Catalogo (esquema v2).
  * Restricción SQL de distrito basada en sesión + HC para Director Distrital.
@@ -95,7 +95,7 @@ function pcMesNombre(int $n): string {
 /** Enlaces de navegación temporal: sólo cortes existentes, mismos filtros, sin fechas diarias. */
 function pcCutUrl(array $cut): string {
     $query = [];
-    foreach (['distrito','municipio','padre','nivel','umbral_pen','umbral_vel','min_hp'] as $key) {
+    foreach (['distrito','municipio','padre','nivel','umbral_pen_normal','umbral_vel_normal','umbral_pen_a','umbral_vel_a','min_hp'] as $key) {
         if (isset($_GET[$key]) && is_string($_GET[$key]) && strlen($_GET[$key]) <= 250) {
             $query[$key] = $_GET[$key];
         }
@@ -164,7 +164,7 @@ function pcAgg(array $rows): array {
         'graficables'=>$plotRows, 'sin_catalogo'=>$missingCatalog
     ];
 }
-function pcBubbles(array $rows, string $nivel, float $minHP, float $limX, float $limY): array {
+function pcBubbles(array $rows, string $nivel, float $minHP, array $limits): array {
     $groups=[];
     foreach ($rows as $r) {
         $hp = $r['casas_pasadas'] !== null ? (int)$r['casas_pasadas'] : 0;
@@ -191,6 +191,8 @@ function pcBubbles(array $rows, string $nivel, float $minHP, float $limX, float 
         if ($g['hp'] < $minHP) continue;
         $pen = 100.0*$g['usuarios']/$g['hp'];
         $vel = 100.0*$g['velSum']/$g['hp'];
+        $limX = (float)$limits[$g['tipo']]['pen'];
+        $limY = (float)$limits[$g['tipo']]['vel'];
         $quadrant = $pen >= $limX
             ? ($vel >= $limY ? 'Liderazgo en expansión' : 'Crecimiento limitado')
             : ($vel >= $limY ? 'Oportunidad de crecimiento' : 'Rezago en mercado');
@@ -207,6 +209,104 @@ function pcBubbles(array $rows, string $nivel, float $minHP, float $limX, float 
     unset($items);
     return $out;
 }
+/**
+ * Ranking de brechas v1.4. Construye unidades sin perder clústeres sin datos.
+ * Para CLUSTER_A la meta de penetración es proporcional a la edad:
+ * 20% a los 12 meses, 10% a los 6 y 30% a los 18 (lineal).
+ * Esta es una hipótesis operativa editable de umbral, NO regla de Qlik.
+ * Para grupos con hijos, el objetivo absoluto se obtiene sumando
+ * HP_hijo * meta_hijo; evitar calcular con una edad promedio simple.
+ * Velocidad permanece ANUALIZADA: 7% anual NO se prorratea por meses.
+ */
+function pcTargets(array $rows, string $nivel, array $limits): array {
+    $groups = [];
+    foreach ($rows as $r) {
+        $tipo = (string)($r['tipo'] ?? '');
+        if (!isset($limits[$tipo])) continue;
+        $name = $nivel === 'HIJO' ? (string)$r['cluster_hijo'] : (string)$r['cluster_padre'];
+        $key = (string)$r['distrito'].'|'.$tipo.'|'.(string)$r['cluster_padre'];
+        if ($nivel === 'HIJO') $key .= '|'.(string)$r['cluster_hijo'];
+        if (!isset($groups[$key])) $groups[$key] = [
+            'nombre'=>$name,'padre'=>(string)$r['cluster_padre'],
+            'distrito'=>(string)$r['distrito'],'tipo'=>$tipo,
+            'hijos'=>0,'hp'=>0,'usuarios'=>0,'comp'=>0,
+            'hpVel'=>0,'sumVel'=>0.0,'hpAge'=>0,'sumAge'=>0.0,
+            'targetBase'=>0.0,'ageMissing'=>false,'municipios'=>[],
+        ];
+        $g = &$groups[$key];
+        $g['hijos']++;
+        $municipio = trim((string)($r['municipio'] ?? ''));
+        if ($municipio !== '') $g['municipios'][$municipio] = true;
+        $hp = $r['casas_pasadas'] === null ? 0 : (int)$r['casas_pasadas'];
+        $user = $r['base_usuarios'];
+        if ($hp > 0 && $user !== null) {
+            $g['comp']++;
+            $g['hp'] += $hp;
+            $g['usuarios'] += (int)$user;
+            $age = $r['antiguedad_anios'];
+            if ($age !== null && is_numeric($age) && (float)$age >= 0) {
+                $g['hpAge'] += $hp;
+                $g['sumAge'] += $hp * (float)$age;
+                if ($tipo === 'CLUSTER_A') {
+                    // Meta A a los 12 meses: 20%. Tras el año sigue la
+                    // misma pendiente mensual (interpretación propuesta).
+                    $targetAtAge = max(0.0, min(100.0, (float)$limits['CLUSTER_A']['pen'] * (float)$age));
+                    $g['targetBase'] += $hp * $targetAtAge / 100.0;
+                }
+            } elseif ($tipo === 'CLUSTER_A') {
+                $g['ageMissing'] = true;
+            }
+            if ($r['velocidad_penetracion_anual'] !== null) {
+                $g['sumVel'] += $hp * (float)$r['velocidad_penetracion_anual'];
+                $g['hpVel'] += $hp;
+            }
+        }
+        unset($g);
+    }
+    $result = ['NORMAL'=>[], 'CLUSTER_A'=>[]];
+    foreach ($groups as $g) {
+        $hp = $g['hp']; $u = $g['usuarios']; $tipo = $g['tipo'];
+        $pen = $hp > 0 ? 100.0*$u/$hp : null;
+        $vel = $g['hpVel'] > 0 ? 100.0*$g['sumVel']/$g['hpVel'] : null;
+        $age = $g['hpAge'] > 0 ? $g['sumAge']/$g['hpAge'] : null;
+        $target = $tipo === 'NORMAL' ? (float)$limits['NORMAL']['pen']
+                 : ($hp > 0 && !$g['ageMissing'] && $g['hpAge'] === $hp
+                    ? 100.0*$g['targetBase']/$hp : null);
+        $targetUsers = ($hp > 0 && $target !== null)
+            ? ($tipo === 'NORMAL' ? $hp*$target/100.0 : $g['targetBase']) : null;
+        $faltan = $targetUsers === null ? null : max(0, (int)ceil($targetUsers-$u-0.0000001));
+        $gapPen = ($pen === null || $target === null) ? null : max(0.0, $target-$pen);
+        $gapVel = $vel === null ? null : max(0.0, (float)$limits[$tipo]['vel']-$vel);
+        $locs = array_keys($g['municipios']);
+        $result[$tipo][] = [
+            'distrito'=>$g['distrito'],'nombre'=>$g['nombre'],'padre'=>$g['padre'],
+            'municipio'=>count($locs)===0?'Sin catalogar':(count($locs)===1?$locs[0]:'Varias localidades'),
+            'edad'=>$age,'hijos'=>$g['hijos'],'hp'=>$hp,'usuarios'=>$u,
+            'pen'=>$pen,'vel'=>$vel,'metaPen'=>$target,'metaVel'=>(float)$limits[$tipo]['vel'],
+            'gapPen'=>$gapPen,'gapVel'=>$gapVel,'faltan'=>$faltan,
+            'estado'=>$hp===0?'Sin base':($target===null?'Sin antigüedad':($vel===null?'Sin velocidad':'OK'))
+        ];
+    }
+    foreach ($result as &$items) {
+        // Mayor brecha en suscriptores al inicio; no comparables al final.
+        usort($items, static function(array $a,array $b):int {
+            if ($a['faltan'] === null) return $b['faltan']===null?0:1;
+            if ($b['faltan'] === null) return -1;
+            return ($b['faltan'] <=> $a['faltan']) ?: ($b['hp'] <=> $a['hp']);
+        });
+    }
+    unset($items);
+    return $result;
+}
+
+function pcSortAttr($value): string {
+    return ' data-sort-value="'.pcHtml($value===null?'':(string)$value).'"';
+}
+function pcGap(?float $gap): string {
+    if ($gap === null) return 'ND';
+    return $gap <= 0.0000001 ? 'Cumple' : number_format($gap,1,'.',',').' pp';
+}
+
 function pcNum(?float $v, int $dec=0): string {
     return $v === null ? 'ND' : number_format($v, $dec, '.', ',');
 }
@@ -300,16 +400,31 @@ try {
     $rows = pcFiltered($rawRows,$municipio,$parent);
     $nivel = strtoupper(pcStr('nivel','PADRE'));
     if (!in_array($nivel,['PADRE','HIJO'],true)) $nivel='PADRE';
-    $xLimit = is_numeric(pcStr('umbral_pen')) ? (float)pcStr('umbral_pen') : 29.0;
-    $yLimit = is_numeric(pcStr('umbral_vel')) ? (float)pcStr('umbral_vel') : 7.0;
-    $xLimit = max(0.0, min(100.0, $xLimit));
-    $yLimit = max(-30.0, min(60.0, $yLimit));
+    // Umbrales diferenciados; persistentes entre cortes semanales/mensuales.
+    // Se conservan los 5% para maduros según la primera definición explícita;
+    // la mención posterior a 7% queda abierta a validación directiva.
+    $limits = [
+        'NORMAL' => [
+            'pen' => is_numeric(pcStr('umbral_pen_normal')) ? (float)pcStr('umbral_pen_normal') : 29.0,
+            'vel' => is_numeric(pcStr('umbral_vel_normal')) ? (float)pcStr('umbral_vel_normal') : 5.0,
+        ],
+        'CLUSTER_A' => [
+            'pen' => is_numeric(pcStr('umbral_pen_a')) ? (float)pcStr('umbral_pen_a') : 20.0,
+            'vel' => is_numeric(pcStr('umbral_vel_a')) ? (float)pcStr('umbral_vel_a') : 7.0,
+        ],
+    ];
+    foreach ($limits as &$limit) {
+        $limit['pen'] = max(0.0, min(100.0, $limit['pen']));
+        $limit['vel'] = max(-30.0, min(60.0, $limit['vel']));
+    }
+    unset($limit);
     $minHP = is_numeric(pcStr('min_hp')) ? max(0,min(500000, (int)pcStr('min_hp'))) : 0;
 
     $summary = pcAgg($rows);
     $mature = pcAgg(array_values(array_filter($rows, static fn($r)=>$r['tipo']==='NORMAL')));
     $young = pcAgg(array_values(array_filter($rows, static fn($r)=>$r['tipo']==='CLUSTER_A')));
-    $bubbles = pcBubbles($rows, $nivel, $minHP, $xLimit, $yLimit);
+    $bubbles = pcBubbles($rows, $nivel, $minHP, $limits);
+    $targetRankings = pcTargets($rows, $nivel, $limits);
     $byDistrict = [];
     foreach ($rows as $r) $byDistrict[$r['distrito']][] = $r;
     ksort($byDistrict);
@@ -339,7 +454,7 @@ ksort($munis, SORT_NATURAL | SORT_FLAG_CASE);
 ksort($parents, SORT_NATURAL | SORT_FLAG_CASE);
 $chartJson = json_encode([
     'NORMAL'=>$bubbles['NORMAL'],'CLUSTER_A'=>$bubbles['CLUSTER_A'],
-    'umbralPen'=>$xLimit,'umbralVel'=>$yLimit,'nivel'=>$nivel,
+    'umbrales'=>$limits,'nivel'=>$nivel,
     'canDistrict'=>$rol !== 'director_distrital',
     'corte'=>$selected['key'] ?? '', 'periodo'=>$selected['periodo'] ?? '',
 ], JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
@@ -355,7 +470,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
     <meta name="color-scheme" content="light">
     <title>Penetración de Clústeres | TotalXpedient</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=160">
-    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.3.0">
+    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.4.0">
 </head>
 <body class="page-dashboard pc-page">
 <div class="tx-layout">
@@ -467,12 +582,24 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                             <option value="HIJO" <?=$nivel==='HIJO'?'selected':''?>>Clúster hijo (detalle)</option>
                         </select>
                     </label>
-                    <label>Umbral X · Penetración (%)
-                        <input name="umbral_pen" type="number" min="0" max="100" step="0.1" value="<?=pcHtml((string)$xLimit)?>">
-                    </label>
-                    <label>Umbral Y · Velocidad anual (%)
-                        <input name="umbral_vel" type="number" min="-30" max="60" step="0.1" value="<?=pcHtml((string)$yLimit)?>">
-                    </label>
+                     <div class="pc-threshold-settings" role="group" aria-label="Umbrales independientes de clústeres maduros">
+                         <span class="pc-threshold-title pc-threshold-normal">● Maduros · NORMAL</span>
+                         <label>Umbral X · Penetración (%)
+                             <input name="umbral_pen_normal" type="number" min="0" max="100" step="0.1" value="<?=pcHtml((string)$limits['NORMAL']['pen'])?>">
+                         </label>
+                         <label>Umbral Y · Velocidad anual (%)
+                             <input name="umbral_vel_normal" type="number" min="-30" max="60" step="0.1" value="<?=pcHtml((string)$limits['NORMAL']['vel'])?>">
+                         </label>
+                     </div>
+                     <div class="pc-threshold-settings" role="group" aria-label="Umbrales independientes de Clústeres A">
+                         <span class="pc-threshold-title pc-threshold-a">● Clústeres_A</span>
+                         <label>Umbral X · Penetración al año 1 (%)
+                             <input name="umbral_pen_a" type="number" min="0" max="100" step="0.1" value="<?=pcHtml((string)$limits['CLUSTER_A']['pen'])?>">
+                         </label>
+                         <label>Umbral Y · Velocidad anual (%)
+                             <input name="umbral_vel_a" type="number" min="-30" max="60" step="0.1" value="<?=pcHtml((string)$limits['CLUSTER_A']['vel'])?>">
+                         </label>
+                     </div>
                     <label>HPs mínimos por burbuja
                         <input name="min_hp" type="number" min="0" max="500000" step="1" value="<?=pcHtml((string)$minHP)?>">
                     </label>
@@ -480,7 +607,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                 <div class="pc-filter-footer">
                     <button type="submit" class="pc-primary">Aplicar filtros</button>
                     <a class="pc-secondary" href="penetracion_clusters.php">Restablecer</a>
-                    <span>Las referencias 29% y 7% son del War Room, editables; no son metas oficiales.</span>
+                    <span>Referencias configurables: NORMAL 29% / 5%, CLUSTER_A 20% / 7%. No son metas oficiales.</span>
                 </div>
             </form>
 
@@ -526,17 +653,83 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
             <?php endif; ?>
             <section class="pc-charts" aria-label="Cuadrantes de penetración y crecimiento">
                 <article class="pc-chart-card">
-                    <header><div><h2>Clústeres maduros</h2><p>Tipo NORMAL · por <?=$nivel==='PADRE'?'padre':'hijo'?></p></div><span class="pc-dot" style="--dot:#0057FF"></span></header>
+                    <header><div><h2>Clústeres maduros</h2><p>Tipo NORMAL · por <?=$nivel==='PADRE'?'padre':'hijo'?> · X <?=pcHtml(pcPct($limits['NORMAL']['pen']))?> · Y <?=pcHtml(pcPct($limits['NORMAL']['vel']))?></p></div><span class="pc-dot" style="--dot:#0057FF"></span></header>
                     <div class="pc-svg-area" id="chart-normal" role="img" aria-label="Cuadrantes de clústeres maduros"></div>
                     <p class="pc-chart-caption"><b><?=count($bubbles['NORMAL'])?></b> burbujas graficables · clic en una burbuja para consultar su detalle.</p>
                 </article>
                 <article class="pc-chart-card pc-chart-card-a">
-                    <header><div><h2>Clústeres_A</h2><p>Tipo CLUSTER_A · por <?=$nivel==='PADRE'?'padre':'hijo'?></p></div><span class="pc-dot" style="--dot:#7A2BFF"></span></header>
+                    <header><div><h2>Clústeres_A</h2><p>Tipo CLUSTER_A · por <?=$nivel==='PADRE'?'padre':'hijo'?> · X <?=pcHtml(pcPct($limits['CLUSTER_A']['pen']))?> · Y <?=pcHtml(pcPct($limits['CLUSTER_A']['vel']))?></p></div><span class="pc-dot" style="--dot:#7A2BFF"></span></header>
                     <div class="pc-svg-area" id="chart-a" role="img" aria-label="Cuadrantes de clústeres A"></div>
                     <p class="pc-chart-caption"><b><?=count($bubbles['CLUSTER_A'])?></b> burbujas graficables · sin HP, base o velocidad se excluyen del gráfico.</p>
                 </article>
             </section>
             <div class="pc-legend"><span><i class="pc-legend-bubble"></i> Tamaño de burbuja = HPs válidos</span><span> Eje X = penetración ponderada</span><span> Eje Y = velocidad anual ponderada</span><label><input id="show-labels" type="checkbox" checked> Mostrar etiquetas</label></div>
+
+
+            <!-- Rankings de brechas independientes, ordenables como Ranking Productividad. -->
+            <?php foreach ([
+                ['NORMAL','Ranking de brechas · Clústeres maduros','Meta fija por clúster: penetración y velocidad anual configurables.'],
+                ['CLUSTER_A','Ranking de brechas · Clústeres_A','Meta de penetración a 12 meses ajustada linealmente por antigüedad; velocidad anual sin prorrateo.'],
+            ] as [$rankingType,$rankingTitle,$rankingNote]): ?>
+            <section class="pc-table-card pc-rank-card" aria-label="<?=pcHtml($rankingTitle)?>">
+                <div class="pc-section-head pc-rank-head">
+                    <div><h2><?=pcHtml($rankingTitle)?></h2><p><?=pcHtml($rankingNote)?></p></div>
+                    <span class="pc-rank-counter"><?=count($targetRankings[$rankingType])?> clústeres <?= $nivel==='PADRE'?'padre':'hijo' ?></span>
+                </div>
+                <div class="pc-table-scroll">
+                <table class="pc-rank-table" data-sortable="true" data-sort-default="faltan" aria-label="Brechas de <?=pcHtml($rankingType)?>">
+                    <thead><tr>
+                        <?php foreach ([
+                            ['distrito','Distrito','text'],['nombre','Clúster','text'],['municipio','Municipio / localidad','text'],
+                            ['edad','Antigüedad (años)','number'],['hp','HPs','number'],['usuarios','Suscriptores','number'],
+                            ['pen','Penetración','number'],['metaPen','Meta pen.','number'],
+                            ['gapPen','Faltan pen. (pp)','number'],['faltan','Faltan suscriptores','number'],
+                            ['vel','Vel. anual','number'],['metaVel','Meta vel. anual','number'],
+                            ['gapVel','Faltan vel. (pp)','number'],
+                        ] as [$key,$label,$kind]): ?>
+                        <th scope="col" aria-sort="none"><button type="button" class="pc-sort-btn" data-sort-key="<?=pcHtml($key)?>" data-sort-type="<?=pcHtml($kind)?>" title="Ordenar por <?=pcHtml($label)?>">
+                            <?=pcHtml($label)?> <span class="pc-sort-indicator" aria-hidden="true">↕</span>
+                        </button></th>
+                        <?php endforeach; ?>
+                    </tr></thead>
+                    <tbody>
+                    <?php foreach ($targetRankings[$rankingType] as $item):
+                        $jump = $_GET;
+                        $jump['periodo']=$selected['periodo'];$jump['corte']=$selected['key'];
+                        $jump['nivel']='HIJO';$jump['padre']=$item['padre'];
+                        if ($rol !== 'director_distrital') $jump['distrito']=$item['distrito'];
+                        unset($jump['municipio']);
+                        $jumpUrl='penetracion_clusters.php?'.http_build_query($jump,'','&',PHP_QUERY_RFC3986);
+                    ?>
+                    <tr>
+                        <td<?=pcSortAttr($item['distrito'])?>><?=pcHtml($item['distrito'])?></td>
+                        <td<?=pcSortAttr($item['nombre'])?>><a class="pc-drill-link" href="<?=pcHtml($jumpUrl)?>" title="Ver hijos del padre <?=pcHtml($item['padre'])?>"><?=pcHtml($item['nombre'])?></a></td>
+                        <td<?=pcSortAttr($item['municipio'])?>><?=pcHtml($item['municipio'])?></td>
+                        <td<?=pcSortAttr($item['edad'])?>><?= $item['edad']===null?'ND':pcHtml(pcNum($item['edad'],1)) ?></td>
+                        <td<?=pcSortAttr($item['hp'])?>><?=pcHtml(pcNum((float)$item['hp']))?></td>
+                        <td<?=pcSortAttr($item['usuarios'])?>><?=pcHtml(pcNum((float)$item['usuarios']))?></td>
+                        <td<?=pcSortAttr($item['pen'])?>><?=pcHtml(pcPct($item['pen']))?></td>
+                        <td<?=pcSortAttr($item['metaPen'])?>><?=pcHtml(pcPct($item['metaPen']))?></td>
+                        <td<?=pcSortAttr($item['gapPen'])?> class="<?=($item['gapPen']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGap($item['gapPen']))?></td>
+                        <td<?=pcSortAttr($item['faltan'])?> class="<?=($item['faltan']??0)>0?'pc-gap-alert':'pc-gap-ok'?>"><strong><?= $item['faltan']===null?'ND':($item['faltan']===0?'Cumple':pcHtml(pcNum((float)$item['faltan'])))?></strong></td>
+                        <td<?=pcSortAttr($item['vel'])?>><?=pcHtml(pcPct($item['vel']))?></td>
+                        <td<?=pcSortAttr($item['metaVel'])?>><?=pcHtml(pcPct($item['metaVel']))?></td>
+                        <td<?=pcSortAttr($item['gapVel'])?> class="<?=($item['gapVel']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGap($item['gapVel']))?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <p class="pc-fineprint">
+                    <?php if ($rankingType==='CLUSTER_A'): ?>
+                    Meta por antigüedad: <?=pcHtml(pcPct($limits['CLUSTER_A']['pen']))?> a los 12 meses; meta a cualquier edad = umbral × años (ej.: 6 meses = <?=pcHtml(pcPct($limits['CLUSTER_A']['pen']/2))?>, 18 meses = <?=pcHtml(pcPct($limits['CLUSTER_A']['pen']*1.5))?>). La meta de velocidad <?=pcHtml(pcPct($limits['CLUSTER_A']['vel']))?> es anual y no se prorratea. Regla propuesta pendiente de validación con negocio.
+                    <?php else: ?>
+                    Brecha de penetración en pp = máx(0, umbral − penetración). Faltan suscriptores = máx(0, techo(HPs × umbral/100 − usuarios)). Brecha de velocidad anual = máx(0, umbral − velocidad anual).
+                    <?php endif; ?>
+                    Registros sin HPs/base, antigüedad requerida o velocidad aparecen como ND; hacer clic en los encabezados permite ordenar ascendente/descendente.
+                </p>
+            </section>
+            <?php endforeach; ?>
 
             <section class="pc-table-card" aria-label="Resumen por segmento">
                 <div class="pc-section-head"><div><h2>Resumen ejecutivo</h2><p>Agregados sobre bases comparables; madurez por tipo Qlik, no por umbral recalculado.</p></div></div>
@@ -578,13 +771,13 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                 <div class="pc-table-footer"><span id="pc-table-count"><?=count($rows)?> registros</span><span>Los registros sin base o sin velocidad permanecen visibles en el detalle.</span></div>
             </section>
             <?php endif; ?>
-            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.3 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
+            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.4 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
         </div>
     </main>
 </div>
 <?php if ($selected!==null): ?>
 <script id="pc-chart-data" type="application/json"><?=$chartJson?></script>
-<script src="../assets/js/penetracion_clusters.js?v=1.3.0" defer></script>
+<script src="../assets/js/penetracion_clusters.js?v=1.4.0" defer></script>
 <?php endif; ?>
 </body>
 </html>

@@ -1,4 +1,4 @@
-/* TotalXpedient | Cuadrantes de Penetración v1.3 | SVG autocontenido, sin CDN. */
+/* TotalXpedient | Cuadrantes de Penetración v1.4 | SVG autocontenido, sin CDN. */
 (() => {
   'use strict';
   const raw = document.getElementById('pc-chart-data');
@@ -11,9 +11,11 @@
   const W = 760, H = 468, L = 66, R = 24, T = 35, B = 68;
   const pw = W - L - R, ph = H - T - B;
   const all = [...(data.NORMAL || []), ...(data.CLUSTER_A || [])];
-  const xMax = Math.ceil(Math.max(80, Number(data.umbralPen) + 12, ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
-  const yMin = Math.floor(Math.min(-15, Number(data.umbralVel) - 10, ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
-  const yMax = Math.ceil(Math.max(25, Number(data.umbralVel) + 10, ...all.map(p => Number(p.vel) + 4)) / 5) * 5;
+  const limits = data.umbrales || {NORMAL:{pen:29,vel:5},CLUSTER_A:{pen:20,vel:7}};
+  const allLimits = Object.values(limits);
+  const xMax = Math.ceil(Math.max(80, ...allLimits.map(l => Number(l.pen) + 12), ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
+  const yMin = Math.floor(Math.min(-15, ...allLimits.map(l => Number(l.vel) - 10), ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
+  const yMax = Math.ceil(Math.max(25, ...allLimits.map(l => Number(l.vel) + 10), ...all.map(p => Number(p.vel) + 4)) / 5) * 5;
   const maxHP = Math.max(1, ...all.map(p => p.hp));
   const x = v => L + (Math.max(0, Math.min(xMax, v)) / xMax) * pw;
   const y = v => T + (yMax - Math.max(yMin, Math.min(yMax, v))) / (yMax - yMin) * ph;
@@ -69,7 +71,7 @@
   }
   const showLabels = document.getElementById('show-labels');
   const labelGroups=[];
-  function render(targetId, points, color, pale){
+  function render(targetId, points, color, pale, limit){
     const root=document.getElementById(targetId);if(!root)return;
     root.replaceChildren();
     const svg=create('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':'Penetración horizontal y velocidad anual vertical; cada burbuja representa casas pasadas del clúster'},root);
@@ -77,7 +79,7 @@
     const clip=create('clipPath',{id:targetId+'-clip'},defs);
     create('rect',{x:L,y:T,width:pw,height:ph},clip);
     // Colores sutiles de oportunidad y rezago, sin sustituir el significado de los límites.
-    const splitX=x(data.umbralPen),splitY=y(data.umbralVel);
+    const splitX=x(limit.pen),splitY=y(limit.vel);
     const colorRects=[
       [L,T,splitX-L,splitY-T,'#e9f5ff'], [splitX,T,W-R-splitX,splitY-T,'#e6f9f0'],
       [L,splitY,splitX-L,H-B-splitY,'#fbeffa'], [splitX,splitY,W-R-splitX,H-B-splitY,'#fff8e7']
@@ -90,8 +92,8 @@
     create('rect',{x:L,y:T,width:pw,height:ph,fill:'none',stroke:'#9eb9ca','stroke-width':1.4},svg);
     create('line',{x1:splitX,y1:T,x2:splitX,y2:H-B,stroke:'#ec6559','stroke-width':2.2,'stroke-dasharray':'5 3'},svg);
     create('line',{x1:L,y1:splitY,x2:W-R,y2:splitY,stroke:'#ec6559','stroke-width':2.2,'stroke-dasharray':'5 3'},svg);
-    text(svg,pct(data.umbralPen),splitX,H-B+34,'pc-svg-axis',{'text-anchor':'middle',fill:'#cd3c34'}).setAttribute('style','font-weight:800;fill:#c34b40');
-    text(svg,pct(data.umbralVel),L-9,splitY-7,'pc-svg-axis',{'text-anchor':'end'}).setAttribute('style','font-weight:800;fill:#c34b40');
+    text(svg,pct(limit.pen),splitX,H-B+34,'pc-svg-axis',{'text-anchor':'middle',fill:'#cd3c34'}).setAttribute('style','font-weight:800;fill:#c34b40');
+    text(svg,pct(limit.vel),L-9,splitY-7,'pc-svg-axis',{'text-anchor':'end'}).setAttribute('style','font-weight:800;fill:#c34b40');
     text(svg,'Penetración (%)',L+pw/2,H-9,'pc-svg-axis-title',{'text-anchor':'middle'});
     text(svg,'Velocidad anual (%)',21,T+ph/2,'pc-svg-axis-title',{'text-anchor':'middle',transform:`rotate(-90 21 ${T+ph/2})`});
     const corners=[
@@ -130,8 +132,8 @@
     }
     if (!points.length){text(svg,'Sin burbujas graficables en este filtro',L+pw/2,T+ph/2,'pc-svg-axis-title',{'text-anchor':'middle'});}
   }
-  render('chart-normal',data.NORMAL || [],'#2688cc','#e9f5ff');
-  render('chart-a',data.CLUSTER_A || [],'#9060cf','#eee7fa');
+  render('chart-normal',data.NORMAL || [],'#2688cc','#e9f5ff',limits.NORMAL);
+  render('chart-a',data.CLUSTER_A || [],'#9060cf','#eee7fa',limits.CLUSTER_A);
   const toggle=()=>labelGroups.forEach(el=>{el.style.display=showLabels?.checked?'':'none';});
   showLabels?.addEventListener('change',toggle);
   toggle();
@@ -143,6 +145,44 @@
     document.getElementById('padre').value='';
   });
   document.getElementById('municipio')?.addEventListener('change',()=>{document.getElementById('padre').value='';});
+  // Ordenamiento interactivo de las dos tablas de brechas.
+  // En columnas numericas, primer clic: mayor a menor; segundo: menor a mayor.
+  // Datos sin base (ND) se dejan al final en cualquier direccion.
+  for (const tableEl of document.querySelectorAll('table.pc-rank-table[data-sortable="true"]')) {
+    const headers = [...tableEl.querySelectorAll('thead th')];
+    const tbody = tableEl.querySelector('tbody');
+    if (!tbody) continue;
+    let currentCol = -1, currentDir = 'desc';
+    headers.forEach((th, col) => {
+      const btn = th.querySelector('button[data-sort-key]');
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const numeric = btn.dataset.sortType === 'number';
+        const dir = currentCol === col ? (currentDir === 'desc' ? 'asc' : 'desc') : (numeric ? 'desc' : 'asc');
+        currentCol = col; currentDir = dir;
+        const lines = [...tbody.rows];
+        lines.sort((a,b) => {
+          const va = a.cells[col]?.getAttribute('data-sort-value') ?? '';
+          const vb = b.cells[col]?.getAttribute('data-sort-value') ?? '';
+          if (va === '' && vb === '') return 0;
+          if (va === '') return 1;
+          if (vb === '') return -1;
+          let cmp = numeric ? (Number(va) - Number(vb)) : va.localeCompare(vb,'es',{numeric:true,sensitivity:'base'});
+          if (!Number.isFinite(cmp)) cmp=0;
+          return dir === 'asc' ? cmp : -cmp;
+        });
+        tbody.append(...lines);
+        headers.forEach(h => {
+          h.setAttribute('aria-sort','none');
+          const mark=h.querySelector('.pc-sort-indicator');
+          if (mark) mark.textContent='↕';
+        });
+        th.setAttribute('aria-sort', dir === 'asc' ? 'ascending':'descending');
+        const mark=btn.querySelector('.pc-sort-indicator');
+        if (mark) mark.textContent=dir === 'asc' ? '↑':'↓';
+      });
+    });
+  }
   const search=document.getElementById('pc-search');
   const table=document.getElementById('pc-detail-table');
   const count=document.getElementById('pc-table-count');
