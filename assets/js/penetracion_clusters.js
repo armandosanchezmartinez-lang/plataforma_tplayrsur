@@ -145,10 +145,10 @@
     document.getElementById('padre').value='';
   });
   document.getElementById('municipio')?.addEventListener('change',()=>{document.getElementById('padre').value='';});
-  // Ordenamiento interactivo de las dos tablas de brechas.
+  // Ordenamiento interactivo de rankings de brechas y comparativo regional.
   // En columnas numericas, primer clic: mayor a menor; segundo: menor a mayor.
   // Datos sin base (ND) se dejan al final en cualquier direccion.
-  for (const tableEl of document.querySelectorAll('table.pc-rank-table[data-sortable="true"]')) {
+  for (const tableEl of document.querySelectorAll('table.pc-rank-table[data-sortable="true"], table.pc-regional-table[data-sortable="true"]')) {
     const headers = [...tableEl.querySelectorAll('thead th')];
     const tbody = tableEl.querySelector('tbody');
     if (!tbody) continue;
