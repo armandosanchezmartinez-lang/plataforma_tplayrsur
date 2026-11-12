@@ -145,7 +145,7 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 .pc-threshold-settings label{font-size:10px;line-height:1.45}
 .pc-chart-card header p{line-height:1.5}
 
-/* v1.7.0: vista de un segmento, sin espacios en blanco. */
+/* v1.7.1: vista de un segmento, sin espacios en blanco. */
 .pc-page .pc-segment-cards,.pc-page .pc-objective-cards{grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));}
 .pc-page .pc-charts.pc-one-chart{grid-template-columns:minmax(0,1fr);}
 .pc-page .pc-charts.pc-one-chart .pc-svg-area{width:100%;max-width:1100px;margin:0 auto;}
@@ -153,14 +153,29 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 .pc-regional-table .pc-inline-toggle:focus-visible{outline:2px solid #7A2BFF;outline-offset:3px;border-radius:4px;}
 .pc-regional-table .pc-chevron{font-size:11px;color:#7A2BFF;transition:transform .15s ease;display:inline-block;}
 .pc-regional-table .pc-inline-toggle[aria-expanded="true"] .pc-chevron{transform:rotate(90deg);}
+/* v1.7.1 | Municipio: MISMA tabla de nueve columnas, sin thead duplicado. */
+.pc-regional-table{width:100%;table-layout:fixed;min-width:1250px;}
+.pc-regional-table thead th:nth-child(1){width:15%;}
+.pc-regional-table thead th:nth-child(2){width:11%;}
+.pc-regional-table thead th:nth-child(3){width:10%;}
+.pc-regional-table thead th:nth-child(4){width:10%;}
+.pc-regional-table thead th:nth-child(5){width:10%;}
+.pc-regional-table thead th:nth-child(6){width:10%;}
+.pc-regional-table thead th:nth-child(7){width:12%;}
+.pc-regional-table thead th:nth-child(8){width:12%;}
+.pc-regional-table thead th:nth-child(9){width:10%;}
+.pc-regional-table .pc-district-row>th,.pc-regional-table .pc-district-row>td{background:#f3efff;font-weight:750;}
 .pc-regional-table .pc-muni-detail-row[hidden]{display:none!important;}
-.pc-regional-table .pc-muni-detail-row>td{padding:7px 13px 13px!important;background:#f8f6ff!important;border-bottom:2px solid #e6ddff;}
-.pc-regional-table .pc-muni-list{margin:0;overflow-x:auto;max-width:100%;}
-.pc-regional-table .pc-muni-table{width:100%;min-width:800px;border-collapse:collapse;font-size:11px;color:#3b4568;background:white;border-radius:9px;overflow:hidden;}
-.pc-regional-table .pc-muni-table thead th{background:#e9e1ff!important;color:#35366d!important;padding:10px!important;text-align:left;}
-.pc-regional-table .pc-muni-table tbody th,.pc-regional-table .pc-muni-table tbody td{padding:9px 10px!important;background:#fff!important;border-bottom:1px solid #eee9f8;text-align:left;white-space:nowrap;}
-.pc-regional-table .pc-muni-table tbody tr:hover th,.pc-regional-table .pc-muni-table tbody tr:hover td{background:#f8f5ff!important;}
-.pc-regional-table .pc-muni-table tbody th{font-weight:800;}
+.pc-regional-table .pc-muni-detail-row>th,.pc-regional-table .pc-muni-detail-row>td{
+  background:#fff!important;vertical-align:middle;padding:9px 13px!important;
+  text-align:right;border-bottom:1px solid #eeeaf7;color:#38425f;
+}
+.pc-regional-table .pc-muni-detail-row>th{text-align:left;font-weight:650;color:#3f426a;}
+.pc-regional-table .pc-muni-detail-row:hover>th,.pc-regional-table .pc-muni-detail-row:hover>td{background:#faf7ff!important;}
+.pc-regional-table .pc-muni-detail-row .pc-muni-indent{color:#8e64d2;padding-left:18px;padding-right:7px;font-size:13px;}
+.pc-regional-table .pc-muni-detail-row .pc-badge,.pc-regional-table .pc-district-row .pc-badge{font-variant-numeric:tabular-nums;}
+.pc-regional-table .pc-muni-detail-row .pc-drill-link{font-size:11px;}
+.pc-rank-table .pc-badge{min-width:58px;font-size:10px;font-variant-numeric:tabular-nums;}
 /* Identidad cromática independiente del orden de las tarjetas de parámetros. */
 .pc-threshold-settings[aria-label="Metas por antigüedad de clústeres A"]{background:linear-gradient(120deg,rgba(122,43,255,.10),rgba(255,10,200,.04));}
 .pc-threshold-settings[aria-label="Metas por antigüedad de clústeres maduros"]{background:linear-gradient(120deg,rgba(0,87,255,.055),rgba(122,43,255,.075));}
