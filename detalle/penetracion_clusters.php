@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient | Penetración de Clústeres v1.5.1 | 2026-11-11
+ * TotalXpedient | Penetración de Clústeres v1.5.2 | 2026-11-11
  * Ubicación: /plataforma/detalle/penetracion_clusters.php
  * Solo lectura. Requiere Clusters_BDU y Clusters_BDU_Catalogo (esquema v2).
  * Restricción SQL de distrito basada en sesión + HC para Director Distrital.
@@ -375,61 +375,82 @@ function pcGap(?float $gap): string {
     if ($gap === null) return 'ND';
     return $gap <= 0.0000001 ? 'Cumple' : number_format($gap,1,'.',',').' pp';
 }
+/**
+ * Consolida metas calculadas por los rankings de brechas visibles.
+ * No invalida un distrito por clústeres sin HPs/base comparables: esos grupos
+ * muestran ND en el ranking pero no pertenecen al denominador de penetración.
+ * Sólo una falta real de META en una base COMPARABLE invalida el resultado.
+ * Faltan suscriptores = suma de faltantes positivos por fila del ranking.
+ */
 function pcCombineTargetRankings(array $targetRankings): array {
     $map = [];
-    foreach (['NORMAL','CLUSTER_A'] as $kind) {
+    foreach (['NORMAL', 'CLUSTER_A'] as $kind) {
         foreach (($targetRankings[$kind] ?? []) as $item) {
             $d = (string)($item['distrito'] ?? '');
             if ($d === '') continue;
-            if (!isset($map[$d])) {
-                $map[$d] = ['hp'=>0,'usuarios'=>0,'targetUsersRaw'=>0.0,'metaMissing'=>false,'faltan'=>0,'faltanMissing'=>false];
-            }
             $hp = (int)($item['hp'] ?? 0);
-            $usuarios = (int)($item['usuarios'] ?? 0);
-            $map[$d]['hp'] += $hp;
-            $map[$d]['usuarios'] += $usuarios;
-            if (isset($item['metaPen']) && $item['metaPen'] !== null) {
-                $map[$d]['targetUsersRaw'] += $hp * ((float)$item['metaPen']) / 100.0;
-            } else {
-                $map[$d]['metaMissing'] = true;
+            if ($hp <= 0) continue; // Sin base: no penaliza el objetivo distrital
+            if (!isset($map[$d])) {
+                $map[$d] = [
+                    'hp'=>0, 'usuarios'=>0, 'targetUsersRaw'=>0.0,
+                    'metaMissing'=>false, 'faltan'=>0, 'faltanMissing'=>false,
+                    'gruposComparables'=>0, 'gruposSinMeta'=>0,
+                ];
             }
-            if (array_key_exists('faltan', $item) && $item['faltan'] !== null) {
-                $map[$d]['faltan'] += (int)$item['faltan'];
+            $g = &$map[$d];
+            $g['hp'] += $hp;
+            $g['usuarios'] += (int)($item['usuarios'] ?? 0);
+            $g['gruposComparables']++;
+            if (($item['metaPen'] ?? null) === null) {
+                $g['metaMissing'] = true;
+                $g['gruposSinMeta']++;
             } else {
-                $map[$d]['faltanMissing'] = true;
+                $g['targetUsersRaw'] += $hp * (float)$item['metaPen'] / 100.0;
             }
+            if (($item['faltan'] ?? null) === null) {
+                $g['faltanMissing'] = true;
+            } else {
+                $g['faltan'] += (int)$item['faltan'];
+            }
+            unset($g);
         }
     }
-    foreach ($map as &$row) {
-        $row['pen'] = $row['hp'] > 0 ? 100.0 * $row['usuarios'] / $row['hp'] : null;
-        $row['metaPen'] = ($row['hp'] > 0 && !$row['metaMissing']) ? 100.0 * $row['targetUsersRaw'] / $row['hp'] : null;
-        $row['gapPen'] = ($row['metaPen'] === null || $row['pen'] === null) ? null : max(0.0, $row['metaPen'] - $row['pen']);
-        $row['faltan'] = $row['faltanMissing'] ? null : $row['faltan'];
+    foreach ($map as &$g) {
+        $g['pen'] = $g['hp'] > 0 ? 100.0*$g['usuarios']/$g['hp'] : null;
+        $g['metaPen'] = ($g['hp'] > 0 && !$g['metaMissing'])
+            ? 100.0*$g['targetUsersRaw']/$g['hp'] : null;
+        $g['gapPen'] = ($g['metaPen'] === null || $g['pen'] === null)
+            ? null : max(0.0, $g['metaPen']-$g['pen']);
+        if ($g['faltanMissing']) $g['faltan'] = null;
     }
-    unset($row);
+    unset($g);
     return $map;
 }
-function pcCombineTargetRankingsTotal(array $targetRankings): array {
-    $byDistrict = pcCombineTargetRankings($targetRankings);
-    $total = ['hp'=>0,'usuarios'=>0,'targetUsersRaw'=>0.0,'metaMissing'=>false,'faltan'=>0,'faltanMissing'=>false];
-    foreach ($byDistrict as $row) {
-        $total['hp'] += (int)$row['hp'];
-        $total['usuarios'] += (int)$row['usuarios'];
-        if (isset($row['metaPen']) && $row['metaPen'] !== null) {
-            $total['targetUsersRaw'] += ((int)$row['hp']) * ((float)$row['metaPen']) / 100.0;
-        } else {
-            $total['metaMissing'] = true;
-        }
-        if (isset($row['faltan']) && $row['faltan'] !== null) {
-            $total['faltan'] += (int)$row['faltan'];
-        } else {
+function pcCombineTargetRankingsTotal(array $byDistrict): array {
+    $total = [
+        'hp'=>0, 'usuarios'=>0, 'targetUsersRaw'=>0.0,
+        'metaMissing'=>false, 'faltan'=>0, 'faltanMissing'=>false,
+        'gruposComparables'=>0, 'gruposSinMeta'=>0,
+    ];
+    foreach ($byDistrict as $district) {
+        $total['hp'] += (int)$district['hp'];
+        $total['usuarios'] += (int)$district['usuarios'];
+        $total['targetUsersRaw'] += (float)$district['targetUsersRaw'];
+        $total['gruposComparables'] += (int)$district['gruposComparables'];
+        $total['gruposSinMeta'] += (int)$district['gruposSinMeta'];
+        $total['metaMissing'] = $total['metaMissing'] || $district['metaMissing'];
+        if ($district['faltan'] === null) {
             $total['faltanMissing'] = true;
+        } else {
+            $total['faltan'] += (int)$district['faltan'];
         }
     }
-    $total['pen'] = $total['hp'] > 0 ? 100.0 * $total['usuarios'] / $total['hp'] : null;
-    $total['metaPen'] = ($total['hp'] > 0 && !$total['metaMissing']) ? 100.0 * $total['targetUsersRaw'] / $total['hp'] : null;
-    $total['gapPen'] = ($total['metaPen'] === null || $total['pen'] === null) ? null : max(0.0, $total['metaPen'] - $total['pen']);
-    $total['faltan'] = $total['faltanMissing'] ? null : $total['faltan'];
+    $total['pen'] = $total['hp'] > 0 ? 100.0*$total['usuarios']/$total['hp'] : null;
+    $total['metaPen'] = ($total['hp'] > 0 && !$total['metaMissing'])
+        ? 100.0*$total['targetUsersRaw']/$total['hp'] : null;
+    $total['gapPen'] = ($total['metaPen'] === null || $total['pen'] === null)
+        ? null : max(0.0, $total['metaPen']-$total['pen']);
+    if ($total['faltanMissing']) $total['faltan'] = null;
     return $total;
 }
 function pcSemaforoClase(?float $value, string $metric): string {
@@ -566,7 +587,7 @@ try {
     $bubbles = pcBubbles($rows, $nivel, $minHP, $limits);
     $targetRankings = pcTargets($rows, $nivel, $limits);
     $districtOpportunities = pcCombineTargetRankings($targetRankings);
-    $regionOpportunityTotal = pcCombineTargetRankingsTotal($targetRankings);
+    $regionOpportunityTotal = pcCombineTargetRankingsTotal($districtOpportunities);
     $objectiveCards = [
         'GENERAL'=>pcObjetivo($rows,'GENERAL',$limits),
         'NORMAL'=>pcObjetivo($rows,'NORMAL',$limits),
@@ -617,7 +638,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
     <meta name="color-scheme" content="light">
     <title>Penetración de Clústeres | TotalXpedient</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=160">
-    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.5.1">
+    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.5.2">
     <style>
         .pc-badge{display:inline-flex;align-items:center;justify-content:center;min-width:72px;padding:4px 10px;border-radius:999px;font-weight:700;font-size:.92rem;line-height:1.1;white-space:nowrap;}
         .pc-badge-ok{background:#dff4df;color:#1f7a3e;}
@@ -823,8 +844,24 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
             <?php if ($rol !== 'director_distrital' && $scopeDistrict === null && count($byDistrict)>0): ?>
             <section class="pc-table-card" aria-label="Desglose jerárquico por distrito">
                 <div class="pc-section-head"><div><h2>Comparativo regional por distrito</h2><p>Selecciona un distrito para bajar un nivel dentro del mismo corte.</p></div></div>
-                <div class="pc-table-scroll"><table class="pc-summary-table">
-                    <thead><tr><th>Distrito</th><th>HPs comparables</th><th>Suscriptores</th><th>Penetración</th><th>Velocidad anual</th><th>Meta pen.</th><th>Faltan pen. (pp)</th><th>Faltan suscriptores</th><th></th></tr></thead>
+                <div class="pc-table-scroll"><table class="pc-summary-table pc-regional-table" data-sortable="true" id="pc-regional-table" aria-label="Comparativo regional por distrito ordenable">
+                    <thead><tr>
+                        <?php foreach ([
+                            ['distrito','Distrito','text'],
+                            ['hp','HPs comparables','number'],
+                            ['usuarios','Suscriptores','number'],
+                            ['pen','Penetración','number'],
+                            ['vel','Velocidad anual','number'],
+                            ['metaPen','Meta pen.','number'],
+                            ['gapPen','Faltan pen. (pp)','number'],
+                            ['faltan','Faltan suscriptores','number'],
+                        ] as [$sortKey,$sortLabel,$sortType]): ?>
+                            <th scope="col" aria-sort="none"><button type="button" class="pc-sort-btn" data-sort-key="<?=pcHtml($sortKey)?>" data-sort-type="<?=pcHtml($sortType)?>" title="Ordenar por <?=pcHtml($sortLabel)?>">
+                                <?=pcHtml($sortLabel)?> <span class="pc-sort-indicator" aria-hidden="true">↕</span>
+                            </button></th>
+                        <?php endforeach; ?>
+                        <th scope="col">Detalle</th>
+                    </tr></thead>
                     <tbody>
                     <?php foreach ($byDistrict as $districtName => $districtRows):
                         $ds = pcAgg($districtRows);
@@ -837,14 +874,14 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                         $districtURL = 'penetracion_clusters.php?'.http_build_query($districtParams);
                     ?>
                     <tr>
-                        <th><?=pcHtml($districtName)?></th>
-                        <td><?=pcHtml(pcNum((float)$ds['hp']))?></td>
-                        <td><?=pcHtml(pcNum((float)$ds['usuarios']))?></td>
-                        <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['pen'],'pen'))?>"><?=pcHtml(pcPct($ds['pen']))?></span></td>
-                        <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['vel'],'vel'))?>"><?=pcHtml(pcPct($ds['vel']))?></span></td>
-                        <td><?=pcHtml(pcPct($districtGoal['metaPen'] ?? null))?></td>
-                        <td class="<?= (($districtGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGap($districtGoal['gapPen'] ?? null))?></td>
-                        <td class="<?= (($districtGoal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($districtGoal['faltan'] ?? null) === null ? 'ND' : (($districtGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$districtGoal['faltan']))) ?></strong></td>
+                        <th<?=pcSortAttr($districtName)?>><?=pcHtml($districtName)?></th>
+                        <td<?=pcSortAttr($ds['hp'])?>><?=pcHtml(pcNum((float)$ds['hp']))?></td>
+                        <td<?=pcSortAttr($ds['usuarios'])?>><?=pcHtml(pcNum((float)$ds['usuarios']))?></td>
+                        <td<?=pcSortAttr($ds['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['pen'],'pen'))?>"><?=pcHtml(pcPct($ds['pen']))?></span></td>
+                        <td<?=pcSortAttr($ds['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['vel'],'vel'))?>"><?=pcHtml(pcPct($ds['vel']))?></span></td>
+                        <td<?=pcSortAttr($districtGoal['metaPen'] ?? null)?>><?=pcHtml(pcPct($districtGoal['metaPen'] ?? null))?></td>
+                        <td<?=pcSortAttr($districtGoal['gapPen'] ?? null)?> class="<?= (($districtGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGap($districtGoal['gapPen'] ?? null))?></td>
+                        <td<?=pcSortAttr($districtGoal['faltan'] ?? null)?> class="<?= (($districtGoal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($districtGoal['faltan'] ?? null) === null ? 'ND' : (($districtGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$districtGoal['faltan']))) ?></strong></td>
                         <td><a class="pc-drill-link" href="<?=pcHtml($districtURL)?>">Explorar distrito →</a></td>
                     </tr>
                     <?php endforeach; ?>
@@ -863,7 +900,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                         </tr>
                     </tfoot>
                 </table></div>
-                <p class="pc-fineprint">Meta pen. y faltan suscriptores se calculan como suma de las tablas de brechas inferiores (Maduros + Clústeres_A) para el mismo corte y nivel de análisis actual.</p>
+                <p class="pc-fineprint">Meta pen. = Σ(HPs × objetivo de cada grupo) / ΣHPs comparables, combinando Maduros y Clústeres_A según antigüedad. Faltan pen. = máx(0, meta ponderada − penetración actual), en pp. Faltan suscriptores = Σ faltantes positivos de ambos rankings inferiores (no se compensan grupos con excedente). Registros sin base no invalidan la meta; si algún grupo comparable no tiene antigüedad para asignar objetivo, se muestra ND.</p>
             </section>
             <?php endif; ?>
             <section class="pc-charts" aria-label="Cuadrantes de penetración y crecimiento">
@@ -988,13 +1025,13 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                 <div class="pc-table-footer"><span id="pc-table-count"><?=count($rows)?> registros</span><span>Los registros sin base o sin velocidad permanecen visibles en el detalle.</span></div>
             </section>
             <?php endif; ?>
-            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.5.1 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
+            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.5.2 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
         </div>
     </main>
 </div>
 <?php if ($selected!==null): ?>
 <script id="pc-chart-data" type="application/json"><?=$chartJson?></script>
-<script src="../assets/js/penetracion_clusters.js?v=1.5.1" defer></script>
+<script src="../assets/js/penetracion_clusters.js?v=1.5.2" defer></script>
 <?php endif; ?>
 </body>
 </html>

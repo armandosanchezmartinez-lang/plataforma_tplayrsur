@@ -122,3 +122,17 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 @media(max-width:1250px){.pc-segment-cards,.pc-objective-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.pc-segment-cards,.pc-objective-cards{grid-template-columns:1fr}}
 @media(max-width:380px){.pc-segment-values{grid-template-columns:1fr}}
+
+/* v1.5.2 | Ordenamiento en matriz regional, sin modificar las tablas del ranking */
+.pc-regional-table thead th{padding:0!important;vertical-align:middle;}
+.pc-regional-table thead th:last-child{padding:10px 13px!important;}
+.pc-regional-table .pc-sort-btn{min-height:36px;font-size:11px;justify-content:flex-end;}
+.pc-regional-table thead th:first-child .pc-sort-btn{justify-content:space-between;}
+.pc-regional-table th[aria-sort="ascending"] .pc-sort-btn,
+.pc-regional-table th[aria-sort="descending"] .pc-sort-btn{background:rgba(255,255,255,.18);}
+.pc-regional-table tbody tr:first-child{font-weight:inherit;background:inherit;}
+.pc-regional-table tbody tr:first-child td{color:inherit;}
+.pc-regional-table tbody tr:nth-child(odd){background:#F3EEFF;}
+.pc-regional-table tbody tr:nth-child(even){background:#fff;}
+.pc-regional-table tbody tr:hover{background:#F7F3FF;}
+.pc-regional-table tfoot th,.pc-regional-table tfoot td{background:#f3eefc;font-weight:800;border-top:2px solid rgba(111,79,255,.22);}
