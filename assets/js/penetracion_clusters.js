@@ -1,4 +1,4 @@
-/* TotalXpedient | Cuadrantes de Penetración v1.7.0 | SVG autocontenido, sin CDN. */
+/* TotalXpedient | Cuadrantes de Penetración v1.7.1 | SVG autocontenido, sin CDN. */
 (() => {
   'use strict';
   const raw = document.getElementById('pc-chart-data');
@@ -219,12 +219,18 @@
           return dir === 'asc' ? cmp : -cmp;
         });
         if (isRegional) {
+          // Cada distrito puede tener muchos municipios en filas independientes.
+          // Reordenar el bloque íntegro evita desalineaciones y preserva expansión.
+          const municipalities = new Map();
+          for (const tr of tbody.querySelectorAll(':scope > tr.pc-muni-detail-row')) {
+            const id = tr.dataset.parentId;
+            if (!municipalities.has(id)) municipalities.set(id, []);
+            municipalities.get(id).push(tr);
+          }
           for (const row of lines) {
-            const details = row.nextElementSibling;
-            // Los detalles permanecen vinculados incluso tras múltiples sorts.
-            const extra = details?.classList.contains('pc-muni-detail-row') ? details : null;
             tbody.appendChild(row);
-            if (extra) tbody.appendChild(extra);
+            const id = row.querySelector('.pc-inline-toggle[data-target]')?.dataset.target;
+            for (const muni of municipalities.get(id) || []) tbody.appendChild(muni);
           }
         } else {
           tbody.append(...lines);
@@ -243,24 +249,13 @@
 
   for (const btn of document.querySelectorAll('.pc-inline-toggle[data-target]')) {
     btn.addEventListener('click', () => {
-      const panel = document.getElementById(btn.dataset.target);
-      if (!panel) return;
+      const parentId = btn.dataset.target;
+      const municipalities = [...document.querySelectorAll('tr.pc-muni-detail-row[data-parent-id="' + parentId + '"]')];
+      if (!municipalities.length) return;
       const open = btn.getAttribute('aria-expanded') === 'true';
       btn.setAttribute('aria-expanded', open ? 'false' : 'true');
-      panel.hidden = open;
-      panel.classList.toggle('is-open', !open);
+      for (const municipality of municipalities) municipality.hidden = open;
     });
   }
 
-  const search=document.getElementById('pc-search');
-  const table=document.getElementById('pc-detail-table');
-  const count=document.getElementById('pc-table-count');
-  search?.addEventListener('input',()=>{
-    const q=search.value.trim().toLocaleLowerCase('es');let n=0;
-    for(const row of table.querySelectorAll('tbody tr')){
-      const visible=row.textContent.toLocaleLowerCase('es').includes(q);
-      row.hidden=!visible;if(visible)n++;
-    }
-    count.textContent=n+' de '+table.querySelectorAll('tbody tr').length+' registros visibles';
-  });
 })();

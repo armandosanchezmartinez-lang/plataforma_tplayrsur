@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient | Penetración de Clústeres v1.7.0 | 2026-11-12
+ * TotalXpedient | Penetración de Clústeres v1.7.1 | 2026-11-12
  * Ubicación: /plataforma/detalle/penetracion_clusters.php
  * Solo lectura. Requiere Clusters_BDU y Clusters_BDU_Catalogo (esquema v2).
  * Restricción SQL de distrito basada en sesión + HC para Director Distrital.
@@ -608,7 +608,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
     <meta name="color-scheme" content="light">
     <title>Penetración de Clústeres | TotalXpedient</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=160">
-    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.7.0">
+    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.7.1">
     <style>
         .pc-badge{display:inline-flex;align-items:center;justify-content:center;min-width:72px;padding:4px 10px;border-radius:999px;font-weight:700;font-size:.92rem;line-height:1.1;white-space:nowrap;}
         .pc-badge-ok{background:#dff4df;color:#1f7a3e;}
@@ -834,7 +834,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
 
             <?php if (count($byDistrict)>0): ?>
             <section class="pc-table-card" aria-label="Desglose jerárquico por distrito">
-                <div class="pc-section-head"><div><h2><?= $scopeDistrict===null ? 'Comparativo regional por distrito' : 'Desglose distrital por municipio' ?></h2><p>Despliega cada distrito con la flecha para ver sus municipios; selecciona «Explorar» para consultar el detalle.</p></div></div>
+                <div class="pc-section-head"><div><h2><?= $scopeDistrict===null ? 'Comparativo regional por distrito' : 'Desglose distrital por municipio' ?></h2><p>Despliega los municipios con la flecha: comparten las mismas columnas y semáforos que el distrito.</p></div></div>
                 <div class="pc-table-scroll"><table class="pc-summary-table pc-regional-table" data-sortable="true" id="pc-regional-table" aria-label="Comparativo regional por distrito ordenable">
                     <thead><tr>
                         <?php foreach ([
@@ -875,7 +875,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                     ?>
                     <tr class="pc-district-row">
                         <th<?=pcSortAttr($districtName)?>>
-                            <button type="button" class="pc-inline-toggle" aria-expanded="false" aria-controls="<?=pcHtml($municipioId)?>" data-target="<?=pcHtml($municipioId)?>" title="Desplegar municipios de <?=pcHtml($districtName)?>">
+                            <button type="button" class="pc-inline-toggle" aria-expanded="false" data-target="<?=pcHtml($municipioId)?>" title="Desplegar municipios de <?=pcHtml($districtName)?>">
                                 <span class="pc-chevron" aria-hidden="true">▶</span> <?=pcHtml($districtName)?>
                             </button>
                         </th>
@@ -888,36 +888,25 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                         <td<?=pcSortAttr($districtGoal['faltan'] ?? null)?> class="<?= (($districtGoal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($districtGoal['faltan'] ?? null) === null ? 'ND' : (($districtGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$districtGoal['faltan']))) ?></strong></td>
                         <td><a class="pc-drill-link" href="<?=pcHtml($districtURL)?>">Explorar distrito →</a></td>
                     </tr>
-                    <tr class="pc-muni-detail-row" id="<?=pcHtml($municipioId)?>" hidden>
-                        <td colspan="9">
-                            <div class="pc-muni-list">
-                                <table class="pc-muni-table" aria-label="Municipios de <?=pcHtml($districtName)?>">
-                                    <thead><tr><th>Municipio / localidad</th><th>HPs</th><th>Suscriptores</th><th>Penetración</th><th>Velocidad anual</th><th>Meta pen.</th><th>Faltan pen. (pp)</th><th>Faltan suscriptores</th><th>Detalle</th></tr></thead>
-                                    <tbody>
-                                    <?php foreach ($municipalityGroups as $muniName => $muniRows):
-                                        $ms = pcAgg($muniRows);
-                                        $mGoal = pcOpportunityFromRows($muniRows, $nivel, $params);
-                                        $muniParams = $districtParams;
-                                        $muniParams['municipio'] = $muniName === 'Sin catalogar' ? '__PENDIENTE__' : $muniName;
-                                        $muniUrl = 'penetracion_clusters.php?'.http_build_query($muniParams,'','&',PHP_QUERY_RFC3986);
-                                    ?>
-                                        <tr>
-                                            <th><?=pcHtml($muniName)?></th>
-                                            <td><?=pcHtml(pcNum((float)$ms['hp']))?></td>
-                                            <td><?=pcHtml(pcNum((float)$ms['usuarios']))?></td>
-                                            <td><?=pcHtml(pcPct($ms['pen']))?></td>
-                                            <td><?=pcHtml(pcPct($ms['vel']))?></td>
-                                            <td><?=pcHtml(pcPct($mGoal['metaPen'] ?? null))?></td>
-                                            <td><?=pcHtml(pcGapConBrechas($mGoal['gapPen'] ?? null,$mGoal['faltan'] ?? null))?></td>
-                                            <td><?= ($mGoal['faltan'] ?? null) === null ? 'ND' : (($mGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$mGoal['faltan']))) ?></td>
-                                            <td><a class="pc-drill-link" href="<?=pcHtml($muniUrl)?>">Explorar →</a></td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </td>
+                    <?php foreach ($municipalityGroups as $muniName => $muniRows):
+                        $ms = pcAgg($muniRows);
+                        $mGoal = pcOpportunityFromRows($muniRows, $nivel, $params);
+                        $muniParams = $districtParams;
+                        $muniParams['municipio'] = $muniName === 'Sin catalogar' ? '__PENDIENTE__' : $muniName;
+                        $muniUrl = 'penetracion_clusters.php?'.http_build_query($muniParams,'','&',PHP_QUERY_RFC3986);
+                    ?>
+                    <tr class="pc-muni-detail-row" data-parent-id="<?=pcHtml($municipioId)?>" hidden>
+                        <th scope="row" data-sort-value="<?=pcHtml($muniName)?>"><span class="pc-muni-indent" aria-hidden="true">↳</span><?=pcHtml($muniName)?></th>
+                        <td<?=pcSortAttr($ms['hp'])?>><?=pcHtml(pcNum((float)$ms['hp']))?></td>
+                        <td<?=pcSortAttr($ms['usuarios'])?>><?=pcHtml(pcNum((float)$ms['usuarios']))?></td>
+                        <td<?=pcSortAttr($ms['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['pen'],'pen'))?>"><?=pcHtml(pcPct($ms['pen']))?></span></td>
+                        <td<?=pcSortAttr($ms['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['vel'],'vel'))?>"><?=pcHtml(pcPct($ms['vel']))?></span></td>
+                        <td<?=pcSortAttr($mGoal['metaPen'] ?? null)?>><?=pcHtml(pcPct($mGoal['metaPen'] ?? null))?></td>
+                        <td<?=pcSortAttr($mGoal['gapPen'] ?? null)?> class="<?= (($mGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($mGoal['gapPen'] ?? null,$mGoal['faltan'] ?? null))?></td>
+                        <td<?=pcSortAttr($mGoal['faltan'] ?? null)?> class="<?= (($mGoal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($mGoal['faltan'] ?? null) === null ? 'ND' : (($mGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$mGoal['faltan']))) ?></strong></td>
+                        <td><a class="pc-drill-link" href="<?=pcHtml($muniUrl)?>" aria-label="Explorar municipio <?=pcHtml($muniName)?>">Explorar →</a></td>
                     </tr>
+                    <?php endforeach; ?>
                     <?php endforeach; ?>
                     </tbody>
                     <tfoot>
@@ -934,7 +923,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                         </tr>
                     </tfoot>
                 </table></div>
-                <p class="pc-fineprint">Meta pen. = Σ(HPs × meta individual por antigüedad) / ΣHPs comparables, para el tipo de clúster seleccionado. Faltan pen. (pp) mide la brecha neta del promedio; «Cumple promedio» puede coexistir con brechas individuales. Faltan suscriptores = suma de déficits positivos por clúster hijo, sin compensar excedentes; concilia entre Región, Distrito y rankings PADRE/HIJO. Clústeres sin HP/base válidos se muestran en detalle, pero no afectan el denominador. Si hay base comparable sin edad validada, la meta se muestra ND.</p>
+                <p class="pc-fineprint">Meta pen. = Σ(HPs × meta individual por antigüedad) / ΣHPs comparables, para el tipo de clúster seleccionado. Faltan pen. (pp) mide la brecha neta del promedio; «Cumple promedio» puede coexistir con brechas individuales. Faltan suscriptores = suma de déficits positivos por clúster hijo, sin compensar excedentes; concilia entre Región, Distrito y rankings PADRE/HIJO. Clústeres sin HP/base válidos permanecen identificables en los rankings y no afectan el denominador. Si hay base comparable sin edad validada, la meta se muestra ND.</p>
             </section>
             <?php endif; ?>
 
@@ -955,6 +944,24 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                 <?php endif; ?>
             </section>
             <div class="pc-legend"><span><i class="pc-legend-bubble"></i> Tamaño de burbuja = HPs válidos</span><span> Eje X = penetración ponderada</span><span> Eje Y = velocidad anual ponderada</span><label><input id="show-labels" type="checkbox" checked> Mostrar etiquetas</label></div>
+
+            <section class="pc-table-card" aria-label="Resumen por segmento">
+                <div class="pc-section-head"><div><h2>Resumen ejecutivo</h2><p>Agregados sobre bases comparables; El tipo histórico Qlik se conserva; la gestión se asigna por edad validada (A <24 meses, Maduro ≥24 meses).</p></div></div>
+                <div class="pc-table-scroll"><table class="pc-summary-table">
+                    <thead><tr><th>Segmento</th><th>HPs comparables</th><th>Suscriptores</th><th>Penetración</th><th>Velocidad anual</th><th>Padres</th><th>Hijos</th><th>Antigüedad prom.</th></tr></thead>
+                    <tbody>
+                    <?php
+                    $summaryCards = [['Región / distrito (filtro actual)',$summary]];
+                    if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $summaryCards[] = ['CLUSTER_A',$young];
+                    if ($typeCluster === '' || $typeCluster === 'NORMAL') $summaryCards[] = ['Maduros (NORMAL)',$mature];
+                    foreach ($summaryCards as [$label,$s]): ?>
+                    <tr><th><?=pcHtml($label)?></th><td><?=pcHtml(pcNum((float)$s['hp']))?></td><td><?=pcHtml(pcNum((float)$s['usuarios']))?></td><td><?=pcHtml(pcPct($s['pen']))?></td><td><?=pcHtml(pcPct($s['vel']))?></td><td><?=$s['padres']?></td><td><?=$s['hijos']?></td><td><?= $s['antiguedad']===null ? 'ND' : pcHtml(pcNum($s['antiguedad'],1).' años') ?></td></tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table></div>
+                <p class="pc-fineprint">ARPU BDU no se muestra porque ese indicador no existe en Clusters_BDU v2. La velocidad es el dato de Qlik ponderado por HPs, no un crecimiento calculado entre dos snapshots. La clasificación de gestión usa la edad validada; se conserva por separado el tipo original de Qlik y se auditan las diferencias. Para el agregado de penetración se usa Σ suscriptores / Σ HPs únicamente donde ambas bases son válidas.</p>
+            </section>
+
 
             <!-- Rankings de brechas independientes, ordenables como Ranking Productividad. -->
             <?php
@@ -999,11 +1006,11 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                         <td<?=pcSortAttr($item['edad'])?>><?= $item['edad']===null?'ND':pcHtml(pcNum($item['edad'],1)) ?></td>
                         <td<?=pcSortAttr($item['hp'])?>><?=pcHtml(pcNum((float)$item['hp']))?></td>
                         <td<?=pcSortAttr($item['usuarios'])?>><?=pcHtml(pcNum((float)$item['usuarios']))?></td>
-                        <td<?=pcSortAttr($item['pen'])?>><?=pcHtml(pcPct($item['pen']))?></td>
+                        <td<?=pcSortAttr($item['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['pen'],'pen'))?>"><?=pcHtml(pcPct($item['pen']))?></span></td>
                         <td<?=pcSortAttr($item['metaPen'])?>><?=pcHtml(pcPct($item['metaPen']))?></td>
                         <td<?=pcSortAttr($item['gapPen'])?> class="<?=($item['gapPen']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGapConBrechas($item['gapPen'],$item['faltan']))?></td>
                         <td<?=pcSortAttr($item['faltan'])?> class="<?=($item['faltan']??0)>0?'pc-gap-alert':'pc-gap-ok'?>"><strong><?= $item['faltan']===null?'ND':($item['faltan']===0?'Cumple':pcHtml(pcNum((float)$item['faltan'])))?></strong></td>
-                        <td<?=pcSortAttr($item['vel'])?>><?=pcHtml(pcPct($item['vel']))?></td>
+                        <td<?=pcSortAttr($item['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['vel'],'vel'))?>"><?=pcHtml(pcPct($item['vel']))?></span></td>
                         <td<?=pcSortAttr($item['metaVel'])?>><?=pcHtml(pcPct($item['metaVel']))?></td>
                         <td<?=pcSortAttr($item['gapVel'])?> class="<?=($item['gapVel']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGap($item['gapVel']))?></td>
                     </tr>
@@ -1022,61 +1029,14 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
             </section>
             <?php endforeach; ?>
 
-            <section class="pc-table-card" aria-label="Resumen por segmento">
-                <div class="pc-section-head"><div><h2>Resumen ejecutivo</h2><p>Agregados sobre bases comparables; El tipo histórico Qlik se conserva; la gestión se asigna por edad validada (A <24 meses, Maduro ≥24 meses).</p></div></div>
-                <div class="pc-table-scroll"><table class="pc-summary-table">
-                    <thead><tr><th>Segmento</th><th>HPs comparables</th><th>Suscriptores</th><th>Penetración</th><th>Velocidad anual</th><th>Padres</th><th>Hijos</th><th>Antigüedad prom.</th></tr></thead>
-                    <tbody>
-                    <?php
-                    $summaryCards = [['Región / distrito (filtro actual)',$summary]];
-                    if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $summaryCards[] = ['CLUSTER_A',$young];
-                    if ($typeCluster === '' || $typeCluster === 'NORMAL') $summaryCards[] = ['Maduros (NORMAL)',$mature];
-                    foreach ($summaryCards as [$label,$s]): ?>
-                    <tr><th><?=pcHtml($label)?></th><td><?=pcHtml(pcNum((float)$s['hp']))?></td><td><?=pcHtml(pcNum((float)$s['usuarios']))?></td><td><?=pcHtml(pcPct($s['pen']))?></td><td><?=pcHtml(pcPct($s['vel']))?></td><td><?=$s['padres']?></td><td><?=$s['hijos']?></td><td><?= $s['antiguedad']===null ? 'ND' : pcHtml(pcNum($s['antiguedad'],1).' años') ?></td></tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table></div>
-                <p class="pc-fineprint">ARPU BDU no se muestra porque ese indicador no existe en Clusters_BDU v2. La velocidad es el dato de Qlik ponderado por HPs, no un crecimiento calculado entre dos snapshots. La clasificación de gestión usa la edad validada; se conserva por separado el tipo original de Qlik y se auditan las diferencias. Para el agregado de penetración se usa Σ suscriptores / Σ HPs únicamente donde ambas bases son válidas.</p>
-            </section>
-
-            <section class="pc-table-card" aria-label="Detalle por clúster">
-                <div class="pc-section-head"><div><h2>Detalle de clústeres hijo</h2><p>Drill-down Región → Distrito → Padre → Hijo, con catálogo geográfico independiente.</p></div><div class="pc-search"><input type="search" id="pc-search" placeholder="Buscar distrito, localidad o clúster" aria-label="Buscar clúster"></div></div>
-                <div class="pc-table-scroll"><table class="pc-detail-table" id="pc-detail-table">
-                    <thead><tr><th>Distrito</th><th>Municipio / localidad</th><th>Clúster padre</th><th>Clúster hijo</th><th>Tipo gestión / Qlik</th><th>Liberación</th><th>Edad (meses)</th><th>HPs</th><th>Suscriptores</th><th>Penetración</th><th>Meta pen.</th><th>Vel. anual</th><th>Meta vel. anual</th><th>Estado</th></tr></thead>
-                    <tbody>
-                    <?php foreach ($rows as $r):
-                        $hp = $r['casas_pasadas']!==null ? (int)$r['casas_pasadas'] : null;
-                        $u = $r['base_usuarios']!==null ? (int)$r['base_usuarios'] : null;
-                        $valid = ($hp !== null && $hp > 0 && $u !== null);
-                        $hasV = $r['velocidad_penetracion_anual']!==null;
-                        $loc = trim((string)($r['municipio']??''));
-                    ?>
-                    <tr><td><?=pcHtml((string)$r['distrito'])?></td>
-                        <td class="<?= $loc===''?'pc-null':'' ?>"><?= $loc===''?'Sin catalogar':pcHtml($loc) ?></td>
-                        <td><?=pcHtml((string)$r['cluster_padre'])?></td><td><b><?=pcHtml((string)$r['cluster_hijo'])?></b></td>
-                        <td><span class="pc-tag <?=($r['tipo_gestion']??$r['tipo'])==='NORMAL'?'pc-tag-normal':'pc-tag-a'?>"><?=pcHtml((string)($r['tipo_gestion']??$r['tipo']))?></span><?php if ($r['tipo']!==($r['tipo_gestion']??$r['tipo'])): ?><small class="pc-source-note">Qlik: <?=pcHtml((string)$r['tipo'])?></small><?php endif; ?></td>
-                        <td><?=pcHtml((string)($r['fecha_liberacion']??'')) ?: 'ND' ?></td>
-                        <td title="<?=pcHtml((string)($r['etapa_etiqueta']??''))?>"><?=$r['edad_meses_gestion']===null?'ND':pcHtml(pcNum($r['edad_meses_gestion'],1))?></td>
-                        <td><?=$hp===null?'ND':pcHtml(pcNum((float)$hp))?></td><td><?=$u===null?'ND':pcHtml(pcNum((float)$u))?></td>
-                        <td><?=$valid?pcHtml(pcPct(100.0*$u/$hp)):'ND'?></td>
-                        <td><?=pcHtml(pcPct($r['meta_pen_gestion'] ?? null))?></td>
-                        <td><?=$hasV?pcHtml(pcPct(100.0*(float)$r['velocidad_penetracion_anual'])):'ND'?></td>
-                        <td><?=pcHtml(pcPct($r['meta_vel_gestion'] ?? null))?></td>
-                        <td><?=!$valid?'Sin base':(!$hasV?'Sin velocidad':'Comparable')?></td>
-                    </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table></div>
-                <div class="pc-table-footer"><span id="pc-table-count"><?=count($rows)?> registros</span><span>Los registros sin base, sin velocidad o sin antigüedad permanecen visibles; las metas por edad se muestran como ND cuando no pueden certificarse.</span></div>
-            </section>
             <?php endif; ?>
-            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.0 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
+            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.1 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
         </div>
     </main>
 </div>
 <?php if ($selected!==null): ?>
 <script id="pc-chart-data" type="application/json"><?=$chartJson?></script>
-<script src="../assets/js/penetracion_clusters.js?v=1.7.0" defer></script>
+<script src="../assets/js/penetracion_clusters.js?v=1.7.1" defer></script>
 <?php endif; ?>
 </body>
 </html>
