@@ -1,4 +1,4 @@
-/* TotalXpedient | Cuadrantes de Penetración v1.6.1 | SVG autocontenido, sin CDN. */
+/* TotalXpedient | Cuadrantes de Penetración v1.7.0 | SVG autocontenido, sin CDN. */
 (() => {
   'use strict';
   const raw = document.getElementById('pc-chart-data');
@@ -11,7 +11,7 @@
   const W = 760, H = 468, L = 66, R = 24, T = 35, B = 68;
   const pw = W - L - R, ph = H - T - B;
   const all = [...(data.NORMAL || []), ...(data.CLUSTER_A || [])];
-  const limits = data.umbrales || {NORMAL:{pen:30,vel:5},CLUSTER_A:{pen:20,vel:7}};
+  const limits = data.umbrales || {NORMAL:{pen:20,vel:5,penMax:30,velMax:3},CLUSTER_A:{pen:15,vel:7,penMax:19.9,velMax:4.9}};
   const allLimits = Object.values(limits);
   const xMax = Math.ceil(Math.max(80, ...allLimits.map(l => Math.max(Number(l.pen),Number(l.penMax ?? l.pen)) + 12), ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
   const yMin = Math.floor(Math.min(-15, ...allLimits.map(l => Math.min(Number(l.vel),Number(l.velMax ?? l.vel))-10), ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
@@ -152,13 +152,14 @@
   // Filtros que cambian el universo actual invalidan selects dependientes.
   document.getElementById('distrito')?.addEventListener('change',()=>{
     document.getElementById('municipio').value='';
-    document.getElementById('padre').value='';
+    filterForm?.querySelector('input[name="padre"]')?.remove();
   });
-  document.getElementById('municipio')?.addEventListener('change',()=>{document.getElementById('padre').value='';});
   // Reglas del MotorClusters: validacion inmediata previa a enviar filtros.
   // La autoridad sigue siendo PHP; este control evita recargas por error de captura.
   const filterForm=document.getElementById('filters');
   const filterError=document.getElementById('pc-filter-error');
+  // Al seleccionar tipo, aplicar directamente los mismos controles que el botón Aplicar.
+  document.getElementById('tipo_cluster')?.addEventListener('change', () => filterForm?.requestSubmit());
   if (filterForm && filterError) {
     const paramKeys=['a_0_12_pen','a_12_24_pen','m_24_60_pen','m_60_plus_pen',
       'a_0_12_vel','a_12_24_vel','m_24_60_vel','m_60_plus_vel'];
@@ -172,10 +173,10 @@
       if ([...p,...v].some(n=>!Number.isFinite(n)||n<0||n>100)) {
         msg='Captura porcentajes válidos entre 0% y 100%.';
       } else if (p[0]>p[1]||p[1]>p[2]||p[2]>p[3]) {
-        msg='La penetración debe aumentar o mantenerse con la edad: A 1 año ≤ A 2 años ≤ Maduro 2 años ≤ Maduro 5 años.';
+        msg='La penetración debe aumentar gradualmente con la antigüedad: A 0–1 año ≤ A 1–2 años ≤ Maduro 2–5 años ≤ Maduro 5+ años.';
         first='a_0_12_pen';
       } else if (v[0]<v[1]||v[2]<v[3]) {
-        msg='La velocidad anual debe mantenerse o disminuir: A al año ≥ A a 2 años, y Maduro a 2 años ≥ Maduro a 5 años.';
+        msg='La velocidad anual debe mantenerse o disminuir dentro de cada familia: A 0–1 año ≥ A 1–2 años, y Maduro 2–5 años ≥ Maduro 5+ años.';
         first='a_0_12_vel';
       } else if (v[2] > v[1] + 0.100001) {
         msg='Al cambiar de A a Maduro, la velocidad no debe subir más de 0.1 pp (ejemplo 4.9% → 5.0%).';
@@ -201,7 +202,12 @@
         const numeric = btn.dataset.sortType === 'number';
         const dir = currentCol === col ? (currentDir === 'desc' ? 'asc' : 'desc') : (numeric ? 'desc' : 'asc');
         currentCol = col; currentDir = dir;
-        const lines = [...tbody.rows];
+        // La matriz regional contiene una fila detalle por distrito; ambas viajan
+        // juntas al ordenar, para no separar los municipios de su distrito.
+        const isRegional = tableEl.classList.contains('pc-regional-table');
+        const lines = isRegional
+          ? [...tbody.querySelectorAll(':scope > tr.pc-district-row')]
+          : [...tbody.rows];
         lines.sort((a,b) => {
           const va = a.cells[col]?.getAttribute('data-sort-value') ?? '';
           const vb = b.cells[col]?.getAttribute('data-sort-value') ?? '';
@@ -212,7 +218,17 @@
           if (!Number.isFinite(cmp)) cmp=0;
           return dir === 'asc' ? cmp : -cmp;
         });
-        tbody.append(...lines);
+        if (isRegional) {
+          for (const row of lines) {
+            const details = row.nextElementSibling;
+            // Los detalles permanecen vinculados incluso tras múltiples sorts.
+            const extra = details?.classList.contains('pc-muni-detail-row') ? details : null;
+            tbody.appendChild(row);
+            if (extra) tbody.appendChild(extra);
+          }
+        } else {
+          tbody.append(...lines);
+        }
         headers.forEach(h => {
           h.setAttribute('aria-sort','none');
           const mark=h.querySelector('.pc-sort-indicator');
@@ -224,6 +240,18 @@
       });
     });
   }
+
+  for (const btn of document.querySelectorAll('.pc-inline-toggle[data-target]')) {
+    btn.addEventListener('click', () => {
+      const panel = document.getElementById(btn.dataset.target);
+      if (!panel) return;
+      const open = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+      panel.hidden = open;
+      panel.classList.toggle('is-open', !open);
+    });
+  }
+
   const search=document.getElementById('pc-search');
   const table=document.getElementById('pc-detail-table');
   const count=document.getElementById('pc-table-count');

@@ -1,31 +1,30 @@
 <?php
 /**
- * TalIA / TotalXpedient | MOTOR CLUSTERS v1.6.1 | 12-nov-2026
+ * TalIA / TotalXpedient | MOTOR CLUSTERS v1.7.0 | 12-nov-2026
  * Ubicación de despliegue: /plataforma/includes/motor_clusters.php
  * Autoridad única de metas de penetración y velocidad anual POR ANTIGÜEDAD.
  * Lectura/calculo puro: no modifica Clusters_BDU ni su catálogo.
  *
  * Reglas por defecto (porcentaje anual para velocidad):
- *  Edad [0,12m): Pen 0 -> 20% lineal; vel 7% constante.
- *  Edad [12,24m): Pen 20 -> 29.9% lineal; vel 7 -> 4.9% lineal.
- *  Edad [24,60m): Pen 30 -> 50% lineal; vel 5 -> 3% lineal.
- *  Edad >=60m: Pen 50%; vel 3% constantes.
+ *  Edad [0,12m): Pen 0 -> 15% lineal; vel 7% constante.
+ *  Edad [12,24m): Pen 15 -> 19.9% lineal; vel 7 -> 4.9% lineal.
+ *  Edad [24,60m): Pen 20 -> 30% lineal; vel 5 -> 3% lineal.
+ *  Edad >=60m: Pen 30%; vel 3% constantes.
  *  * A partir de 24m se clasifica como Maduro; al límite hay un paso
  *    29.9 -> 30% en Pen y 4.9 -> 5.0% en velocidad, definidos por la directiva.
- *  General: 27% fijo e independiente.
+ *  El consolidado general se obtiene como combinación ponderada de metas por antigüedad.
  * Se interpola por HIJO al corte Qlik; los consolidados ponderan cada meta por HP.
  */
 declare(strict_types=1);
 
 final class MotorClusters
 {
-    public const VERSION = '1.6.1-metas-progresivas';
+    public const VERSION = '1.7.0-tipo-cluster-y-metas-ajustadas';
     public const DEFAULTS = [
-        'a_0_12_pen' => 20.0, 'a_0_12_vel' => 7.0,
-        'a_12_24_pen' => 29.9, 'a_12_24_vel' => 4.9,
-        'm_24_60_pen' => 30.0, 'm_24_60_vel' => 5.0,
-        'm_60_plus_pen' => 50.0, 'm_60_plus_vel' => 3.0,
-        'general_pen' => 27.0,
+        'a_0_12_pen' => 15.0, 'a_0_12_vel' => 7.0,
+        'a_12_24_pen' => 19.9, 'a_12_24_vel' => 4.9,
+        'm_24_60_pen' => 20.0, 'm_24_60_vel' => 5.0,
+        'm_60_plus_pen' => 30.0, 'm_60_plus_vel' => 3.0,
     ];
     private const ALLOWED_REQUEST = [
         'a_0_12_pen','a_0_12_vel','a_12_24_pen','a_12_24_vel',
