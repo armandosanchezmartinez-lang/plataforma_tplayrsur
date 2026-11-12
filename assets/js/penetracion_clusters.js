@@ -1,4 +1,4 @@
-/* TotalXpedient | Cuadrantes de Penetración v1.4 | SVG autocontenido, sin CDN. */
+/* TotalXpedient | Cuadrantes de Penetración v1.6.1 | SVG autocontenido, sin CDN. */
 (() => {
   'use strict';
   const raw = document.getElementById('pc-chart-data');
@@ -13,9 +13,9 @@
   const all = [...(data.NORMAL || []), ...(data.CLUSTER_A || [])];
   const limits = data.umbrales || {NORMAL:{pen:30,vel:5},CLUSTER_A:{pen:20,vel:7}};
   const allLimits = Object.values(limits);
-  const xMax = Math.ceil(Math.max(80, ...allLimits.map(l => Number(l.pen) + 12), ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
-  const yMin = Math.floor(Math.min(-15, ...allLimits.map(l => Number(l.vel) - 10), ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
-  const yMax = Math.ceil(Math.max(25, ...allLimits.map(l => Number(l.vel) + 10), ...all.map(p => Number(p.vel) + 4)) / 5) * 5;
+  const xMax = Math.ceil(Math.max(80, ...allLimits.map(l => Math.max(Number(l.pen),Number(l.penMax ?? l.pen)) + 12), ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
+  const yMin = Math.floor(Math.min(-15, ...allLimits.map(l => Math.min(Number(l.vel),Number(l.velMax ?? l.vel))-10), ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
+  const yMax = Math.ceil(Math.max(25, ...allLimits.map(l => Math.max(Number(l.vel),Number(l.velMax ?? l.vel))+10), ...all.map(p => Number(p.vel) + 4)) / 5) * 5;
   const maxHP = Math.max(1, ...all.map(p => p.hp));
   const x = v => L + (Math.max(0, Math.min(xMax, v)) / xMax) * pw;
   const y = v => T + (yMax - Math.max(yMin, Math.min(yMax, v))) / (yMax - yMin) * ph;
@@ -40,8 +40,9 @@
       p.distrito + ' · ' + p.municipio,
       'Penetración: ' + pct(p.pen) + ' · Velocidad: ' + pct(p.vel),
       'HPs: ' + nf.format(p.hp) + ' · Usuarios: ' + nf.format(p.usuarios),
+      'Meta por antigüedad: Pen. ' + (p.metaPen == null ? 'ND' : pct(p.metaPen)) + ' / Vel. anual ' + (p.metaVel == null ? 'ND' : pct(p.metaVel)),
       'Hijos graficables: ' + p.hijos,
-      'Cuadrante: ' + p.cuadrante
+      'Cuadrante (referencia del gráfico): ' + p.cuadrante
     ];
     for (const line of lines){tooltip.appendChild(document.createElement('br'));tooltip.appendChild(document.createTextNode(line));}
     tooltip.appendChild(document.createElement('br'));
@@ -92,6 +93,15 @@
     create('rect',{x:L,y:T,width:pw,height:ph,fill:'none',stroke:'#9eb9ca','stroke-width':1.4},svg);
     create('line',{x1:splitX,y1:T,x2:splitX,y2:H-B,stroke:'#ec6559','stroke-width':2.2,'stroke-dasharray':'5 3'},svg);
     create('line',{x1:L,y1:splitY,x2:W-R,y2:splitY,stroke:'#ec6559','stroke-width':2.2,'stroke-dasharray':'5 3'},svg);
+    // Guias secundarias de objetivo final de cada segmento; no modifican el cuadrante.
+    const finalX = Number(limit.penMax ?? limit.pen);
+    const finalY = Number(limit.velMax ?? limit.vel);
+    if (finalX > Number(limit.pen)+0.01) {
+      create('line',{x1:x(finalX),y1:T,x2:x(finalX),y2:H-B,stroke:'#8391a8','stroke-width':1.5,'stroke-dasharray':'3 7'},svg);
+    }
+    if (Math.abs(finalY - Number(limit.vel)) > 0.01) {
+      create('line',{x1:L,y1:y(finalY),x2:W-R,y2:y(finalY),stroke:'#8391a8','stroke-width':1.5,'stroke-dasharray':'3 7'},svg);
+    }
     text(svg,pct(limit.pen),splitX,H-B+34,'pc-svg-axis',{'text-anchor':'middle',fill:'#cd3c34'}).setAttribute('style','font-weight:800;fill:#c34b40');
     text(svg,pct(limit.vel),L-9,splitY-7,'pc-svg-axis',{'text-anchor':'end'}).setAttribute('style','font-weight:800;fill:#c34b40');
     text(svg,'Penetración (%)',L+pw/2,H-9,'pc-svg-axis-title',{'text-anchor':'middle'});
@@ -145,6 +155,37 @@
     document.getElementById('padre').value='';
   });
   document.getElementById('municipio')?.addEventListener('change',()=>{document.getElementById('padre').value='';});
+  // Reglas del MotorClusters: validacion inmediata previa a enviar filtros.
+  // La autoridad sigue siendo PHP; este control evita recargas por error de captura.
+  const filterForm=document.getElementById('filters');
+  const filterError=document.getElementById('pc-filter-error');
+  if (filterForm && filterError) {
+    const paramKeys=['a_0_12_pen','a_12_24_pen','m_24_60_pen','m_60_plus_pen',
+      'a_0_12_vel','a_12_24_vel','m_24_60_vel','m_60_plus_vel'];
+    const clearErr=()=>{filterError.hidden=true;filterError.textContent='';};
+    filterForm.querySelectorAll('input[type="number"]').forEach(el=>el.addEventListener('input',clearErr));
+    filterForm.addEventListener('submit',ev=>{
+      const vals=Object.fromEntries(paramKeys.map(k=>[k,Number(filterForm.elements.namedItem(k)?.value)]));
+      const p=[vals.a_0_12_pen,vals.a_12_24_pen,vals.m_24_60_pen,vals.m_60_plus_pen];
+      const v=[vals.a_0_12_vel,vals.a_12_24_vel,vals.m_24_60_vel,vals.m_60_plus_vel];
+      let msg='';let first='';
+      if ([...p,...v].some(n=>!Number.isFinite(n)||n<0||n>100)) {
+        msg='Captura porcentajes válidos entre 0% y 100%.';
+      } else if (p[0]>p[1]||p[1]>p[2]||p[2]>p[3]) {
+        msg='La penetración debe aumentar o mantenerse con la edad: A 1 año ≤ A 2 años ≤ Maduro 2 años ≤ Maduro 5 años.';
+        first='a_0_12_pen';
+      } else if (v[0]<v[1]||v[2]<v[3]) {
+        msg='La velocidad anual debe mantenerse o disminuir: A al año ≥ A a 2 años, y Maduro a 2 años ≥ Maduro a 5 años.';
+        first='a_0_12_vel';
+      } else if (v[2] > v[1] + 0.100001) {
+        msg='Al cambiar de A a Maduro, la velocidad no debe subir más de 0.1 pp (ejemplo 4.9% → 5.0%).';
+        first='m_24_60_vel';
+      }
+      if(msg){ev.preventDefault();filterError.textContent=msg;filterError.hidden=false;
+        (first ? filterForm.elements.namedItem(first) : filterError)?.focus?.();
+      } else clearErr();
+    });
+  }
   // Ordenamiento interactivo de rankings de brechas y comparativo regional.
   // En columnas numericas, primer clic: mayor a menor; segundo: menor a mayor.
   // Datos sin base (ND) se dejan al final en cualquier direccion.
