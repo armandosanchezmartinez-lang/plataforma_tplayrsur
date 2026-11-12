@@ -136,3 +136,11 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 .pc-regional-table tbody tr:nth-child(even){background:#fff;}
 .pc-regional-table tbody tr:hover{background:#F7F3FF;}
 .pc-regional-table tfoot th,.pc-regional-table tfoot td{background:#f3eefc;font-weight:800;border-top:2px solid rgba(111,79,255,.22);}
+
+/* v1.6.1: agrupación de 8 parámetros con validación accesible. */
+.pc-filter-error[hidden]{display:none!important}
+.pc-filter-error{grid-column:1/-1;border:1px solid #f2b3a7;border-left:4px solid #db4939;
+  border-radius:11px;background:#fff5f3;color:#97332a;padding:12px 14px;font-size:12px;font-weight:750}
+.pc-threshold-settings{align-content:start}
+.pc-threshold-settings label{font-size:10px;line-height:1.45}
+.pc-chart-card header p{line-height:1.5}
