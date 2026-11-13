@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient | Penetración de Clústeres v1.7.2 | 2026-11-12
+ * TotalXpedient | Penetración de Clústeres v1.7.3 | 2026-11-12
  * Ubicación: /plataforma/detalle/penetracion_clusters.php
  * Consulta de snapshots; guarda solamente la configuración global de metas para roles autorizados.
  * Restricción SQL de distrito basada en sesión + HC para Director Distrital.
@@ -424,19 +424,67 @@ function pcOpportunityFromRows(array $rows, string $nivel, array $params): array
     return pcCombineTargetRankingsTotal($districts);
 }
 
-function pcSemaforoClase(?float $value, string $metric): string {
-    if ($value === null) return 'pc-badge-neutral';
-    if ($metric === 'pen') {
-        if ($value < 20.0) return 'pc-badge-danger';
-        if ($value < 30.0) return 'pc-badge-warn';
-        return 'pc-badge-ok';
+/**
+ * Bandas de semáforo obtenidas EXCLUSIVAMENTE de las 8 metas globales MySQL.
+ * Son referencias por SEGMENTO, no sustituyen la meta interpolada por edad
+ * usada en las brechas individuales y los objetivos ponderados.
+ * Amarillo incluye ambos límites: [mínimo,máximo].
+ */
+function pcBandasTipo(string $tipo, string $indicador, array $params): ?array {
+    $claves = [
+        'CLUSTER_A' => [
+            'pen'=>['a_0_12_pen','a_12_24_pen'],
+            'vel'=>['a_12_24_vel','a_0_12_vel'],
+        ],
+        'NORMAL' => [
+            'pen'=>['m_24_60_pen','m_60_plus_pen'],
+            'vel'=>['m_60_plus_vel','m_24_60_vel'],
+        ],
+    ];
+    $par = $claves[$tipo][$indicador] ?? null;
+    if (!$par || !isset($params[$par[0]],$params[$par[1]])) return null;
+    $min = (float)$params[$par[0]];
+    $max = (float)$params[$par[1]];
+    return ($min <= $max) ? ['min'=>$min,'max'=>$max] : null;
+}
+
+/**
+ * Para mezclas de maduros y A, los límites de semáforo son el promedio
+ * ponderado por HPs del mismo universo que el indicador mostrado.
+ * Penetración: HPs > 0 y base_usuarios no nula.
+ * Velocidad: los anteriores + velocidad anual disponible.
+ * Nunca se promedia el % por tipo sin ponderación.
+ */
+function pcBandasGrupo(array $rows, string $indicador, array $params): ?array {
+    $hpTotal=0.0; $minSum=0.0; $maxSum=0.0;
+    foreach ($rows as $r) {
+        $hp = isset($r['casas_pasadas']) ? (float)$r['casas_pasadas'] : 0.0;
+        if ($hp <= 0 || ($r['base_usuarios'] ?? null) === null) continue;
+        if ($indicador === 'vel' && ($r['velocidad_penetracion_anual'] ?? null) === null) continue;
+        $tipo = (string)($r['tipo_gestion'] ?? $r['tipo'] ?? '');
+        $banda = pcBandasTipo($tipo,$indicador,$params);
+        if ($banda === null) return null; // Falla cerrada ante un tipo sin clasificación válida.
+        $hpTotal += $hp;
+        $minSum += $hp * $banda['min'];
+        $maxSum += $hp * $banda['max'];
     }
-    if ($metric === 'vel') {
-        if ($value < 2.0) return 'pc-badge-danger';
-        if ($value < 3.0) return 'pc-badge-warn';
-        return 'pc-badge-ok';
-    }
-    return 'pc-badge-neutral';
+    return $hpTotal > 0 ? ['min'=>$minSum/$hpTotal,'max'=>$maxSum/$hpTotal] : null;
+}
+
+function pcSemaforoClase(?float $value, ?array $banda): string {
+    if ($value === null || $banda === null) return 'pc-badge-neutral';
+    $min=(float)$banda['min']; $max=(float)$banda['max'];
+    if ($value < $min) return 'pc-badge-danger';
+    if ($value <= $max) return 'pc-badge-warn';
+    return 'pc-badge-ok';
+}
+function pcSemaforoTooltip(?array $banda): string {
+    if ($banda === null) return 'ND: no hay base o referencia válida para el semáforo';
+    $lo=pcPct((float)$banda['min']); $hi=pcPct((float)$banda['max']);
+    return 'Rojo: menor a '.$lo.' · Amarillo: '.$lo.' a '.$hi.' · Verde: mayor a '.$hi;
+}
+function pcEdad(?float $valor): string {
+    return $valor === null ? 'ND' : pcNum($valor,1).' años';
 }
 
 function pcNum(?float $v, int $dec=0): string {
@@ -600,6 +648,8 @@ try {
     $minHP = is_numeric(pcStr('min_hp')) ? max(0,min(500000, (int)pcStr('min_hp'))) : 0;
 
     $summary = pcAgg($rows);
+    $summaryPenBanda = pcBandasGrupo($rows,'pen',$params);
+    $summaryVelBanda = pcBandasGrupo($rows,'vel',$params);
     $mature = pcAgg(array_values(array_filter($rows, static fn($r)=>($r['tipo_gestion'] ?? $r['tipo'])==='NORMAL')));
     $young = pcAgg(array_values(array_filter($rows, static fn($r)=>($r['tipo_gestion'] ?? $r['tipo'])==='CLUSTER_A')));
     $bubbles = pcBubbles($rows, $nivel, $minHP, $limits);
@@ -667,6 +717,24 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
         .pc-badge-danger{background:#ffd8d8;color:#b23838;}
         .pc-badge-neutral{background:#eceff4;color:#607089;}
         .pc-summary-table tfoot th,.pc-summary-table tfoot td{font-weight:800;background:#f3eefc;border-top:2px solid rgba(111,79,255,.22);}
+        /* v1.7.3: diez columnas idénticas y alineadas en ambas tablas ejecutivas. */
+        .pc-regional-table,.pc-exec-table{min-width:1450px;width:100%;table-layout:fixed;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(1){width:14%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(2){width:9%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(3){width:10%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(4){width:10%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(5){width:9%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(6){width:10%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(7){width:9%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(8){width:11%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(9){width:11%;}
+        :is(.pc-regional-table,.pc-exec-table) thead th:nth-child(10){width:7%;}
+        .pc-exec-table th,.pc-exec-table td{text-align:right;}
+        .pc-exec-table thead th:first-child,.pc-exec-table tbody th{text-align:left;}
+        .pc-exec-table thead th{font-size:11px;}
+        .pc-exec-table .pc-badge{font-variant-numeric:tabular-nums;}
+        .pc-exec-table .pc-gap-alert{color:#b35422;font-weight:800;}
+        .pc-exec-table .pc-gap-ok{color:#08775a;font-weight:750;}
     </style>
 </head>
 <body class="page-dashboard pc-page">
@@ -902,11 +970,12 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
 
             <?php if (count($byDistrict)>0): ?>
             <section class="pc-table-card" aria-label="Desglose jerárquico por distrito">
-                <div class="pc-section-head"><div><h2><?= $scopeDistrict===null ? 'Comparativo regional por distrito' : 'Desglose distrital por municipio' ?></h2><p>Despliega los municipios con la flecha: comparten las mismas columnas y semáforos que el distrito.</p></div></div>
+                <div class="pc-section-head"><div><h2><?= $scopeDistrict===null ? 'Comparativo regional por distrito' : 'Desglose distrital por municipio' ?></h2><p>Despliega los municipios con la flecha: comparten las mismas columnas y semáforos que el distrito, incluida la antigüedad promedio.</p></div></div>
                 <div class="pc-table-scroll"><table class="pc-summary-table pc-regional-table" data-sortable="true" id="pc-regional-table" aria-label="Comparativo regional por distrito ordenable">
                     <thead><tr>
                         <?php foreach ([
                             ['distrito','Distrito','text'],
+                            ['edad','Antigüedad promedio','number'],
                             ['hp','HPs comparables','number'],
                             ['usuarios','Suscriptores','number'],
                             ['pen','Penetración','number'],
@@ -925,6 +994,8 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     <tbody>
                     <?php foreach ($byDistrict as $districtName => $districtRows):
                         $ds = pcAgg($districtRows);
+                        $dsPenBanda = pcBandasGrupo($districtRows,'pen',$params);
+                        $dsVelBanda = pcBandasGrupo($districtRows,'vel',$params);
                         $districtGoal = $districtOpportunities[$districtName] ?? ['metaPen'=>null,'gapPen'=>null,'faltan'=>null];
                         $districtParams = $_GET;
                         $districtParams['distrito'] = $districtName;
@@ -947,10 +1018,11 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                                 <span class="pc-chevron" aria-hidden="true">▶</span> <?=pcHtml($districtName)?>
                             </button>
                         </th>
+                        <td<?=pcSortAttr($ds['antiguedad'])?>><?=pcHtml(pcEdad($ds['antiguedad']))?></td>
                         <td<?=pcSortAttr($ds['hp'])?>><?=pcHtml(pcNum((float)$ds['hp']))?></td>
                         <td<?=pcSortAttr($ds['usuarios'])?>><?=pcHtml(pcNum((float)$ds['usuarios']))?></td>
-                        <td<?=pcSortAttr($ds['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['pen'],'pen'))?>"><?=pcHtml(pcPct($ds['pen']))?></span></td>
-                        <td<?=pcSortAttr($ds['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['vel'],'vel'))?>"><?=pcHtml(pcPct($ds['vel']))?></span></td>
+                        <td<?=pcSortAttr($ds['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['pen'],$dsPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($dsPenBanda))?>"><?=pcHtml(pcPct($ds['pen']))?></span></td>
+                        <td<?=pcSortAttr($ds['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['vel'],$dsVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($dsVelBanda))?>"><?=pcHtml(pcPct($ds['vel']))?></span></td>
                         <td<?=pcSortAttr($districtGoal['metaPen'] ?? null)?>><?=pcHtml(pcPct($districtGoal['metaPen'] ?? null))?></td>
                         <td<?=pcSortAttr($districtGoal['gapPen'] ?? null)?> class="<?= (($districtGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($districtGoal['gapPen'] ?? null,$districtGoal['faltan'] ?? null))?></td>
                         <td<?=pcSortAttr($districtGoal['faltan'] ?? null)?> class="<?= (($districtGoal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($districtGoal['faltan'] ?? null) === null ? 'ND' : (($districtGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$districtGoal['faltan']))) ?></strong></td>
@@ -958,6 +1030,8 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     </tr>
                     <?php foreach ($municipalityGroups as $muniName => $muniRows):
                         $ms = pcAgg($muniRows);
+                        $msPenBanda = pcBandasGrupo($muniRows,'pen',$params);
+                        $msVelBanda = pcBandasGrupo($muniRows,'vel',$params);
                         $mGoal = pcOpportunityFromRows($muniRows, $nivel, $params);
                         $muniParams = $districtParams;
                         $muniParams['municipio'] = $muniName === 'Sin catalogar' ? '__PENDIENTE__' : $muniName;
@@ -965,10 +1039,11 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     ?>
                     <tr class="pc-muni-detail-row" data-parent-id="<?=pcHtml($municipioId)?>" hidden>
                         <th scope="row" data-sort-value="<?=pcHtml($muniName)?>"><span class="pc-muni-indent" aria-hidden="true">↳</span><?=pcHtml($muniName)?></th>
+                        <td<?=pcSortAttr($ms['antiguedad'])?>><?=pcHtml(pcEdad($ms['antiguedad']))?></td>
                         <td<?=pcSortAttr($ms['hp'])?>><?=pcHtml(pcNum((float)$ms['hp']))?></td>
                         <td<?=pcSortAttr($ms['usuarios'])?>><?=pcHtml(pcNum((float)$ms['usuarios']))?></td>
-                        <td<?=pcSortAttr($ms['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['pen'],'pen'))?>"><?=pcHtml(pcPct($ms['pen']))?></span></td>
-                        <td<?=pcSortAttr($ms['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['vel'],'vel'))?>"><?=pcHtml(pcPct($ms['vel']))?></span></td>
+                        <td<?=pcSortAttr($ms['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['pen'],$msPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($msPenBanda))?>"><?=pcHtml(pcPct($ms['pen']))?></span></td>
+                        <td<?=pcSortAttr($ms['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['vel'],$msVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($msVelBanda))?>"><?=pcHtml(pcPct($ms['vel']))?></span></td>
                         <td<?=pcSortAttr($mGoal['metaPen'] ?? null)?>><?=pcHtml(pcPct($mGoal['metaPen'] ?? null))?></td>
                         <td<?=pcSortAttr($mGoal['gapPen'] ?? null)?> class="<?= (($mGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($mGoal['gapPen'] ?? null,$mGoal['faltan'] ?? null))?></td>
                         <td<?=pcSortAttr($mGoal['faltan'] ?? null)?> class="<?= (($mGoal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($mGoal['faltan'] ?? null) === null ? 'ND' : (($mGoal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$mGoal['faltan']))) ?></strong></td>
@@ -980,10 +1055,11 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     <tfoot>
                         <tr>
                             <th><?= $scopeDistrict === null ? 'REGIÓN SUR' : pcHtml($scopeDistrict).' · TOTAL' ?></th>
+                            <td><?=pcHtml(pcEdad($summary['antiguedad']))?></td>
                             <td><?=pcHtml(pcNum((float)$summary['hp']))?></td>
                             <td><?=pcHtml(pcNum((float)$summary['usuarios']))?></td>
-                            <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($summary['pen'],'pen'))?>"><?=pcHtml(pcPct($summary['pen']))?></span></td>
-                            <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($summary['vel'],'vel'))?>"><?=pcHtml(pcPct($summary['vel']))?></span></td>
+                            <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($summary['pen'],$summaryPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($summaryPenBanda))?>"><?=pcHtml(pcPct($summary['pen']))?></span></td>
+                            <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($summary['vel'],$summaryVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($summaryVelBanda))?>"><?=pcHtml(pcPct($summary['vel']))?></span></td>
                             <td><?=pcHtml(pcPct($regionOpportunityTotal['metaPen'] ?? null))?></td>
                             <td class="<?= (($regionOpportunityTotal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($regionOpportunityTotal['gapPen'] ?? null,$regionOpportunityTotal['faltan'] ?? null))?></td>
                             <td class="<?= (($regionOpportunityTotal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= ($regionOpportunityTotal['faltan'] ?? null) === null ? 'ND' : (($regionOpportunityTotal['faltan'] ?? 0) === 0 ? 'Cumple' : pcHtml(pcNum((float)$regionOpportunityTotal['faltan']))) ?></strong></td>
@@ -991,7 +1067,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         </tr>
                     </tfoot>
                 </table></div>
-                <p class="pc-fineprint">Meta pen. = Σ(HPs × meta individual por antigüedad) / ΣHPs comparables, para el tipo de clúster seleccionado. Faltan pen. (pp) mide la brecha neta del promedio; «Cumple promedio» puede coexistir con brechas individuales. Faltan suscriptores = suma de déficits positivos por clúster hijo, sin compensar excedentes; concilia entre Región, Distrito y rankings PADRE/HIJO. Clústeres sin HP/base válidos permanecen identificables en los rankings y no afectan el denominador. Si hay base comparable sin edad validada, la meta se muestra ND.</p>
+                <p class="pc-fineprint">Meta pen. = Σ(HPs × meta individual por antigüedad) / ΣHPs comparables. Faltan pen. (pp) mide la brecha neta del promedio; «Cumple promedio» puede coexistir con brechas individuales. Faltan suscriptores = suma de déficits positivos por hijo, sin compensar excedentes; concilia Región, Distrito y rankings. Antigüedad promedio = media por clúster hijo con edad válida. Semáforos basados en parámetros vigentes: rojo &lt; mínimo, amarillo entre mínimo y máximo (inclusive), verde &gt; máximo. Cuando se mezclan A y Maduros, los límites se ponderan por HPs del mismo universo del indicador. Pasa el cursor sobre un semáforo para ver sus límites.</p>
             </section>
             <?php endif; ?>
 
@@ -1014,20 +1090,58 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
             <div class="pc-legend"><span><i class="pc-legend-bubble"></i> Tamaño de burbuja = HPs válidos</span><span> Eje X = penetración ponderada</span><span> Eje Y = velocidad anual ponderada</span><label><input id="show-labels" type="checkbox" checked> Mostrar etiquetas</label></div>
 
             <section class="pc-table-card" aria-label="Resumen por segmento">
-                <div class="pc-section-head"><div><h2>Resumen ejecutivo</h2><p>Agregados sobre bases comparables; El tipo histórico Qlik se conserva; la gestión se asigna por edad validada (A <24 meses, Maduro ≥24 meses).</p></div></div>
-                <div class="pc-table-scroll"><table class="pc-summary-table">
-                    <thead><tr><th>Segmento</th><th>HPs comparables</th><th>Suscriptores</th><th>Penetración</th><th>Velocidad anual</th><th>Padres</th><th>Hijos</th><th>Antigüedad prom.</th></tr></thead>
+                <div class="pc-section-head"><div><h2>Resumen ejecutivo por segmento</h2><p>La misma estructura del comparativo distrital. Metas por antigüedad y semáforos de las referencias globales guardadas.</p></div></div>
+                <div class="pc-table-scroll"><table class="pc-summary-table pc-exec-table" aria-label="Resumen ejecutivo por segmento con metas y brechas">
+                    <thead><tr>
+                        <th scope="col">Segmento</th>
+                        <th scope="col">Antigüedad promedio</th>
+                        <th scope="col">HPs comparables</th>
+                        <th scope="col">Suscriptores</th>
+                        <th scope="col">Penetración</th>
+                        <th scope="col">Velocidad anual</th>
+                        <th scope="col">Meta pen.</th>
+                        <th scope="col">Faltan pen. (pp)</th>
+                        <th scope="col">Faltan suscriptores</th>
+                        <th scope="col">Detalle</th>
+                    </tr></thead>
                     <tbody>
                     <?php
-                    $summaryCards = [['Región / distrito (filtro actual)',$summary]];
-                    if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $summaryCards[] = ['CLUSTER_A',$young];
-                    if ($typeCluster === '' || $typeCluster === 'NORMAL') $summaryCards[] = ['Maduros (NORMAL)',$mature];
-                    foreach ($summaryCards as [$label,$s]): ?>
-                    <tr><th><?=pcHtml($label)?></th><td><?=pcHtml(pcNum((float)$s['hp']))?></td><td><?=pcHtml(pcNum((float)$s['usuarios']))?></td><td><?=pcHtml(pcPct($s['pen']))?></td><td><?=pcHtml(pcPct($s['vel']))?></td><td><?=$s['padres']?></td><td><?=$s['hijos']?></td><td><?= $s['antiguedad']===null ? 'ND' : pcHtml(pcNum($s['antiguedad'],1).' años') ?></td></tr>
+                    $summaryCards = [
+                        ['GENERAL', $scopeDistrict === null ? 'REGIÓN SUR · TOTAL' : $scopeDistrict.' · TOTAL', $summary, $rows],
+                    ];
+                    if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') {
+                        $summaryCards[] = ['CLUSTER_A','Clústeres_A',$young,array_values(array_filter($rows,static fn($r)=>($r['tipo_gestion'] ?? $r['tipo'])==='CLUSTER_A'))];
+                    }
+                    if ($typeCluster === '' || $typeCluster === 'NORMAL') {
+                        $summaryCards[] = ['NORMAL','Clústeres maduros',$mature,array_values(array_filter($rows,static fn($r)=>($r['tipo_gestion'] ?? $r['tipo'])==='NORMAL'))];
+                    }
+                    foreach ($summaryCards as [$segmentKey,$label,$s,$segmentRows]):
+                        $goal = $objectiveCards[$segmentKey];
+                        $segmentPenBanda=pcBandasGrupo($segmentRows,'pen',$params);
+                        $segmentVelBanda=pcBandasGrupo($segmentRows,'vel',$params);
+                        $linkArgs=$_GET;
+                        $linkArgs['periodo']=$selected['periodo'];
+                        $linkArgs['corte']=$selected['key'];
+                        $linkArgs['tipo_cluster']=$segmentKey==='GENERAL'?$typeCluster:$segmentKey;
+                        unset($linkArgs['padre']);
+                        $summaryUrl='penetracion_clusters.php?'.http_build_query($linkArgs,'','&',PHP_QUERY_RFC3986);
+                    ?>
+                    <tr>
+                        <th scope="row"><?=pcHtml($label)?></th>
+                        <td><?=pcHtml(pcEdad($s['antiguedad']))?></td>
+                        <td><?=pcHtml(pcNum((float)$s['hp']))?></td>
+                        <td><?=pcHtml(pcNum((float)$s['usuarios']))?></td>
+                        <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($s['pen'],$segmentPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($segmentPenBanda))?>"><?=pcHtml(pcPct($s['pen']))?></span></td>
+                        <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($s['vel'],$segmentVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($segmentVelBanda))?>"><?=pcHtml(pcPct($s['vel']))?></span></td>
+                        <td><?=pcHtml(pcPct($goal['metaPct']))?></td>
+                        <td class="<?= (($goal['brecha'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($goal['brecha'],$goal['faltan']))?></td>
+                        <td class="<?= (($goal['faltan'] ?? 0) > 0) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><strong><?= $goal['faltan']===null?'ND':($goal['faltan']===0?'Cumple':pcHtml(pcNum((float)$goal['faltan'])))?></strong></td>
+                        <td><a class="pc-drill-link" href="<?=pcHtml($summaryUrl)?>">Explorar →</a></td>
+                    </tr>
                     <?php endforeach; ?>
                     </tbody>
                 </table></div>
-                <p class="pc-fineprint">ARPU BDU no se muestra porque ese indicador no existe en Clusters_BDU v2. La velocidad es el dato de Qlik ponderado por HPs, no un crecimiento calculado entre dos snapshots. La clasificación de gestión usa la edad validada; se conserva por separado el tipo original de Qlik y se auditan las diferencias. Para el agregado de penetración se usa Σ suscriptores / Σ HPs únicamente donde ambas bases son válidas.</p>
+                <p class="pc-fineprint">La antigüedad es promedio simple por clúster hijo con fecha/edad válida, coherente con las tarjetas superiores. Penetración = Σ suscriptores / Σ HPs comparables; velocidad = promedio ponderado por HPs con velocidad disponible. Los objetivos siguen calculándose individualmente por edad en motor_clusters.php. La meta de cada segmento es ponderada por HPs; los suscriptores faltantes son la suma de déficits positivos por hijo sin compensar excedentes. Los colores utilizan las bandas guardadas para cada segmento; el total mezcla ambas bandas ponderando por HPs comparables.</p>
             </section>
 
 
@@ -1036,7 +1150,10 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
             $rankingCards = [];
             if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $rankingCards[] = ['CLUSTER_A','Ranking de brechas · Clústeres_A','Metas vigentes: '.pcPct($params['a_0_12_pen']).' / '.pcPct($params['a_0_12_vel']).' al año 1; '.pcPct($params['a_12_24_pen']).' / '.pcPct($params['a_12_24_vel']).' antes del año 2.'];
             if ($typeCluster === '' || $typeCluster === 'NORMAL') $rankingCards[] = ['NORMAL','Ranking de brechas · Clústeres maduros','Metas vigentes: '.pcPct($params['m_24_60_pen']).' / '.pcPct($params['m_24_60_vel']).' al año 2; '.pcPct($params['m_60_plus_pen']).' / '.pcPct($params['m_60_plus_vel']).' al año 5.'];
-            foreach ($rankingCards as [$rankingType,$rankingTitle,$rankingNote]): ?>
+            foreach ($rankingCards as [$rankingType,$rankingTitle,$rankingNote]):
+                $rankingPenBanda=pcBandasTipo($rankingType,'pen',$params);
+                $rankingVelBanda=pcBandasTipo($rankingType,'vel',$params);
+            ?>
             <section class="pc-table-card pc-rank-card" aria-label="<?=pcHtml($rankingTitle)?>">
                 <div class="pc-section-head pc-rank-head">
                     <div><h2><?=pcHtml($rankingTitle)?></h2><p><?=pcHtml($rankingNote)?></p></div>
@@ -1074,11 +1191,11 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         <td<?=pcSortAttr($item['edad'])?>><?= $item['edad']===null?'ND':pcHtml(pcNum($item['edad'],1)) ?></td>
                         <td<?=pcSortAttr($item['hp'])?>><?=pcHtml(pcNum((float)$item['hp']))?></td>
                         <td<?=pcSortAttr($item['usuarios'])?>><?=pcHtml(pcNum((float)$item['usuarios']))?></td>
-                        <td<?=pcSortAttr($item['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['pen'],'pen'))?>"><?=pcHtml(pcPct($item['pen']))?></span></td>
+                        <td<?=pcSortAttr($item['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['pen'],$rankingPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($rankingPenBanda))?>"><?=pcHtml(pcPct($item['pen']))?></span></td>
                         <td<?=pcSortAttr($item['metaPen'])?>><?=pcHtml(pcPct($item['metaPen']))?></td>
                         <td<?=pcSortAttr($item['gapPen'])?> class="<?=($item['gapPen']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGapConBrechas($item['gapPen'],$item['faltan']))?></td>
                         <td<?=pcSortAttr($item['faltan'])?> class="<?=($item['faltan']??0)>0?'pc-gap-alert':'pc-gap-ok'?>"><strong><?= $item['faltan']===null?'ND':($item['faltan']===0?'Cumple':pcHtml(pcNum((float)$item['faltan'])))?></strong></td>
-                        <td<?=pcSortAttr($item['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['vel'],'vel'))?>"><?=pcHtml(pcPct($item['vel']))?></span></td>
+                        <td<?=pcSortAttr($item['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['vel'],$rankingVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($rankingVelBanda))?>"><?=pcHtml(pcPct($item['vel']))?></span></td>
                         <td<?=pcSortAttr($item['metaVel'])?>><?=pcHtml(pcPct($item['metaVel']))?></td>
                         <td<?=pcSortAttr($item['gapVel'])?> class="<?=($item['gapVel']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGap($item['gapVel']))?></td>
                     </tr>
@@ -1098,7 +1215,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
             <?php endforeach; ?>
 
             <?php endif; ?>
-            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.2 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
+            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.3 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
         </div>
     </main>
 </div>
