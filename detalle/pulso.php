@@ -7,7 +7,8 @@ declare(strict_types=1);
  * Se conservan los nombres de tablas WP originales cuando estén presentes.
  */
 const PULSO_TIMEZONE = 'America/Merida';
-const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
+#const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexionTalia.php';
+const PULSO_DB_CONNECTION_FILE = __DIR__ . '/../conexion.php';
 const PULSO_REFERENCE_CONNECTION_FILE = __DIR__ . '/../conexion.php';
 const PULSO_LOGIN_URL = '../login.php';
 const PULSO_HOME_URL = '../index.php';
@@ -1736,7 +1737,7 @@ $subtitle=['corte'=>'Ritmo del día, comparativo vs semana pasada y conversión 
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?=h($title)?> · Talia Pulso</title>
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
-<link rel="stylesheet" href="../assets/css/pulso.css?v=1.0.23-sidebar">
+<link rel="stylesheet" href="../assets/css/pulso.css?v=1.0.25-conversion-tablas">
 <style>
 /* Pulso comparte la columna principal de Xpedient, sin alterar su sidebar. */
 body.page-pulso .pulso-page-main { min-width:0; }
@@ -1850,7 +1851,7 @@ include __DIR__ . '/../includes/sidebar.php';
 <div class="tp-chart-container" id="rhythmChart" role="img" aria-label="Comparativo de ventas e instalaciones por hora"></div>
 <script id="rhythmData" type="application/json"><?=json_encode(['sales'=>$report['saleHours'],'installs'=>$report['instHours'],'previousSales'=>$report['prevSaleHours'],'previousInstalls'=>$report['prevInstHours'],'cutoff'=>$report['cutoff']],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?></script>
 <p class="tp-chart-note">Cada punto representa un bloque horario completo. Las ventas se contabilizan por Fecha de cierre; solo se grafican cuando la Fecha de cierre y la fecha de TS_CreacionHora coinciden. Las ventas creadas otro día permanecen en el total, pero no se incluyen en la gráfica. Se compara el mismo día de la semana anterior.</p></article>
-<article class="tp-card"><div class="tp-card-head"><h2>Seguimiento de instalaciones por distrito</h2><p>Última importación FieldCloud: <?=h($report['backlog']['snapshot']?:'No disponible')?></p></div><div class="tp-table-wrap"><table class="tp-table compact tp-followup-table"><thead><tr><th>DISTRITO</th><th>ASIGNADAS</th><th>%</th><th>PENDIENTES</th><th>%</th><th>DETENIDAS</th><th>%</th><th>TOTAL</th></tr></thead><tbody>
+<article class="tp-card"><div class="tp-card-head"><h2>Seguimiento de instalaciones por distrito</h2><p>Última importación FieldCloud: <?=h($report['backlog']['snapshot']?:'No disponible')?></p></div><div class="tp-table-wrap tp-fit-table-wrap"><table class="tp-table compact tp-followup-table"><colgroup><col class="tp-fit-col-district"><col class="tp-fit-col-count"><col class="tp-fit-col-percent"><col class="tp-fit-col-count"><col class="tp-fit-col-percent"><col class="tp-fit-col-count"><col class="tp-fit-col-percent"><col class="tp-fit-col-total"></colgroup><thead><tr><th>DISTRITO</th><th>ASIGNADAS</th><th>%</th><th>PENDIENTES</th><th>%</th><th>DETENIDAS</th><th>%</th><th>TOTAL</th></tr></thead><tbody>
 <?php $bt=['assigned'=>0,'pending'=>0,'detained'=>0,'total'=>0];foreach($d as $key=>$row):$b=$row['backlog']??['assigned'=>0,'pending'=>0,'detained'=>0,'total'=>0];foreach($bt as $field=>$_)$bt[$field]+=$b[$field]??0; ?>
 <tr><td><b><?=h(district_label($key))?></b></td>
 <td><button type="button" class="tp-metric-link" data-record-set="follow:<?=h($key)?>:assigned" aria-label="Detalle de asignadas en <?=h(district_label($key))?>"><?=num($b['assigned'])?></button></td>
@@ -1891,7 +1892,7 @@ $bv=$row['bundleSales'];$bi=$row['bundleInstalls'];
 </div><?php endforeach;?></div></section>
 <section class="tp-card tp-arpu-panel"><h2>ARPU promedio</h2>
 <p>Instalaciones terminadas del día. Comparación con la semana ISO anterior (<?=h(fmtdate($report['previousWeekStart']))?>–<?=h(fmtdate($report['previousWeekEnd']))?>).</p>
-<div class="tp-table-wrap"><table class="tp-table tp-arpu-table"><thead><tr><th>DISTRITO</th><th>DÍA</th><th>SEMANA ANT.</th><th>Δ</th></tr></thead><tbody>
+<div class="tp-table-wrap tp-fit-table-wrap"><table class="tp-table tp-arpu-table"><colgroup><col class="tp-fit-col-district"><col class="tp-fit-col-money"><col class="tp-fit-col-money"><col class="tp-fit-col-delta"></colgroup><thead><tr><th>DISTRITO</th><th>DÍA</th><th>SEMANA ANT.</th><th>Δ</th></tr></thead><tbody>
 <?php foreach($d as $key=>$row):
   $prior=$row['previousArpu'];$delta=$row['arpuDelta'];$amount=$delta['amount'];$percent=$delta['percent'];
   $deltaClass=$amount===null?'unavailable':($amount>0?'positive':($amount<0?'negative':'neutral'));
@@ -1958,7 +1959,7 @@ $rosterCount=count($roster);
   <?php foreach($roster as $district=>$item):?>
   <section class="tp-roster-district">
     <h2>DISTRITO · <?=h(district_label($district))?></h2>
-    <table class="tp-roster-table"><thead><tr><th>NIVEL</th><th>VENTAS</th><th>INST</th><th>ND</th></tr></thead><tbody>
+    <table class="tp-roster-table"><colgroup><col class="tp-roster-col-name"><col class="tp-roster-col-metric"><col class="tp-roster-col-metric"><col class="tp-roster-col-metric"></colgroup><thead><tr><th scope="col">NIVEL</th><th scope="col">VENTAS</th><th scope="col">INST</th><th scope="col">ND</th></tr></thead><tbody>
       <?php foreach($item['leaders'] as $lk=>$leader):$lHash=md5($district.'|'.$lk);?>
       <tr class="tp-roster-leader"><th scope="row">Líder · <?=h($leader['name'])?></th>
         <?php foreach(['sales','inst','nd'] as $kind):?><td><button type="button" data-record-set="roster:l:<?=$lHash?>:<?=$kind?>" class="tp-metric-link"><?=num(count($leader[$kind]))?></button></td><?php endforeach; ?></tr>
@@ -1977,7 +1978,7 @@ $rosterCount=count($roster);
     <div><h2>Detalle de todos los ND</h2><p>Registros contabilizados en el roster regional</p></div>
     <span class="tp-roster-nd-count"><?=num(count($ndRows))?> registros</span>
   </div>
-  <div class="tp-table-wrap"><table class="tp-table compact"><thead><tr>
+  <div class="tp-table-wrap"><table class="tp-table compact tp-roster-nd-table"><colgroup><col class="tp-nd-col-district"><col class="tp-nd-col-account"><col class="tp-nd-col-os"><col class="tp-nd-col-ot"><col class="tp-nd-col-person"><col class="tp-nd-col-person"><col class="tp-nd-col-person"><col class="tp-nd-col-status"><col class="tp-nd-col-status"><col class="tp-nd-col-reason"><col class="tp-nd-col-date"></colgroup><thead><tr>
     <th>DISTRITO</th><th>CUENTA</th><th>OS</th><th>OT</th><th>LÍDER</th><th>COACH</th><th>VENDEDOR</th>
     <th>ESTATUS</th><th>ESTADO</th><th>MOTIVO</th><th>FECHA ND</th>
   </tr></thead><tbody>
