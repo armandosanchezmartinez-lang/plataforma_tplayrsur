@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.26
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.27
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -10,7 +10,7 @@ header('X-Robots-Tag: noindex, nofollow, noarchive');
 header('Referrer-Policy: no-referrer');
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
-header("Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+header("Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 
 const TP_LOOKUP_MAX_RESULTS = 10;
 const TP_LOOKUP_WINDOW = 300;
@@ -69,7 +69,6 @@ function tp_lookup_rate_limit(string $ip): bool {
 /** Resolve the same WP prefix configured in conexionTalia.php. */
 function tp_lookup_connection(): array {
     $path = __DIR__ . '/../conexionTalia.php';
-    #$path = __DIR__ . '/../conexion.php';
     if (!is_file($path)) throw new RuntimeException('Falta conexionTalia.php.');
     $conexion = null;
     $taliaWpPrefix = 'wp_';
@@ -113,7 +112,7 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
     $prefixed = 'OS-' . $digits;
     // Exact equality on stored identifiers; do not cast to numbers or strip zeros.
     $where = $identifier['osOnly'] ? '`os` IN (?, ?)' : '(`os` IN (?, ?) OR `id_cuenta_brm` = ?)';
-    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `jefe_plaza`, `jefe_ventas`, `distrital`, `ciudad`'
+    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `ciudad`'
         . ' FROM `' . $table . '` WHERE ' . $where
         . ' ORDER BY `fecha_cierre` DESC, `id` DESC LIMIT ' . (TP_LOOKUP_MAX_RESULTS + 1);
     $stmt = $db->prepare($sql);
@@ -121,14 +120,32 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
         if ($identifier['osOnly']) $stmt->bind_param('ss', $digits, $prefixed);
         else $stmt->bind_param('sss', $digits, $prefixed, $digits);
         $stmt->execute();
-        $stmt->bind_result($os, $account, $channel, $seller, $coach, $leader, $director, $city);
+        $stmt->bind_result($os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city);
         $rows = [];
         while ($stmt->fetch()) {
-            $rows[] = [$os, $account, $channel, $seller, $coach, $leader, $director, $city];
+            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city];
         }
         $truncated = count($rows) > TP_LOOKUP_MAX_RESULTS;
         return [array_slice($rows, 0, TP_LOOKUP_MAX_RESULTS), $truncated];
     } finally { $stmt->close(); }
+}
+
+/** Preserve the explicitly requested positional field/label mapping. */
+function tp_lookup_display_value($value): string {
+    $value = trim((string)($value ?? ''));
+    return $value !== '' ? $value : '—';
+}
+function tp_lookup_whatsapp(array $row, array $labels): string {
+    $os = trim((string)($row[0] ?? ''));
+    // Stored OS can be numeric or already prefixed; never duplicate OS.
+    $number = preg_replace('/^(?:OS[\s-]*)+/i', '', $os) ?? $os;
+    $heading = $number !== '' ? 'Datos de la OS-' . $number : 'Datos de la cuenta ' . tp_lookup_display_value($row[1] ?? '');
+    $lines = ['*' . $heading . '*'];
+    foreach ($labels as $i => $label) {
+        if ($i === 0) continue;
+        $lines[] = $label . ': ' . tp_lookup_display_value($row[$i] ?? '');
+    }
+    return implode("\n", $lines);
 }
 
 $labels = ['Orden de servicio', 'Cuenta', 'Canal de Venta', 'Vendedor', 'Coach', 'Lider', 'Director', 'Distrito'];
@@ -175,7 +192,8 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.26">
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.27">
+    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.27" defer></script>
 </head>
 <body>
 <main class="lookup-shell">
@@ -207,8 +225,15 @@ if ($method === 'POST') {
             <?php if ($truncated): ?><p class="lookup-hint">Se muestran las 10 coincidencias más recientes. Si buscas una orden específica, utiliza su OS completa.</p><?php endif; ?>
             <div class="lookup-table-wrap">
             <table class="lookup-table">
-                <thead><tr><?php foreach ($labels as $label): ?><th scope="col"><?=tp_lookup_h($label)?></th><?php endforeach; ?></tr></thead>
-                <tbody><?php foreach ($rows as $row): ?><tr><?php foreach ($labels as $i => $label): ?><td data-label="<?=tp_lookup_h($label)?>"><?=tp_lookup_h(trim((string)($row[$i] ?? '')) !== '' ? $row[$i] : '—')?></td><?php endforeach; ?></tr><?php endforeach; ?></tbody>
+                <thead><tr><?php foreach ($labels as $label): ?><th scope="col"><?=tp_lookup_h($label)?></th><?php endforeach; ?><th scope="col">Texto WhatsApp</th></tr></thead>
+                <tbody><?php foreach ($rows as $index => $row): ?>
+                    <tr><?php foreach ($labels as $i => $label): ?><td data-label="<?=tp_lookup_h($label)?>"><?=tp_lookup_h(tp_lookup_display_value($row[$i] ?? ''))?></td><?php endforeach; ?>
+                    <td class="lookup-whatsapp" data-label="Texto WhatsApp">
+                        <textarea id="lookup-whatsapp-<?=$index?>" rows="9" readonly aria-label="Texto WhatsApp de la coincidencia <?=$index+1?>"><?=tp_lookup_h(tp_lookup_whatsapp($row, $labels))?></textarea>
+                        <button type="button" class="lookup-copy" data-copy-target="lookup-whatsapp-<?=$index?>">Copiar</button>
+                        <span class="lookup-copy-status" role="status" aria-live="polite"></span>
+                    </td></tr>
+                <?php endforeach; ?></tbody>
             </table>
             </div>
         <?php endif; ?>
