@@ -23,6 +23,12 @@ $txp_ranking_comercial_activo = $txp_script_actual === 'ranking_comercial.php';
 $txp_mix_velocidad_activo = $txp_script_actual === 'mix_comercial.php';
 $txp_pulso_activo = $txp_script_actual === 'pulso.php' || $current_page === 'pulso';
 
+// Reto Buen Mes: acceso alineado con los seis perfiles autorizados del tablero.
+$txp_reto_buen_mes_activo = $txp_script_actual === 'reto_buen_mes.php' || $current_page === 'reto_buen_mes';
+$txp_reto_buen_mes_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$txp_reto_buen_mes_visible = !empty($_SESSION['usuario'])
+    && in_array($txp_reto_buen_mes_rol, ['admin', 'director_regional', 'director_distrital', 'lider', 'coach', 'vendedor'], true);
+
 // Promociones: visibilidad alineada con los roles que autoriza buenplan.php.
 $txp_buenplan_activo = $txp_script_actual === 'buenplan.php'
     || $current_page === 'buenplan';
@@ -51,7 +57,7 @@ $txp_addnetas_fcst_activo = $txp_script_actual === 'fcst_add_netas.php';
 $txp_addnetas_activo = $txp_addnetas_dashboard_activo || $txp_addnetas_fcst_activo
     || in_array($current_page, ['add_netas','fcst_add_netas'], true);
 
-$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || $txp_penetracion_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
+$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || $txp_penetracion_activo || $txp_reto_buen_mes_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
 $root_path  = $is_detalle ? '../' : '';
 $det_path   = $is_detalle ? '' : 'detalle/';
 
@@ -150,6 +156,12 @@ function txp_nav_active($page, $current_page) {
        <?= $txp_pulso_activo ? 'aria-current="page"' : '' ?>>
         <span class="nav-icon">🕰️</span> Pulso
     </a>
+    <?php if ($txp_reto_buen_mes_visible): ?>
+    <a href="<?= $det_path ?>reto_buen_mes.php" class="nav-item<?= $txp_reto_buen_mes_activo ? ' active' : '' ?>"
+       <?= $txp_reto_buen_mes_activo ? 'aria-current="page"' : '' ?>>
+        <span class="nav-icon">🏅</span> Reto Buen Mes
+    </a>
+    <?php endif; ?>
     <?php if ($txp_addnetas_visible): ?>
     <!-- Adiciones Netas | acceso controlado también dentro de sus archivos PHP. -->
     <details class="txp-ranking-group" <?= $txp_addnetas_activo ? 'open' : '' ?>>
