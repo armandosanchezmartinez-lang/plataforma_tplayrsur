@@ -179,3 +179,13 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 /* Identidad cromática independiente del orden de las tarjetas de parámetros. */
 .pc-threshold-settings[aria-label="Metas por antigüedad de clústeres A"]{background:linear-gradient(120deg,rgba(122,43,255,.10),rgba(255,10,200,.04));}
 .pc-threshold-settings[aria-label="Metas por antigüedad de clústeres maduros"]{background:linear-gradient(120deg,rgba(0,87,255,.055),rgba(122,43,255,.075));}
+
+/* v1.7.2: Configuración regional compartida y controles de solo lectura por rol. */
+.pc-save-goals{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:9px 16px;border:0;border-radius:10px;background:linear-gradient(125deg,#0057ff,#762bff);color:#fff;font:inherit;font-size:11px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(44,83,194,.14)}
+.pc-save-goals:hover,.pc-save-goals:focus-visible{filter:brightness(1.07);outline:2px solid rgba(64,83,180,.35)}
+.pc-threshold-settings input:disabled{opacity:1;-webkit-text-fill-color:#344367;background:#f4f5fa;border-color:#dfe2ed;color:#344367;cursor:not-allowed}
+.pc-goals-readonly{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;color:#495579}
+.pc-config-source{font-size:10.5px;color:#687493;margin:7px 1px 0;line-height:1.45}
+.pc-config-message{margin:0 0 12px;border-radius:11px;padding:11px 14px;font-size:12px;font-weight:700;border:1px solid}
+.pc-config-success{background:#edf9f0;color:#267543;border-color:#bee6c9}
+.pc-config-error{background:#fff3f2;color:#a93636;border-color:#ffd2d1}

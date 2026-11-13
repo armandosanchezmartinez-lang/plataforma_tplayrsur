@@ -154,36 +154,37 @@
     document.getElementById('municipio').value='';
     filterForm?.querySelector('input[name="padre"]')?.remove();
   });
-  // Reglas del MotorClusters: validacion inmediata previa a enviar filtros.
-  // La autoridad sigue siendo PHP; este control evita recargas por error de captura.
+  // Las metas son configuración GLOBAL y solamente se envían por POST autorizado.
+  // GET filtra periodo/distrito/municipio y NUNCA modifica los objetivos.
   const filterForm=document.getElementById('filters');
+  const saveForm=document.getElementById('pc-param-save-form');
   const filterError=document.getElementById('pc-filter-error');
-  // Al seleccionar tipo, aplicar directamente los mismos controles que el botón Aplicar.
   document.getElementById('tipo_cluster')?.addEventListener('change', () => filterForm?.requestSubmit());
-  if (filterForm && filterError) {
+  if (saveForm && filterError) {
     const paramKeys=['a_0_12_pen','a_12_24_pen','m_24_60_pen','m_60_plus_pen',
       'a_0_12_vel','a_12_24_vel','m_24_60_vel','m_60_plus_vel'];
     const clearErr=()=>{filterError.hidden=true;filterError.textContent='';};
-    filterForm.querySelectorAll('input[type="number"]').forEach(el=>el.addEventListener('input',clearErr));
-    filterForm.addEventListener('submit',ev=>{
-      const vals=Object.fromEntries(paramKeys.map(k=>[k,Number(filterForm.elements.namedItem(k)?.value)]));
-      const p=[vals.a_0_12_pen,vals.a_12_24_pen,vals.m_24_60_pen,vals.m_60_plus_pen];
-      const v=[vals.a_0_12_vel,vals.a_12_24_vel,vals.m_24_60_vel,vals.m_60_plus_vel];
-      let msg='';let first='';
-      if ([...p,...v].some(n=>!Number.isFinite(n)||n<0||n>100)) {
-        msg='Captura porcentajes válidos entre 0% y 100%.';
-      } else if (p[0]>p[1]||p[1]>p[2]||p[2]>p[3]) {
-        msg='La penetración debe aumentar gradualmente con la antigüedad: A 0–1 año ≤ A 1–2 años ≤ Maduro 2–5 años ≤ Maduro 5+ años.';
+    paramKeys.forEach(k=>saveForm.elements.namedItem(k)?.addEventListener('input',clearErr));
+    saveForm.addEventListener('submit',ev=>{
+      const vals=Object.fromEntries(paramKeys.map(k=>[k,Number(saveForm.elements.namedItem(k)?.value)]));
+      const pen=[vals.a_0_12_pen,vals.a_12_24_pen,vals.m_24_60_pen,vals.m_60_plus_pen];
+      const vel=[vals.a_0_12_vel,vals.a_12_24_vel,vals.m_24_60_vel,vals.m_60_plus_vel];
+      let msg='',first='';
+      if ([...pen,...vel].some(n=>!Number.isFinite(n)||n<0||n>100)) {
+        msg='Todos los porcentajes deben estar entre 0% y 100%.';
+      } else if (pen[0]>pen[1] || pen[1]>pen[2] || pen[2]>pen[3]) {
+        msg='La penetración debe aumentar con la antigüedad: A año 1 ≤ A año 2 ≤ Maduro año 2 ≤ Maduro año 5.';
         first='a_0_12_pen';
-      } else if (v[0]<v[1]||v[2]<v[3]) {
-        msg='La velocidad anual debe mantenerse o disminuir dentro de cada familia: A 0–1 año ≥ A 1–2 años, y Maduro 2–5 años ≥ Maduro 5+ años.';
+      } else if (vel[0]<vel[1] || vel[2]<vel[3]) {
+        msg='La velocidad debe disminuir con la antigüedad dentro de cada familia (A y Maduros).';
         first='a_0_12_vel';
-      } else if (v[2] > v[1] + 0.100001) {
-        msg='Al cambiar de A a Maduro, la velocidad no debe subir más de 0.1 pp (ejemplo 4.9% → 5.0%).';
+      } else if (vel[2]>vel[1]+0.100001) {
+        msg='El salto de velocidad al pasar de A a Maduro no puede superar 0.1 pp.';
         first='m_24_60_vel';
       }
-      if(msg){ev.preventDefault();filterError.textContent=msg;filterError.hidden=false;
-        (first ? filterForm.elements.namedItem(first) : filterError)?.focus?.();
+      if (msg) {
+        ev.preventDefault();filterError.textContent=msg;filterError.hidden=false;
+        (first?saveForm.elements.namedItem(first):filterError)?.focus?.();
       } else clearErr();
     });
   }
@@ -208,16 +209,18 @@
         const lines = isRegional
           ? [...tbody.querySelectorAll(':scope > tr.pc-district-row')]
           : [...tbody.rows];
-        lines.sort((a,b) => {
-          const va = a.cells[col]?.getAttribute('data-sort-value') ?? '';
-          const vb = b.cells[col]?.getAttribute('data-sort-value') ?? '';
+        // Misma columna, dirección y tratamiento de ND para DISTRITOS y MUNICIPIOS.
+        const compareRows=(a,b)=>{
+          const va=a.cells[col]?.getAttribute('data-sort-value') ?? '';
+          const vb=b.cells[col]?.getAttribute('data-sort-value') ?? '';
           if (va === '' && vb === '') return 0;
           if (va === '') return 1;
           if (vb === '') return -1;
-          let cmp = numeric ? (Number(va) - Number(vb)) : va.localeCompare(vb,'es',{numeric:true,sensitivity:'base'});
+          let cmp=numeric ? (Number(va)-Number(vb)) : va.localeCompare(vb,'es',{numeric:true,sensitivity:'base'});
           if (!Number.isFinite(cmp)) cmp=0;
           return dir === 'asc' ? cmp : -cmp;
-        });
+        };
+        lines.sort(compareRows);
         if (isRegional) {
           // Cada distrito puede tener muchos municipios en filas independientes.
           // Reordenar el bloque íntegro evita desalineaciones y preserva expansión.
@@ -230,7 +233,10 @@
           for (const row of lines) {
             tbody.appendChild(row);
             const id = row.querySelector('.pc-inline-toggle[data-target]')?.dataset.target;
-            for (const muni of municipalities.get(id) || []) tbody.appendChild(muni);
+            // Cada municipio se ordena DENTRO de su distrito, sin romper agrupación.
+            const children=municipalities.get(id) || [];
+            children.sort(compareRows);
+            for (const muni of children) tbody.appendChild(muni);
           }
         } else {
           tbody.append(...lines);
