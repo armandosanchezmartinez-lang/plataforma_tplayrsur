@@ -68,8 +68,8 @@ function tp_lookup_rate_limit(string $ip): bool {
 
 /** Resolve the same WP prefix configured in conexionTalia.php. */
 function tp_lookup_connection(): array {
-    #$path = __DIR__ . '/../conexionTalia.php';
-    $path = __DIR__ . '/../conexion.php';
+    $path = __DIR__ . '/../conexionTalia.php';
+    #$path = __DIR__ . '/../conexion.php';
     if (!is_file($path)) throw new RuntimeException('Falta conexionTalia.php.');
     $conexion = null;
     $taliaWpPrefix = 'wp_';
