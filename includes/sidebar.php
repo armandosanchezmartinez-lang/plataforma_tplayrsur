@@ -31,6 +31,17 @@ $txp_promociones_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
 $txp_promociones_visible = !empty($_SESSION['usuario'])
     && in_array($txp_promociones_rol, ['admin', 'director_regional'], true);
 
+// Penetración de Clústeres | solo perfiles ejecutivos autorizados.
+// Esta regla controla la visibilidad del menú; el PHP de destino mantiene
+// su propia validación de autorización y alcance distrital.
+$txp_penetracion_roles = ['admin', 'gerente_regional', 'director_regional', 'director_distrital'];
+$txp_penetracion_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$txp_penetracion_visible = !empty($_SESSION['usuario'])
+    && in_array($txp_penetracion_rol, $txp_penetracion_roles, true);
+$txp_penetracion_clusters_activo = $txp_script_actual === 'penetracion_clusters.php'
+    || in_array($current_page, ['penetracion_clusters', 'penetracion'], true);
+$txp_penetracion_activo = $txp_penetracion_clusters_activo;
+
 // Adiciones Netas: menú visible solo para perfiles autorizados.
 $txp_addnetas_roles = ['admin','gerente_regional','director_regional','director_distrital'];
 $txp_addnetas_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
@@ -40,7 +51,7 @@ $txp_addnetas_fcst_activo = $txp_script_actual === 'fcst_add_netas.php';
 $txp_addnetas_activo = $txp_addnetas_dashboard_activo || $txp_addnetas_fcst_activo
     || in_array($current_page, ['add_netas','fcst_add_netas'], true);
 
-$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
+$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || $txp_penetracion_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
 $root_path  = $is_detalle ? '../' : '';
 $det_path   = $is_detalle ? '' : 'detalle/';
 
@@ -193,6 +204,23 @@ function txp_nav_active($page, $current_page) {
                class="txp-ranking-subitem<?= $txp_buenplan_activo ? ' active' : '' ?>"
                <?= $txp_buenplan_activo ? 'aria-current="page"' : '' ?>>
                 <span class="txp-ranking-subicon" aria-hidden="true">▸</span> Buen Plan
+            </a>
+        </nav>
+    </details>
+    <?php endif; ?>
+    <?php if ($txp_penetracion_visible): ?>
+    <!-- Penetración | abierto automáticamente en el módulo de Clústers. -->
+    <details class="txp-ranking-group" <?= $txp_penetracion_activo ? 'open' : '' ?>>
+        <summary class="nav-item txp-ranking-toggle<?= $txp_penetracion_activo ? ' active' : '' ?>" aria-label="Desplegar submenú Penetración">
+            <span class="nav-icon">📍</span>
+            <span class="txp-ranking-label">Penetración</span>
+            <span class="txp-ranking-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <nav class="txp-ranking-submenu" aria-label="Opciones de Penetración">
+            <a href="<?= $det_path ?>penetracion_clusters.php"
+               class="txp-ranking-subitem<?= $txp_penetracion_clusters_activo ? ' active' : '' ?>"
+               <?= $txp_penetracion_clusters_activo ? 'aria-current="page"' : '' ?>>
+                <span class="txp-ranking-subicon" aria-hidden="true">▸</span> Clústers
             </a>
         </nav>
     </details>
