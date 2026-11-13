@@ -137,10 +137,55 @@ a.pc-period-btn:hover{background:#f0eaff;border-color:#ceb4ff;color:#6d28d9}
 .pc-regional-table tbody tr:hover{background:#F7F3FF;}
 .pc-regional-table tfoot th,.pc-regional-table tfoot td{background:#f3eefc;font-weight:800;border-top:2px solid rgba(111,79,255,.22);}
 
-/* v1.6.1: agrupación de 8 parámetros con validación accesible. */
+/* v1.7.0: agrupación de 8 parámetros con validación accesible. */
 .pc-filter-error[hidden]{display:none!important}
 .pc-filter-error{grid-column:1/-1;border:1px solid #f2b3a7;border-left:4px solid #db4939;
   border-radius:11px;background:#fff5f3;color:#97332a;padding:12px 14px;font-size:12px;font-weight:750}
 .pc-threshold-settings{align-content:start}
 .pc-threshold-settings label{font-size:10px;line-height:1.45}
 .pc-chart-card header p{line-height:1.5}
+
+/* v1.7.1: vista de un segmento, sin espacios en blanco. */
+.pc-page .pc-segment-cards,.pc-page .pc-objective-cards{grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));}
+.pc-page .pc-charts.pc-one-chart{grid-template-columns:minmax(0,1fr);}
+.pc-page .pc-charts.pc-one-chart .pc-svg-area{width:100%;max-width:1100px;margin:0 auto;}
+.pc-regional-table .pc-inline-toggle{display:inline-flex;align-items:center;gap:8px;border:0;background:transparent;color:#312c68;font:inherit;font-weight:800;padding:5px 2px;text-align:left;cursor:pointer;}
+.pc-regional-table .pc-inline-toggle:focus-visible{outline:2px solid #7A2BFF;outline-offset:3px;border-radius:4px;}
+.pc-regional-table .pc-chevron{font-size:11px;color:#7A2BFF;transition:transform .15s ease;display:inline-block;}
+.pc-regional-table .pc-inline-toggle[aria-expanded="true"] .pc-chevron{transform:rotate(90deg);}
+/* v1.7.1 | Municipio: MISMA tabla de nueve columnas, sin thead duplicado. */
+.pc-regional-table{width:100%;table-layout:fixed;min-width:1250px;}
+.pc-regional-table thead th:nth-child(1){width:15%;}
+.pc-regional-table thead th:nth-child(2){width:11%;}
+.pc-regional-table thead th:nth-child(3){width:10%;}
+.pc-regional-table thead th:nth-child(4){width:10%;}
+.pc-regional-table thead th:nth-child(5){width:10%;}
+.pc-regional-table thead th:nth-child(6){width:10%;}
+.pc-regional-table thead th:nth-child(7){width:12%;}
+.pc-regional-table thead th:nth-child(8){width:12%;}
+.pc-regional-table thead th:nth-child(9){width:10%;}
+.pc-regional-table .pc-district-row>th,.pc-regional-table .pc-district-row>td{background:#f3efff;font-weight:750;}
+.pc-regional-table .pc-muni-detail-row[hidden]{display:none!important;}
+.pc-regional-table .pc-muni-detail-row>th,.pc-regional-table .pc-muni-detail-row>td{
+  background:#fff!important;vertical-align:middle;padding:9px 13px!important;
+  text-align:right;border-bottom:1px solid #eeeaf7;color:#38425f;
+}
+.pc-regional-table .pc-muni-detail-row>th{text-align:left;font-weight:650;color:#3f426a;}
+.pc-regional-table .pc-muni-detail-row:hover>th,.pc-regional-table .pc-muni-detail-row:hover>td{background:#faf7ff!important;}
+.pc-regional-table .pc-muni-detail-row .pc-muni-indent{color:#8e64d2;padding-left:18px;padding-right:7px;font-size:13px;}
+.pc-regional-table .pc-muni-detail-row .pc-badge,.pc-regional-table .pc-district-row .pc-badge{font-variant-numeric:tabular-nums;}
+.pc-regional-table .pc-muni-detail-row .pc-drill-link{font-size:11px;}
+.pc-rank-table .pc-badge{min-width:58px;font-size:10px;font-variant-numeric:tabular-nums;}
+/* Identidad cromática independiente del orden de las tarjetas de parámetros. */
+.pc-threshold-settings[aria-label="Metas por antigüedad de clústeres A"]{background:linear-gradient(120deg,rgba(122,43,255,.10),rgba(255,10,200,.04));}
+.pc-threshold-settings[aria-label="Metas por antigüedad de clústeres maduros"]{background:linear-gradient(120deg,rgba(0,87,255,.055),rgba(122,43,255,.075));}
+
+/* v1.7.2: Configuración regional compartida y controles de solo lectura por rol. */
+.pc-save-goals{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:9px 16px;border:0;border-radius:10px;background:linear-gradient(125deg,#0057ff,#762bff);color:#fff;font:inherit;font-size:11px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(44,83,194,.14)}
+.pc-save-goals:hover,.pc-save-goals:focus-visible{filter:brightness(1.07);outline:2px solid rgba(64,83,180,.35)}
+.pc-threshold-settings input:disabled{opacity:1;-webkit-text-fill-color:#344367;background:#f4f5fa;border-color:#dfe2ed;color:#344367;cursor:not-allowed}
+.pc-goals-readonly{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;color:#495579}
+.pc-config-source{font-size:10.5px;color:#687493;margin:7px 1px 0;line-height:1.45}
+.pc-config-message{margin:0 0 12px;border-radius:11px;padding:11px 14px;font-size:12px;font-weight:700;border:1px solid}
+.pc-config-success{background:#edf9f0;color:#267543;border-color:#bee6c9}
+.pc-config-error{background:#fff3f2;color:#a93636;border-color:#ffd2d1}

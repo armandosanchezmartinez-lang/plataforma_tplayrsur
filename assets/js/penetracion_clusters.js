@@ -1,4 +1,4 @@
-/* TotalXpedient | Cuadrantes de Penetración v1.6.1 | SVG autocontenido, sin CDN. */
+/* TotalXpedient | Cuadrantes de Penetración v1.7.1 | SVG autocontenido, sin CDN. */
 (() => {
   'use strict';
   const raw = document.getElementById('pc-chart-data');
@@ -11,7 +11,7 @@
   const W = 760, H = 468, L = 66, R = 24, T = 35, B = 68;
   const pw = W - L - R, ph = H - T - B;
   const all = [...(data.NORMAL || []), ...(data.CLUSTER_A || [])];
-  const limits = data.umbrales || {NORMAL:{pen:30,vel:5},CLUSTER_A:{pen:20,vel:7}};
+  const limits = data.umbrales || {NORMAL:{pen:20,vel:5,penMax:30,velMax:3},CLUSTER_A:{pen:15,vel:7,penMax:19.9,velMax:4.9}};
   const allLimits = Object.values(limits);
   const xMax = Math.ceil(Math.max(80, ...allLimits.map(l => Math.max(Number(l.pen),Number(l.penMax ?? l.pen)) + 12), ...all.map(p => Number(p.pen) + 5)) / 10) * 10;
   const yMin = Math.floor(Math.min(-15, ...allLimits.map(l => Math.min(Number(l.vel),Number(l.velMax ?? l.vel))-10), ...all.map(p => Number(p.vel) - 4)) / 5) * 5;
@@ -152,37 +152,39 @@
   // Filtros que cambian el universo actual invalidan selects dependientes.
   document.getElementById('distrito')?.addEventListener('change',()=>{
     document.getElementById('municipio').value='';
-    document.getElementById('padre').value='';
+    filterForm?.querySelector('input[name="padre"]')?.remove();
   });
-  document.getElementById('municipio')?.addEventListener('change',()=>{document.getElementById('padre').value='';});
-  // Reglas del MotorClusters: validacion inmediata previa a enviar filtros.
-  // La autoridad sigue siendo PHP; este control evita recargas por error de captura.
+  // Las metas son configuración GLOBAL y solamente se envían por POST autorizado.
+  // GET filtra periodo/distrito/municipio y NUNCA modifica los objetivos.
   const filterForm=document.getElementById('filters');
+  const saveForm=document.getElementById('pc-param-save-form');
   const filterError=document.getElementById('pc-filter-error');
-  if (filterForm && filterError) {
+  document.getElementById('tipo_cluster')?.addEventListener('change', () => filterForm?.requestSubmit());
+  if (saveForm && filterError) {
     const paramKeys=['a_0_12_pen','a_12_24_pen','m_24_60_pen','m_60_plus_pen',
       'a_0_12_vel','a_12_24_vel','m_24_60_vel','m_60_plus_vel'];
     const clearErr=()=>{filterError.hidden=true;filterError.textContent='';};
-    filterForm.querySelectorAll('input[type="number"]').forEach(el=>el.addEventListener('input',clearErr));
-    filterForm.addEventListener('submit',ev=>{
-      const vals=Object.fromEntries(paramKeys.map(k=>[k,Number(filterForm.elements.namedItem(k)?.value)]));
-      const p=[vals.a_0_12_pen,vals.a_12_24_pen,vals.m_24_60_pen,vals.m_60_plus_pen];
-      const v=[vals.a_0_12_vel,vals.a_12_24_vel,vals.m_24_60_vel,vals.m_60_plus_vel];
-      let msg='';let first='';
-      if ([...p,...v].some(n=>!Number.isFinite(n)||n<0||n>100)) {
-        msg='Captura porcentajes válidos entre 0% y 100%.';
-      } else if (p[0]>p[1]||p[1]>p[2]||p[2]>p[3]) {
-        msg='La penetración debe aumentar o mantenerse con la edad: A 1 año ≤ A 2 años ≤ Maduro 2 años ≤ Maduro 5 años.';
+    paramKeys.forEach(k=>saveForm.elements.namedItem(k)?.addEventListener('input',clearErr));
+    saveForm.addEventListener('submit',ev=>{
+      const vals=Object.fromEntries(paramKeys.map(k=>[k,Number(saveForm.elements.namedItem(k)?.value)]));
+      const pen=[vals.a_0_12_pen,vals.a_12_24_pen,vals.m_24_60_pen,vals.m_60_plus_pen];
+      const vel=[vals.a_0_12_vel,vals.a_12_24_vel,vals.m_24_60_vel,vals.m_60_plus_vel];
+      let msg='',first='';
+      if ([...pen,...vel].some(n=>!Number.isFinite(n)||n<0||n>100)) {
+        msg='Todos los porcentajes deben estar entre 0% y 100%.';
+      } else if (pen[0]>pen[1] || pen[1]>pen[2] || pen[2]>pen[3]) {
+        msg='La penetración debe aumentar con la antigüedad: A año 1 ≤ A año 2 ≤ Maduro año 2 ≤ Maduro año 5.';
         first='a_0_12_pen';
-      } else if (v[0]<v[1]||v[2]<v[3]) {
-        msg='La velocidad anual debe mantenerse o disminuir: A al año ≥ A a 2 años, y Maduro a 2 años ≥ Maduro a 5 años.';
+      } else if (vel[0]<vel[1] || vel[2]<vel[3]) {
+        msg='La velocidad debe disminuir con la antigüedad dentro de cada familia (A y Maduros).';
         first='a_0_12_vel';
-      } else if (v[2] > v[1] + 0.100001) {
-        msg='Al cambiar de A a Maduro, la velocidad no debe subir más de 0.1 pp (ejemplo 4.9% → 5.0%).';
+      } else if (vel[2]>vel[1]+0.100001) {
+        msg='El salto de velocidad al pasar de A a Maduro no puede superar 0.1 pp.';
         first='m_24_60_vel';
       }
-      if(msg){ev.preventDefault();filterError.textContent=msg;filterError.hidden=false;
-        (first ? filterForm.elements.namedItem(first) : filterError)?.focus?.();
+      if (msg) {
+        ev.preventDefault();filterError.textContent=msg;filterError.hidden=false;
+        (first?saveForm.elements.namedItem(first):filterError)?.focus?.();
       } else clearErr();
     });
   }
@@ -201,18 +203,44 @@
         const numeric = btn.dataset.sortType === 'number';
         const dir = currentCol === col ? (currentDir === 'desc' ? 'asc' : 'desc') : (numeric ? 'desc' : 'asc');
         currentCol = col; currentDir = dir;
-        const lines = [...tbody.rows];
-        lines.sort((a,b) => {
-          const va = a.cells[col]?.getAttribute('data-sort-value') ?? '';
-          const vb = b.cells[col]?.getAttribute('data-sort-value') ?? '';
+        // La matriz regional contiene una fila detalle por distrito; ambas viajan
+        // juntas al ordenar, para no separar los municipios de su distrito.
+        const isRegional = tableEl.classList.contains('pc-regional-table');
+        const lines = isRegional
+          ? [...tbody.querySelectorAll(':scope > tr.pc-district-row')]
+          : [...tbody.rows];
+        // Misma columna, dirección y tratamiento de ND para DISTRITOS y MUNICIPIOS.
+        const compareRows=(a,b)=>{
+          const va=a.cells[col]?.getAttribute('data-sort-value') ?? '';
+          const vb=b.cells[col]?.getAttribute('data-sort-value') ?? '';
           if (va === '' && vb === '') return 0;
           if (va === '') return 1;
           if (vb === '') return -1;
-          let cmp = numeric ? (Number(va) - Number(vb)) : va.localeCompare(vb,'es',{numeric:true,sensitivity:'base'});
+          let cmp=numeric ? (Number(va)-Number(vb)) : va.localeCompare(vb,'es',{numeric:true,sensitivity:'base'});
           if (!Number.isFinite(cmp)) cmp=0;
           return dir === 'asc' ? cmp : -cmp;
-        });
-        tbody.append(...lines);
+        };
+        lines.sort(compareRows);
+        if (isRegional) {
+          // Cada distrito puede tener muchos municipios en filas independientes.
+          // Reordenar el bloque íntegro evita desalineaciones y preserva expansión.
+          const municipalities = new Map();
+          for (const tr of tbody.querySelectorAll(':scope > tr.pc-muni-detail-row')) {
+            const id = tr.dataset.parentId;
+            if (!municipalities.has(id)) municipalities.set(id, []);
+            municipalities.get(id).push(tr);
+          }
+          for (const row of lines) {
+            tbody.appendChild(row);
+            const id = row.querySelector('.pc-inline-toggle[data-target]')?.dataset.target;
+            // Cada municipio se ordena DENTRO de su distrito, sin romper agrupación.
+            const children=municipalities.get(id) || [];
+            children.sort(compareRows);
+            for (const muni of children) tbody.appendChild(muni);
+          }
+        } else {
+          tbody.append(...lines);
+        }
         headers.forEach(h => {
           h.setAttribute('aria-sort','none');
           const mark=h.querySelector('.pc-sort-indicator');
@@ -224,15 +252,16 @@
       });
     });
   }
-  const search=document.getElementById('pc-search');
-  const table=document.getElementById('pc-detail-table');
-  const count=document.getElementById('pc-table-count');
-  search?.addEventListener('input',()=>{
-    const q=search.value.trim().toLocaleLowerCase('es');let n=0;
-    for(const row of table.querySelectorAll('tbody tr')){
-      const visible=row.textContent.toLocaleLowerCase('es').includes(q);
-      row.hidden=!visible;if(visible)n++;
-    }
-    count.textContent=n+' de '+table.querySelectorAll('tbody tr').length+' registros visibles';
-  });
+
+  for (const btn of document.querySelectorAll('.pc-inline-toggle[data-target]')) {
+    btn.addEventListener('click', () => {
+      const parentId = btn.dataset.target;
+      const municipalities = [...document.querySelectorAll('tr.pc-muni-detail-row[data-parent-id="' + parentId + '"]')];
+      if (!municipalities.length) return;
+      const open = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+      for (const municipality of municipalities) municipality.hidden = open;
+    });
+  }
+
 })();
