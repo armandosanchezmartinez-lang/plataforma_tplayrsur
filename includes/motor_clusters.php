@@ -1,6 +1,6 @@
 <?php
 /**
- * TalIA / TotalXpedient | MOTOR CLUSTERS v1.7.0 | 12-nov-2026
+ * TalIA / TotalXpedient | MOTOR CLUSTERS v1.7.2 | 12-nov-2026
  * Ubicación de despliegue: /plataforma/includes/motor_clusters.php
  * Autoridad única de metas de penetración y velocidad anual POR ANTIGÜEDAD.
  * Lectura/calculo puro: no modifica Clusters_BDU ni su catálogo.
@@ -19,7 +19,7 @@ declare(strict_types=1);
 
 final class MotorClusters
 {
-    public const VERSION = '1.7.0-tipo-cluster-y-metas-ajustadas';
+    public const VERSION = '1.7.2-configuracion-centralizada';
     public const DEFAULTS = [
         'a_0_12_pen' => 15.0, 'a_0_12_vel' => 7.0,
         'a_12_24_pen' => 19.9, 'a_12_24_vel' => 4.9,
@@ -73,6 +73,88 @@ final class MotorClusters
             throw new InvalidArgumentException('Velocidad incongruente al pasar de A a Maduro: la meta a 2 años no puede aumentar más de 0.1 pp (default 4.9% → 5.0%).');
         }
         return $out;
+    }
+
+    /** Claves públicas de configuración global (también usadas por otros módulos). */
+    public static function clavesConfiguracion(): array
+    {
+        return self::ALLOWED_REQUEST;
+    }
+
+    /**
+     * Se requiere el SQL de instalación. No se aceptan parámetros desde GET:
+     * Director Distrital, Regional y ADMIN siempre consultan la MISMA versión guardada.
+     * Un error de tabla o registro inexistente bloquea la vista (fail closed).
+     *
+     * @return array{parametros:array,version:int,actualizado_por:string,actualizado_en:string}
+     */
+    public static function configuracionBD(mysqli $db): array
+    {
+        $res = $db->query('SELECT * FROM `Clusters_BDU_Parametros` WHERE id=1 LIMIT 1');
+        $row = $res->fetch_assoc();
+        $res->free();
+        if (!$row) {
+            throw new RuntimeException('Falta la configuración central Clusters_BDU_Parametros. Ejecuta el archivo SQL de instalación.');
+        }
+        return [
+            'parametros' => self::parametros($row),
+            'version' => (int)$row['version'],
+            'actualizado_por' => (string)$row['actualizado_por'],
+            'actualizado_en' => (string)$row['actualizado_en'],
+        ];
+    }
+
+    /**
+     * Persiste una versión GLOBAL e historial atómico. La autorización de roles y
+     * CSRF corresponde al controlador; NO llamar desde un endpoint público.
+     * $versionEsperada evita sobrescribir cambios que otro directivo acaba de guardar.
+     */
+    public static function guardarConfiguracionBD(mysqli $db, array $input, string $usuario, int $versionEsperada): array
+    {
+        foreach (self::ALLOWED_REQUEST as $key) {
+            if (!array_key_exists($key,$input)) {
+                throw new InvalidArgumentException('Falta el parámetro obligatorio '.$key);
+            }
+        }
+        if ($versionEsperada < 1) {
+            throw new InvalidArgumentException('Versión de configuración inválida. Actualiza la página.');
+        }
+        $params = self::parametros($input); // valida evolución gradual y límites en servidor
+        $usuario = substr(trim($usuario),0,100);
+        if ($usuario === '') $usuario = 'SIN_IDENTIFICAR';
+        $vals = [];
+        foreach (self::ALLOWED_REQUEST as $k) $vals[] = (float)$params[$k];
+        $db->begin_transaction();
+        try {
+            $sql = 'UPDATE `Clusters_BDU_Parametros` SET '
+                .'`a_0_12_pen`=?,`a_0_12_vel`=?,`a_12_24_pen`=?,`a_12_24_vel`=?,'
+                .'`m_24_60_pen`=?,`m_24_60_vel`=?,`m_60_plus_pen`=?,`m_60_plus_vel`=?, '
+                .'`actualizado_por`=?, `version`=`version`+1 WHERE id=1 AND `version`=?';
+            $stmt = $db->prepare($sql);
+            try {
+                $args = [...$vals,$usuario,$versionEsperada];
+                $stmt->bind_param('ddddddddsi', ...$args);
+                $stmt->execute();
+                if ($stmt->affected_rows !== 1) {
+                    throw new RuntimeException('Otro directivo guardó parámetros recientemente. Recarga la página antes de modificar.');
+                }
+            } finally { $stmt->close(); }
+            $next = $versionEsperada+1;
+            $history = $db->prepare('INSERT INTO `Clusters_BDU_Parametros_Historial` ('
+                .'`version`,`a_0_12_pen`,`a_0_12_vel`,`a_12_24_pen`,`a_12_24_vel`,'
+                .'`m_24_60_pen`,`m_24_60_vel`,`m_60_plus_pen`,`m_60_plus_vel`,`actualizado_por`) '
+                .'VALUES (?,?,?,?,?,?,?,?,?,?)');
+            try {
+                $argsHistory = [$next,...$vals,$usuario];
+                $history->bind_param('idddddddds', ...$argsHistory);
+                $history->execute();
+            } finally { $history->close(); }
+            $db->commit();
+        } catch (Throwable $e) {
+            $db->rollback();
+            throw $e;
+        }
+        return self::configuracionBD($db);
     }
 
     /** Antigüedad histórica: fecha certificada del catálogo o edad Qlik del corte. */

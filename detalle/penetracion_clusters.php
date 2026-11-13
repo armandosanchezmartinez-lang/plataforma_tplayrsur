@@ -1,8 +1,8 @@
 <?php
 /**
- * TotalXpedient | Penetración de Clústeres v1.7.1 | 2026-11-12
+ * TotalXpedient | Penetración de Clústeres v1.7.2 | 2026-11-12
  * Ubicación: /plataforma/detalle/penetracion_clusters.php
- * Solo lectura. Requiere Clusters_BDU y Clusters_BDU_Catalogo (esquema v2).
+ * Consulta de snapshots; guarda solamente la configuración global de metas para roles autorizados.
  * Restricción SQL de distrito basada en sesión + HC para Director Distrital.
  */
 declare(strict_types=1);
@@ -17,10 +17,11 @@ if (empty($_SESSION['usuario'])) {
     exit;
 }
 $rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
-if (!in_array($rol, ['admin', 'director_regional', 'director_distrital'], true)) {
+if (!in_array($rol, ['admin', 'director_regional', 'gerente_regional', 'director_distrital'], true)) {
     http_response_code(403);
-    exit('Acceso restringido: módulo de Penetración disponible para ADMIN, DIRECTOR REGIONAL y DIRECTOR DISTRITAL.');
+    exit('Acceso restringido: módulo de Penetración disponible para ADMIN, DIRECTOR REGIONAL, GERENTE REGIONAL y DIRECTOR DISTRITAL.');
 }
+$puedeEditarMetas = in_array($rol, ['admin','director_regional','gerente_regional'], true);
 require_once __DIR__ . '/../conexion.php';
 require_once __DIR__ . '/../includes/motor_clusters.php';
 if (!isset($conexion) || !($conexion instanceof mysqli)) {
@@ -96,7 +97,7 @@ function pcMesNombre(int $n): string {
 /** Enlaces de navegación temporal: sólo cortes existentes, mismos filtros, sin fechas diarias. */
 function pcCutUrl(array $cut): string {
     $query = [];
-    foreach (['distrito','municipio','padre','tipo_cluster','nivel','a_0_12_pen','a_0_12_vel','a_12_24_pen','a_12_24_vel','m_24_60_pen','m_24_60_vel','m_60_plus_pen','m_60_plus_vel','min_hp'] as $key) {
+    foreach (['distrito','municipio','padre','tipo_cluster','nivel','min_hp'] as $key) {
         if (isset($_GET[$key]) && is_string($_GET[$key]) && strlen($_GET[$key]) <= 250) {
             $query[$key] = $_GET[$key];
         }
@@ -448,6 +449,55 @@ function pcPp(?float $current, ?float $old): string {
     return $current === null || $old === null ? 'ND' : sprintf('%+.2f pp', $current - $old);
 }
 
+/** URL de retorno local: no permite redirecciones externas ni parametros de metas. */
+function pcUrlRegreso(): string {
+    $query = [];
+    foreach (['periodo','corte','distrito','municipio','padre','tipo_cluster','nivel','min_hp'] as $k) {
+        if (isset($_GET[$k]) && is_string($_GET[$k]) && strlen($_GET[$k]) <= 200) $query[$k]=$_GET[$k];
+    }
+    return 'penetracion_clusters.php'.($query ? '?'.http_build_query($query,'','&',PHP_QUERY_RFC3986) : '');
+}
+
+if (empty($_SESSION['pc_metas_csrf']) || !is_string($_SESSION['pc_metas_csrf'])) {
+    $_SESSION['pc_metas_csrf'] = bin2hex(random_bytes(32));
+}
+
+// Guardado EXCLUSIVAMENTE via POST autorizado + CSRF y versionamiento optimista.
+// Una edicion del DOM, un link GET o un POST de Director Distrital no actualiza metas.
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    if (!$puedeEditarMetas) {
+        http_response_code(403);
+        exit('Acceso denegado: solo la Direccion/Gerencia Regional y ADMIN pueden cambiar metas.');
+    }
+    $token = $_POST['pc_csrf'] ?? null;
+    if (!is_string($token) || !hash_equals($_SESSION['pc_metas_csrf'], $token)) {
+        http_response_code(403);
+        exit('La sesion de configuracion no es valida. Recarga la pagina e intenta de nuevo.');
+    }
+    if (($_POST['accion'] ?? null) !== 'guardar_metas') {
+        http_response_code(400);
+        exit('Operacion de configuracion no reconocida.');
+    }
+    try {
+        $versionPost = $_POST['version'] ?? null;
+        if (!is_string($versionPost) || !ctype_digit($versionPost)) {
+            throw new InvalidArgumentException('Version de metas invalida. Vuelve a cargar el tablero.');
+        }
+        MotorClusters::guardarConfiguracionBD($conexion, $_POST, (string)($_SESSION['usuario'] ?? ''), (int)$versionPost);
+        $_SESSION['pc_metas_mensaje'] = ['tipo'=>'ok','texto'=>'Metas globales actualizadas correctamente. Los perfiles distritales ya consultan esta configuracion.'];
+    } catch (InvalidArgumentException | RuntimeException $e) {
+        $_SESSION['pc_metas_mensaje'] = ['tipo'=>'error','texto'=>$e->getMessage()];
+    } catch (Throwable $e) {
+        error_log('penetracion_clusters.php guardar metas: '.$e->getMessage());
+        $_SESSION['pc_metas_mensaje'] = ['tipo'=>'error','texto'=>'No fue posible guardar las metas. Revisa las tablas de configuracion o el registro de errores.'];
+    }
+    header('Location: '.pcUrlRegreso(),true,303);
+    exit;
+}
+
+$pcFlash = $_SESSION['pc_metas_mensaje'] ?? null;
+unset($_SESSION['pc_metas_mensaje']);
+
 try {
     $scopeDistrict = null;
     $districts = ['CANCUN','COATZA/MINA','MERIDA','TUXTLA','VILLAHERMOSA'];
@@ -512,7 +562,8 @@ try {
     }
 
     $selectedDistrict = $scopeDistrict ?? '';
-    $params = MotorClusters::parametros($_GET); // leer/validar antes de enriquecer
+    $configuracionMetas = MotorClusters::configuracionBD($conexion); // fuente unica GLOBAL; no lee parametros GET
+    $params = $configuracionMetas['parametros'];
     $rawRows = $selected === null ? [] : MotorClusters::enriquecer(pcRows($conexion,$selected['anio'],$selected['periodo'],$selected['numero_periodo'],$scopeDistrict),$selected['fecha'],$params);
     $munis = []; $parents = [];
     foreach ($rawRows as $r) {
@@ -598,7 +649,7 @@ $chartJson = json_encode([
 ], JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 $current_page = 'penetracion';
 $displayScope = $scopeDistrict ?? 'REGIÓN SUR';
-$roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','director_distrital'=>'DIRECCIÓN DISTRITAL'][$rol];
+$roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','gerente_regional'=>'GERENCIA REGIONAL','director_distrital'=>'DIRECCIÓN DISTRITAL'][$rol];
 ?>
 <!doctype html>
 <html lang="es">
@@ -608,7 +659,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
     <meta name="color-scheme" content="light">
     <title>Penetración de Clústeres | TotalXpedient</title>
     <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=160">
-    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.7.1">
+    <link rel="stylesheet" href="../assets/css/penetracion_clusters.css?v=1.7.2">
     <style>
         .pc-badge{display:inline-flex;align-items:center;justify-content:center;min-width:72px;padding:4px 10px;border-radius:999px;font-weight:700;font-size:.92rem;line-height:1.1;white-space:nowrap;}
         .pc-badge-ok{background:#dff4df;color:#1f7a3e;}
@@ -684,12 +735,23 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                 </div>
             </nav>
 
+            <?php if ($puedeEditarMetas): ?>
+            <!-- Formulario POST independiente: las metas no viajan con los filtros GET. -->
+            <form id="pc-param-save-form" method="post" action="<?=pcHtml(pcUrlRegreso())?>" autocomplete="off">
+                <input type="hidden" name="accion" value="guardar_metas">
+                <input type="hidden" name="pc_csrf" value="<?=pcHtml((string)$_SESSION['pc_metas_csrf'])?>">
+                <input type="hidden" name="version" value="<?= (int)$configuracionMetas['version'] ?>">
+            </form>
+            <?php endif; ?>
+            <?php if (is_array($pcFlash) && isset($pcFlash['texto'])): ?>
+            <div class="pc-config-message <?=($pcFlash['tipo'] ?? '')==='ok'?'pc-config-success':'pc-config-error'?>" role="status"><?=pcHtml((string)$pcFlash['texto'])?></div>
+            <?php endif; ?>
             <form class="pc-filters" id="filters" method="get" autocomplete="off">
                 <?php if ($selected !== null): ?>
                     <input type="hidden" name="periodo" value="<?=pcHtml($selected['periodo'])?>">
                     <input type="hidden" name="corte" value="<?=pcHtml($selected['key'])?>">
                 <?php endif; ?>
-                <div class="pc-filter-title"><span>Filtros de análisis</span><small>Vista autorizada: <?=pcHtml($displayScope)?></small></div>
+                <div class="pc-filter-title"><span>Filtros de análisis</span><small>Vista autorizada: <?=pcHtml($displayScope)?> · Metas globales v<?= (int)$configuracionMetas['version'] ?></small></div>
                 <div class="pc-filter-grid">
                     <?php if ($rol !== 'director_distrital'): ?>
                     <label>Distrito
@@ -733,31 +795,31 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                      <div class="pc-threshold-settings" role="group" aria-label="Metas por antigüedad de clústeres A">
                          <span class="pc-threshold-title pc-threshold-a">● Clústeres_A · Hasta 2 años</span>
                          <label>Al cumplir 1 año · Penetración objetivo (%)
-                             <input name="a_0_12_pen" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['a_0_12_pen'])?>">
+                             <input name="a_0_12_pen" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['a_0_12_pen'])?>">
                          </label>
                          <label>0 a 1 año · Velocidad anual referencia (%)
-                             <input name="a_0_12_vel" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['a_0_12_vel'])?>">
+                             <input name="a_0_12_vel" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['a_0_12_vel'])?>">
                          </label>
                          <label>Al cumplir 2 años (antes de Maduro) · Penetración (%)
-                             <input name="a_12_24_pen" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['a_12_24_pen'])?>">
+                             <input name="a_12_24_pen" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['a_12_24_pen'])?>">
                          </label>
                          <label>Al cumplir 2 años (antes de Maduro) · Velocidad anual (%)
-                             <input name="a_12_24_vel" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['a_12_24_vel'])?>">
+                             <input name="a_12_24_vel" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['a_12_24_vel'])?>">
                          </label>
                      </div>
                      <div class="pc-threshold-settings" role="group" aria-label="Metas por antigüedad de clústeres maduros">
                          <span class="pc-threshold-title pc-threshold-normal">● Clústeres maduros · NORMAL</span>
                          <label>Al cumplir 2 años · Penetración (%)
-                             <input name="m_24_60_pen" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['m_24_60_pen'])?>">
+                             <input name="m_24_60_pen" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['m_24_60_pen'])?>">
                          </label>
                          <label>Al cumplir 2 años · Velocidad anual (%)
-                             <input name="m_24_60_vel" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['m_24_60_vel'])?>">
+                             <input name="m_24_60_vel" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['m_24_60_vel'])?>">
                          </label>
                          <label>Al cumplir 5 años y más · Penetración (%)
-                             <input name="m_60_plus_pen" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['m_60_plus_pen'])?>">
+                             <input name="m_60_plus_pen" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['m_60_plus_pen'])?>">
                          </label>
                          <label>Al cumplir 5 años y más · Velocidad anual (%)
-                             <input name="m_60_plus_vel" type="number" min="0" max="100" step="0.1" required value="<?=pcHtml((string)$params['m_60_plus_vel'])?>">
+                             <input name="m_60_plus_vel" <?= $puedeEditarMetas ? 'form="pc-param-save-form"' : 'disabled aria-readonly="true"' ?> type="number" min="0" max="100" step="0.001" required value="<?=pcHtml((string)$params['m_60_plus_vel'])?>">
                          </label>
                      </div>
                      <div id="pc-filter-error" class="pc-filter-error" role="alert" hidden></div>
@@ -767,9 +829,15 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
                 </div>
                 <div class="pc-filter-footer">
                     <button type="submit" class="pc-primary">Aplicar filtros</button>
+                    <?php if ($puedeEditarMetas): ?>
+                    <button type="submit" form="pc-param-save-form" class="pc-save-goals" id="pc-save-goals">Guardar metas globales</button>
+                    <?php else: ?>
+                    <span class="pc-goals-readonly"><span aria-hidden="true">🔒</span> Metas definidas por ADMIN / Dirección o Gerencia Regional · Solo lectura</span>
+                    <?php endif; ?>
                     <a class="pc-secondary" href="penetracion_clusters.php">Restablecer</a>
-                    <span>Metas por antigüedad: Clústeres_A 0–1 año 15% / 7% y 1–2 años 19.9% / 4.9%. Maduros 2–5 años 20% / 5% y más de 5 años 30% / 3%. Evolución gradual interpolada y validación anti-incongruencias.</span>
+                    <span>Metas vigentes por antigüedad: Clústeres_A año 1 <?=pcHtml(pcPct($params['a_0_12_pen']))?> / <?=pcHtml(pcPct($params['a_0_12_vel']))?> y año 2 <?=pcHtml(pcPct($params['a_12_24_pen']))?> / <?=pcHtml(pcPct($params['a_12_24_vel']))?>; Maduros año 2 <?=pcHtml(pcPct($params['m_24_60_pen']))?> / <?=pcHtml(pcPct($params['m_24_60_vel']))?> y año 5 <?=pcHtml(pcPct($params['m_60_plus_pen']))?> / <?=pcHtml(pcPct($params['m_60_plus_vel']))?>. Evolución gradual.</span>
                 </div>
+                <p class="pc-config-source">Configuración global guardada por <?=pcHtml((string)$configuracionMetas['actualizado_por'])?> · <?=pcHtml((string)$configuracionMetas['actualizado_en'])?>. <?= $puedeEditarMetas ? 'Para cambiar objetivos usa «Guardar metas globales»; aplicar filtros no modifica metas.' : 'Estos objetivos son los mismos que utiliza la Dirección Regional.' ?></p>
             </form>
 
             <?php if ($selected===null): ?>
@@ -966,8 +1034,8 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
             <!-- Rankings de brechas independientes, ordenables como Ranking Productividad. -->
             <?php
             $rankingCards = [];
-            if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $rankingCards[] = ['CLUSTER_A','Ranking de brechas · Clústeres_A','Metas progresivas: 15% / 7% en el primer año; 19.9% / 4.9% antes de los 2 años.'];
-            if ($typeCluster === '' || $typeCluster === 'NORMAL') $rankingCards[] = ['NORMAL','Ranking de brechas · Clústeres maduros','Metas progresivas: 20% / 5% entre 2 y 5 años; 30% / 3% después de 5 años.'];
+            if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $rankingCards[] = ['CLUSTER_A','Ranking de brechas · Clústeres_A','Metas vigentes: '.pcPct($params['a_0_12_pen']).' / '.pcPct($params['a_0_12_vel']).' al año 1; '.pcPct($params['a_12_24_pen']).' / '.pcPct($params['a_12_24_vel']).' antes del año 2.'];
+            if ($typeCluster === '' || $typeCluster === 'NORMAL') $rankingCards[] = ['NORMAL','Ranking de brechas · Clústeres maduros','Metas vigentes: '.pcPct($params['m_24_60_pen']).' / '.pcPct($params['m_24_60_vel']).' al año 2; '.pcPct($params['m_60_plus_pen']).' / '.pcPct($params['m_60_plus_vel']).' al año 5.'];
             foreach ($rankingCards as [$rankingType,$rankingTitle,$rankingNote]): ?>
             <section class="pc-table-card pc-rank-card" aria-label="<?=pcHtml($rankingTitle)?>">
                 <div class="pc-section-head pc-rank-head">
@@ -1030,13 +1098,13 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','direc
             <?php endforeach; ?>
 
             <?php endif; ?>
-            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.1 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
+            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.2 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
         </div>
     </main>
 </div>
 <?php if ($selected!==null): ?>
 <script id="pc-chart-data" type="application/json"><?=$chartJson?></script>
-<script src="../assets/js/penetracion_clusters.js?v=1.7.1" defer></script>
+<script src="../assets/js/penetracion_clusters.js?v=1.7.2" defer></script>
 <?php endif; ?>
 </body>
 </html>
