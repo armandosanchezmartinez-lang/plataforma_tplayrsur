@@ -101,7 +101,7 @@ function tp_lookup_sales_table(mysqli $db, string $prefix): string {
     $available = [];
     while ($column = $columns->fetch_assoc()) $available[strtolower((string)$column['Field'])] = true;
     $columns->free();
-    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','ciudad','fecha_cierre','id'] as $required) {
+    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','distrito','fecha_cierre','id'] as $required) {
         if (!isset($available[$required])) throw new RuntimeException('Falta columna ' . $required . ' en tabla de ventas.');
     }
     return $table;
@@ -112,7 +112,7 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
     $prefixed = 'OS-' . $digits;
     // Exact equality on stored identifiers; do not cast to numbers or strip zeros.
     $where = $identifier['osOnly'] ? '`os` IN (?, ?)' : '(`os` IN (?, ?) OR `id_cuenta_brm` = ?)';
-    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `ciudad`'
+    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `distrito`'
         . ' FROM `' . $table . '` WHERE ' . $where
         . ' ORDER BY `fecha_cierre` DESC, `id` DESC LIMIT ' . (TP_LOOKUP_MAX_RESULTS + 1);
     $stmt = $db->prepare($sql);
