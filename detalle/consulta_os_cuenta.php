@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.27
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.28
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -12,7 +12,9 @@ header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header("Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 
-const TP_LOOKUP_MAX_RESULTS = 10;
+const TP_LOOKUP_MAX_RESULTS = 10; // Por identificador.
+const TP_LOOKUP_MAX_IDENTIFIERS = 20;
+const TP_LOOKUP_MAX_INPUT = 2048;
 const TP_LOOKUP_WINDOW = 300;
 const TP_LOOKUP_PER_IP = 20;
 const TP_LOOKUP_GLOBAL = 2000;
@@ -29,10 +31,57 @@ function tp_lookup_identifier($raw): ?array {
     return ['digits' => $matches[2], 'osOnly' => !empty($matches[1])];
 }
 
+/** Split a pasted list; preserve the exact string representation of each identifier. */
+function tp_lookup_identifiers($raw): array {
+    if (!is_string($raw) || strlen($raw) > TP_LOOKUP_MAX_INPUT) {
+        throw new InvalidArgumentException('La lista es demasiado extensa o no es válida.');
+    }
+    $tokens = preg_split('/[\s,.]+/u', $raw, -1, PREG_SPLIT_NO_EMPTY);
+    if (!$tokens) throw new InvalidArgumentException('Ingresa al menos una OS o cuenta completa.');
+    $unique = [];
+    foreach ($tokens as $token) {
+        $identifier = tp_lookup_identifier($token);
+        if ($identifier === null) {
+            throw new InvalidArgumentException('Hay un identificador inválido. Usa de 6 a 40 dígitos, con prefijo OS- opcional, separados por espacios, comas, puntos o saltos de línea.');
+        }
+        $key = ($identifier['osOnly'] ? 'OS-' : 'N:') . $identifier['digits'];
+        if (!isset($unique[$key])) {
+            $identifier['label'] = ($identifier['osOnly'] ? 'OS-' : '') . $identifier['digits'];
+            $unique[$key] = $identifier;
+            if (count($unique) > TP_LOOKUP_MAX_IDENTIFIERS) {
+                throw new InvalidArgumentException('Puedes buscar hasta ' . TP_LOOKUP_MAX_IDENTIFIERS . ' identificadores distintos por consulta.');
+            }
+        }
+    }
+    return array_values($unique);
+}
+
+/** Each requested identifier uses one unit of the existing public query budget.
+ *  The same database record may match several identifiers; return it only once.
+ *  Keep input order, with the most recent matches first for each identifier.
+ */
+function tp_lookup_batch(array $identifiers, callable $search): array {
+    $rows = []; $seen = []; $missing = []; $truncated = [];
+    foreach ($identifiers as $identifier) {
+        [$matches, $hasMore] = $search($identifier);
+        if (!$matches) $missing[] = $identifier['label'];
+        if ($hasMore) $truncated[] = $identifier['label'];
+        foreach ($matches as $row) {
+            // The ninth SQL field is the internal primary key; never display it.
+            $key = 'id:' . (string)$row[8];
+            if (isset($seen[$key])) continue;
+            $seen[$key] = true;
+            $rows[] = array_slice($row, 0, 8);
+        }
+    }
+    return [$rows, $missing, $truncated];
+}
+
 /** Rate limit shared by workers on this server; no session/cookies required.
  *  Fail closed if the private temporary storage cannot be written.
  */
-function tp_lookup_rate_limit(string $ip): bool {
+function tp_lookup_rate_limit(string $ip, int $cost = 1): bool {
+    if ($cost < 1 || $cost > TP_LOOKUP_MAX_IDENTIFIERS) throw new InvalidArgumentException('Costo de consulta inválido.');
     if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new RuntimeException('Dirección remota no disponible.');
     $dir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'talia-public-lookup-' . substr(hash('sha256', __DIR__), 0, 24);
     if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) throw new RuntimeException('No se puede crear el control de consultas.');
@@ -53,9 +102,9 @@ function tp_lookup_rate_limit(string $ip): bool {
         if (($state['window'] ?? null) !== $windowStart) $state = ['window'=>$windowStart, 'total'=>0, 'ips'=>[]];
         $key = hash('sha256', $ip);
         $count = (int)($state['ips'][$key] ?? 0);
-        if ($count >= TP_LOOKUP_PER_IP || (int)$state['total'] >= TP_LOOKUP_GLOBAL) return false;
-        $state['ips'][$key] = $count + 1;
-        $state['total']++;
+        if ($count + $cost > TP_LOOKUP_PER_IP || (int)$state['total'] + $cost > TP_LOOKUP_GLOBAL) return false;
+        $state['ips'][$key] = $count + $cost;
+        $state['total'] += $cost;
         $encoded = json_encode($state, JSON_THROW_ON_ERROR);
         rewind($file);
         if (!ftruncate($file, 0) || fwrite($file, $encoded) !== strlen($encoded) || !fflush($file)) throw new RuntimeException('No se puede guardar el control de consultas.');
@@ -101,7 +150,7 @@ function tp_lookup_sales_table(mysqli $db, string $prefix): string {
     $available = [];
     while ($column = $columns->fetch_assoc()) $available[strtolower((string)$column['Field'])] = true;
     $columns->free();
-    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','distrito','fecha_cierre','id'] as $required) {
+    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','ciudad','fecha_cierre','id'] as $required) {
         if (!isset($available[$required])) throw new RuntimeException('Falta columna ' . $required . ' en tabla de ventas.');
     }
     return $table;
@@ -112,7 +161,7 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
     $prefixed = 'OS-' . $digits;
     // Exact equality on stored identifiers; do not cast to numbers or strip zeros.
     $where = $identifier['osOnly'] ? '`os` IN (?, ?)' : '(`os` IN (?, ?) OR `id_cuenta_brm` = ?)';
-    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `distrito`'
+    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `ciudad`, `id`'
         . ' FROM `' . $table . '` WHERE ' . $where
         . ' ORDER BY `fecha_cierre` DESC, `id` DESC LIMIT ' . (TP_LOOKUP_MAX_RESULTS + 1);
     $stmt = $db->prepare($sql);
@@ -120,10 +169,10 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
         if ($identifier['osOnly']) $stmt->bind_param('ss', $digits, $prefixed);
         else $stmt->bind_param('sss', $digits, $prefixed, $digits);
         $stmt->execute();
-        $stmt->bind_result($os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city);
+        $stmt->bind_result($os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id);
         $rows = [];
         while ($stmt->fetch()) {
-            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city];
+            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id];
         }
         $truncated = count($rows) > TP_LOOKUP_MAX_RESULTS;
         return [array_slice($rows, 0, TP_LOOKUP_MAX_RESULTS), $truncated];
@@ -149,30 +198,32 @@ function tp_lookup_whatsapp(array $row, array $labels): string {
 }
 
 $labels = ['Orden de servicio', 'Cuenta', 'Canal de Venta', 'Vendedor', 'Coach', 'Lider', 'Director', 'Distrito'];
-$rows = []; $error = ''; $searched = false; $truncated = false; $input = '';
+$rows = []; $error = ''; $searched = false; $truncated = []; $missing = []; $input = ''; $identifiers = [];
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 if ($method === 'POST') {
     $raw = $_POST['consulta'] ?? null;
-    $input = is_string($raw) && strlen($raw) <= 64 ? trim($raw) : '';
+    $input = is_string($raw) && strlen($raw) <= TP_LOOKUP_MAX_INPUT ? $raw : '';
     try {
-        // Count malformed attempts as well; never trust user-supplied proxy headers.
-        if (!tp_lookup_rate_limit((string)($_SERVER['REMOTE_ADDR'] ?? ''))) {
+        $validationError = '';
+        try { $identifiers = tp_lookup_identifiers($raw); }
+        catch (InvalidArgumentException $e) { $validationError = $e->getMessage(); }
+        // Count malformed attempts, and charge each distinct identifier in valid batches.
+        // Never trust user-supplied proxy headers.
+        $cost = $validationError !== '' ? 1 : count($identifiers);
+        if (!tp_lookup_rate_limit((string)($_SERVER['REMOTE_ADDR'] ?? ''), $cost)) {
             http_response_code(429);
             header('Retry-After: ' . (TP_LOOKUP_WINDOW - time() % TP_LOOKUP_WINDOW));
-            $error = 'Se alcanzó el límite temporal de consultas. Intenta nuevamente en unos minutos.';
+            $error = 'Se alcanzó el límite temporal de consultas (20 identificadores cada cinco minutos). Intenta nuevamente en unos minutos.';
+        } elseif ($validationError !== '') {
+            http_response_code(400);
+            $error = $validationError;
         } else {
-            $identifier = tp_lookup_identifier($raw);
-            if ($identifier === null) {
-                http_response_code(400);
-                $error = 'Ingresa una OS o cuenta válida: de 6 a 40 dígitos. Para órdenes de servicio también puedes usar el prefijo OS-.';
-            } else {
-                [$db, $prefix] = tp_lookup_connection();
-                try {
-                    $table = tp_lookup_sales_table($db, $prefix);
-                    [$rows, $truncated] = tp_lookup_search($db, $table, $identifier);
-                    $searched = true;
-                } finally { $db->close(); }
-            }
+            [$db, $prefix] = tp_lookup_connection();
+            try {
+                $table = tp_lookup_sales_table($db, $prefix);
+                [$rows, $missing, $truncated] = tp_lookup_batch($identifiers, static fn(array $identifier): array => tp_lookup_search($db, $table, $identifier));
+                $searched = true;
+            } finally { $db->close(); }
         }
     } catch (Throwable $e) {
         error_log('Talia Consulta OS/Cuenta: ' . get_class($e) . ' · ' . $e->getMessage());
@@ -192,7 +243,7 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.27">
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.28">
     <script src="../assets/js/consulta_os_cuenta.js?v=1.0.27" defer></script>
 </head>
 <body>
@@ -200,15 +251,15 @@ if ($method === 'POST') {
     <header class="lookup-hero">
         <p class="lookup-kicker">TALIA PULSO · CONSULTA PÚBLICA</p>
         <h1>Consulta OS o Cuenta</h1>
-        <p>Consulta la información comercial de una orden de servicio o cuenta.</p>
+        <p>Consulta la información comercial de una o varias órdenes de servicio o cuentas.</p>
     </header>
     <section class="lookup-card" aria-labelledby="lookup-heading">
-        <h2 id="lookup-heading">Buscar registro</h2>
+        <h2 id="lookup-heading">Buscar registros</h2>
         <form method="post" autocomplete="off" class="lookup-form">
             <div class="lookup-field">
-                <label for="consulta">Orden de servicio o cuenta</label>
-                <input id="consulta" name="consulta" type="text" maxlength="43" required autocomplete="off" spellcheck="false" autocapitalize="off" value="<?=tp_lookup_h($input)?>" placeholder="Ej. OS-12345678 o 0123456789" aria-describedby="lookup-hint">
-                <p id="lookup-hint" class="lookup-hint">Ingresa el identificador completo. No se admiten búsquedas parciales.</p>
+                <label for="consulta">Órdenes de servicio o cuentas</label>
+                <textarea id="consulta" name="consulta" rows="4" maxlength="<?=TP_LOOKUP_MAX_INPUT?>" required autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="Ej. OS-12345678, 0123456789&#10;OS-87654321. 0987654321" aria-describedby="lookup-hint"><?=tp_lookup_h($input)?></textarea>
+                <p id="lookup-hint" class="lookup-hint">Ingresa hasta <?=TP_LOOKUP_MAX_IDENTIFIERS?> OS o cuentas completas, separadas por espacios, comas, puntos o saltos de línea. Puedes mezclar ambos tipos. No se admiten búsquedas parciales.</p>
             </div>
             <button type="submit">Buscar</button>
         </form>
@@ -219,10 +270,10 @@ if ($method === 'POST') {
     <?php if ($searched): ?>
     <section class="lookup-card lookup-results" aria-labelledby="results-heading">
         <div class="lookup-result-heading"><h2 id="results-heading">Resultados</h2><span class="lookup-count"><?=count($rows)?> <?=count($rows) === 1 ? 'coincidencia' : 'coincidencias'?></span></div>
-        <?php if (!$rows): ?>
-            <p class="lookup-message">No se encontraron coincidencias exactas para el identificador ingresado.</p>
-        <?php else: ?>
-            <?php if ($truncated): ?><p class="lookup-hint">Se muestran las 10 coincidencias más recientes. Si buscas una orden específica, utiliza su OS completa.</p><?php endif; ?>
+        <p class="lookup-hint"><?=count($identifiers)?> <?=count($identifiers) === 1 ? 'identificador consultado' : 'identificadores consultados'?>. Las coincidencias repetidas se muestran una sola vez.</p>
+        <?php if ($missing): ?><p class="lookup-message">Sin coincidencias: <?=tp_lookup_h(implode(', ', $missing))?></p><?php endif; ?>
+        <?php if ($truncated): ?><p class="lookup-hint">Se muestran las <?=TP_LOOKUP_MAX_RESULTS?> coincidencias más recientes por identificador para: <?=tp_lookup_h(implode(', ', $truncated))?>. Usa una OS completa para localizar una orden específica.</p><?php endif; ?>
+        <?php if ($rows): ?>
             <div class="lookup-table-wrap">
             <table class="lookup-table">
                 <thead><tr><?php foreach ($labels as $label): ?><th scope="col"><?=tp_lookup_h($label)?></th><?php endforeach; ?><th scope="col">Texto WhatsApp</th></tr></thead>
