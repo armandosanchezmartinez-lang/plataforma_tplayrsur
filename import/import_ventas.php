@@ -19,152 +19,228 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
         $mensaje = "Solo se permiten archivos .xlsx";
         $tipo_mensaje = "error";
     } else {
-        $ruta_temp = '../uploads/' . time() . '_' . $archivo['name'];
-        move_uploaded_file($archivo['tmp_name'], $ruta_temp);
+        $ruta_temp = '../uploads/' . time() . '_' . basename($archivo['name']);
 
-        if ($xlsx = SimpleXLSX::parse($ruta_temp)) {
+        if (!move_uploaded_file($archivo['tmp_name'], $ruta_temp)) {
+            $mensaje = "No fue posible guardar temporalmente el archivo.";
+            $tipo_mensaje = "error";
+        } elseif ($xlsx = SimpleXLSX::parse($ruta_temp)) {
             $filas = $xlsx->rows();
             $total = 0;
             $errores = 0;
+            $omitidos = 0;
 
             $v = function($val) {
-                return isset($val) && $val !== '' ? trim($val) : null;
+                return isset($val) && $val !== '' ? trim((string)$val) : null;
             };
 
             $fecha = function($val) {
-                if (empty($val)) return null;
+                if ($val === null || $val === '' || $val === '-') return null;
                 if (is_numeric($val)) {
                     $unix = ($val - 25569) * 86400;
-                    return date('Y-m-d', $unix);
+                    return gmdate('Y-m-d', (int)$unix);
                 }
                 $d = date_create($val);
                 return $d ? date_format($d, 'Y-m-d') : null;
             };
 
             $precio = function($val) {
-                if (empty($val)) return null;
-                return floatval(str_replace(['$', ',', ' '], '', $val));
+                if ($val === null || $val === '' || $val === '-') return null;
+                return floatval(str_replace(['$', ',', ' '], '', (string)$val));
             };
 
-            // Columnas del Excel:
-            // 0  Fecha de cierre
-            // 1  Id de Cuenta BRM
-            // 2  Canal de Venta
-            // 3  Subcanal
-            // 4  Jefe de Plaza
-            // 5  Jefe de Ventas
-            // 6  Distrital
-            // 7  Nombre de Empleado
-            // 8  Estatus Mesa de Control
-            // 9  Nombre del plan
-            // 10 Fecha activación
-            // 11 Precio Pronto Pago
-            // 12 Precio Lista
-            // 13 Total (Cargo único)
-            // 14 Cluster
-            // 15 Distrito
-            // 16 Forma de pago
-            // 17 Teléfono móvil
-            // 18 Plazo
-            // 19 Número de oportunidad
-            // 20 Folio de empleado
-            // 21 Estatus
-            // 22 Id OT GIM
-            // 23 CP
-            // 24 Calle
-            // 25 Número exterior
-            // 26 Número interior
-            // 27 Colonia
-            // 28 Delegación / Municipio
-            // 29 Ciudad
-            // 30 Estado
-            // 31 Código postal
-            // 32 Region
-            // 33 Zona
+            /* ============================================================
+               TALIA | IMPORTADOR DE VENTAS SALESFORCE
 
-            for ($i = 1; $i < count($filas); $i++) {
-                $f = $filas[$i];
+               Cambio 15-nov-2026:
+               Salesforce agregó la columna OrdenServicio__c.Name (OS)
+               inmediatamente después de Fecha de cierre.
 
-                if (empty(array_filter($f))) continue;
+               IMPORTANTE:
+               Ya NO se depende de posiciones fijas del Excel.
+               Las columnas se localizan por el encabezado Salesforce,
+               por lo que el importador acepta:
+                 - formato anterior (sin OS), dejando ventas.os = NULL
+                 - formato nuevo (con OS), guardando OS-XXXXXXXX
+               Así evitamos corrimientos si Salesforce agrega/mueve columnas.
+               ============================================================ */
 
-                $v_fecha_cierre     = $fecha($v($f[0]));
-                $v_id_cuenta_brm    = $v($f[1]);
-                $v_canal_venta      = $v($f[2]);
-                $v_subcanal         = $v($f[3]);
-                $v_jefe_plaza       = $v($f[4]);
-                $v_jefe_ventas      = $v($f[5]);
-                $v_distrital        = $v($f[6]);
-                $v_nombre_empleado  = $v($f[7]);
-                $v_estatus_mesa     = $v($f[8]);
-                $v_nombre_plan      = $v($f[9]);
-                $v_fecha_activacion = $fecha($v($f[10]));
-                $v_precio_pronto    = $precio($v($f[11]));
-                $v_precio_lista     = $precio($v($f[12]));
-                $v_total_cargo      = $precio($v($f[13]));
-                $v_cluster          = $v($f[14]);
-                $v_distrito         = $v($f[15]);
-                $v_forma_pago       = $v($f[16]);
-                $v_telefono         = $v($f[17]);
-                $v_plazo            = $v($f[18]);
-                $v_num_oportunidad  = $v($f[19]);
-                $v_folio_empleado   = $v($f[20]);
-                $v_estatus          = $v($f[21]);
-                $v_id_ot_gim        = $v($f[22]);
-                $v_cp               = $v($f[23]);
-                $v_calle            = $v($f[24]);
-                $v_num_exterior     = $v($f[25]);
-                $v_num_interior     = $v($f[26]);
-                $v_colonia          = $v($f[27]);
-                $v_municipio        = $v($f[28]);
-                $v_ciudad           = $v($f[29]);
-                $v_estado           = $v($f[30]);
-                $v_codigo_postal    = $v($f[31]);
-                $v_region           = $v($f[32]);
-                $v_zona             = $v($f[33]);
-                $v_archivo          = $archivo['name'];
+            if (empty($filas) || !isset($filas[0])) {
+                $mensaje = "El archivo no contiene encabezados ni registros.";
+                $tipo_mensaje = "error";
+            } else {
+                $encabezados = $filas[0];
 
-                $stmt = mysqli_prepare($conexion, "INSERT IGNORE INTO ventas (
-                    fecha_cierre, id_cuenta_brm, canal_venta, subcanal,
-                    jefe_plaza, jefe_ventas, distrital, nombre_empleado,
-                    estatus_mesa_control, nombre_plan, fecha_activacion,
-                    precio_pronto_pago, precio_lista, total_cargo_unico,
-                    cluster, distrito, forma_pago, telefono_movil, plazo,
-                    numero_oportunidad, folio_empleado, estatus, id_ot_gim,
-                    cp, calle, numero_exterior, numero_interior, colonia,
-                    municipio, ciudad, estado, codigo_postal, region, zona,
-                    archivo_origen
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                $buscarColumna = function(array $headers, string $fragmento) {
+                    foreach ($headers as $idx => $header) {
+                        if ($header !== null && stripos((string)$header, $fragmento) !== false) {
+                            return $idx;
+                        }
+                    }
+                    return null;
+                };
 
-                mysqli_stmt_bind_param($stmt, "sssssssssssdddsssssssssssssssssssss",
-                    $v_fecha_cierre, $v_id_cuenta_brm, $v_canal_venta, $v_subcanal,
-                    $v_jefe_plaza, $v_jefe_ventas, $v_distrital, $v_nombre_empleado,
-                    $v_estatus_mesa, $v_nombre_plan, $v_fecha_activacion,
-                    $v_precio_pronto, $v_precio_lista, $v_total_cargo,
-                    $v_cluster, $v_distrito, $v_forma_pago, $v_telefono, $v_plazo,
-                    $v_num_oportunidad, $v_folio_empleado, $v_estatus, $v_id_ot_gim,
-                    $v_cp, $v_calle, $v_num_exterior, $v_num_interior, $v_colonia,
-                    $v_municipio, $v_ciudad, $v_estado, $v_codigo_postal, $v_region,
-                    $v_zona, $v_archivo
-                );
+                $cols = [
+                    'fecha_cierre'        => $buscarColumna($encabezados, 'Oportunidad__c.CloseDate'),
+                    'os'                  => $buscarColumna($encabezados, 'OrdenServicio__c.Name'),
+                    'id_cuenta_brm'       => $buscarColumna($encabezados, 'IdCuentaBRM__c'),
+                    'canal_venta'         => $buscarColumna($encabezados, 'Canal_de_Venta__c'),
+                    'subcanal'            => $buscarColumna($encabezados, 'Oportunidad__c.Subcanal__c'),
+                    'jefe_plaza'          => $buscarColumna($encabezados, 'EmpleadoJefePlaza__c.Name'),
+                    'jefe_ventas'         => $buscarColumna($encabezados, 'EmpleadoJefeVentas__c.Name'),
+                    'distrital'           => $buscarColumna($encabezados, 'EmpleadoDistrital__c.Name'),
+                    'nombre_empleado'     => $buscarColumna($encabezados, 'Empleado__c.Name__lookup'),
+                    'estatus_mesa'        => $buscarColumna($encabezados, 'EstatusMC__c'),
+                    'nombre_plan'         => $buscarColumna($encabezados, 'NombrePlan__c'),
+                    'fecha_activacion'    => $buscarColumna($encabezados, 'Fecha_activacion__c'),
+                    'precio_pronto'       => $buscarColumna($encabezados, 'Precio_Pronto_Pago__c'),
+                    'precio_lista'        => $buscarColumna($encabezados, 'Precio_Lista__c'),
+                    'total_cargo'         => $buscarColumna($encabezados, 'PrecioCU_Total__c'),
+                    'cluster'             => $buscarColumna($encabezados, 'OrdenServicio__c.Cluster__c'),
+                    'distrito'            => $buscarColumna($encabezados, 'Distrito2__c'),
+                    'forma_pago'          => $buscarColumna($encabezados, 'forma_pago__c'),
+                    'telefono'            => $buscarColumna($encabezados, 'OrdenServicio__c.TelMovil__c'),
+                    'plazo'               => $buscarColumna($encabezados, 'Cotizacion__c.Plazo__c'),
+                    'num_oportunidad'     => $buscarColumna($encabezados, 'NumeroOportunidad__c'),
+                    'folio_empleado'      => $buscarColumna($encabezados, 'FolioEmpleado__c'),
+                    'estatus'             => $buscarColumna($encabezados, 'OrdenServicio__c.Estatus__c'),
+                    'id_ot_gim'           => $buscarColumna($encabezados, 'OrdenServicio__c.IdOtGIM__c'),
+                    'cp'                  => $buscarColumna($encabezados, 'Cot_SitioPlan__c.CP__c'),
+                    'calle'               => $buscarColumna($encabezados, 'Sitio__c.Calle__c'),
+                    'num_exterior'        => $buscarColumna($encabezados, 'NumeroExteriorEditable__c'),
+                    'num_interior'        => $buscarColumna($encabezados, 'NumeroInterior__c'),
+                    'colonia'             => $buscarColumna($encabezados, 'Sitio__c.Colonia__c'),
+                    'municipio'           => $buscarColumna($encabezados, 'DelegacionMunicipio__c'),
+                    'ciudad'              => $buscarColumna($encabezados, 'Sitio__c.Ciudad__c'),
+                    'estado'              => $buscarColumna($encabezados, 'Sitio__c.Estado__c'),
+                    'codigo_postal'       => $buscarColumna($encabezados, 'CodigoPostal__c'),
+                    'region'              => $buscarColumna($encabezados, 'Sitio__c.Region__c'),
+                    'zona'                => $buscarColumna($encabezados, 'Sitio__c.Zona__c')
+                ];
 
-                if (mysqli_stmt_execute($stmt)) {
-                    $total++;
-                } else {
-                    $errores++;
+                // Columnas mínimas para evitar importar un archivo desplazado/incompatible.
+                $requeridas = [
+                    'fecha_cierre', 'id_cuenta_brm', 'canal_venta', 'nombre_plan',
+                    'distrito', 'num_oportunidad', 'folio_empleado', 'region'
+                ];
+
+                $faltantes = [];
+                foreach ($requeridas as $campo) {
+                    if ($cols[$campo] === null) $faltantes[] = $campo;
                 }
-                mysqli_stmt_close($stmt);
+
+                if (!empty($faltantes)) {
+                    $mensaje = "Estructura de Salesforce no reconocida. Faltan columnas: " . implode(', ', $faltantes);
+                    $tipo_mensaje = "error";
+                } else {
+                    $leer = function(array $fila, $idx) use ($v) {
+                        return ($idx !== null && array_key_exists($idx, $fila)) ? $v($fila[$idx]) : null;
+                    };
+
+                    $sql = "INSERT IGNORE INTO ventas (
+                        fecha_cierre, os, id_cuenta_brm, canal_venta, subcanal,
+                        jefe_plaza, jefe_ventas, distrital, nombre_empleado,
+                        estatus_mesa_control, nombre_plan, fecha_activacion,
+                        precio_pronto_pago, precio_lista, total_cargo_unico,
+                        cluster, distrito, forma_pago, telefono_movil, plazo,
+                        numero_oportunidad, folio_empleado, estatus, id_ot_gim,
+                        cp, calle, numero_exterior, numero_interior, colonia,
+                        municipio, ciudad, estado, codigo_postal, region, zona,
+                        archivo_origen
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+                    $stmt = mysqli_prepare($conexion, $sql);
+
+                    if (!$stmt) {
+                        $mensaje = "Error al preparar INSERT: " . mysqli_error($conexion);
+                        $tipo_mensaje = "error";
+                    } else {
+                        for ($i = 1; $i < count($filas); $i++) {
+                            $f = $filas[$i];
+                            if (empty(array_filter($f, function($x) { return $x !== null && $x !== ''; }))) continue;
+
+                            $v_fecha_cierre      = $fecha($leer($f, $cols['fecha_cierre']));
+                            $v_os                = $leer($f, $cols['os']);
+                            $v_id_cuenta_brm     = $leer($f, $cols['id_cuenta_brm']);
+                            $v_canal_venta       = $leer($f, $cols['canal_venta']);
+                            $v_subcanal          = $leer($f, $cols['subcanal']);
+                            $v_jefe_plaza        = $leer($f, $cols['jefe_plaza']);
+                            $v_jefe_ventas       = $leer($f, $cols['jefe_ventas']);
+                            $v_distrital         = $leer($f, $cols['distrital']);
+                            $v_nombre_empleado   = $leer($f, $cols['nombre_empleado']);
+                            $v_estatus_mesa      = $leer($f, $cols['estatus_mesa']);
+                            $v_nombre_plan       = $leer($f, $cols['nombre_plan']);
+                            $v_fecha_activacion  = $fecha($leer($f, $cols['fecha_activacion']));
+                            $v_precio_pronto     = $precio($leer($f, $cols['precio_pronto']));
+                            $v_precio_lista      = $precio($leer($f, $cols['precio_lista']));
+                            $v_total_cargo       = $precio($leer($f, $cols['total_cargo']));
+                            $v_cluster           = $leer($f, $cols['cluster']);
+                            $v_distrito          = $leer($f, $cols['distrito']);
+                            $v_forma_pago        = $leer($f, $cols['forma_pago']);
+                            $v_telefono          = $leer($f, $cols['telefono']);
+                            $v_plazo             = $leer($f, $cols['plazo']);
+                            $v_num_oportunidad   = $leer($f, $cols['num_oportunidad']);
+                            $v_folio_empleado    = $leer($f, $cols['folio_empleado']);
+                            $v_estatus           = $leer($f, $cols['estatus']);
+                            $v_id_ot_gim         = $leer($f, $cols['id_ot_gim']);
+                            $v_cp                = $leer($f, $cols['cp']);
+                            $v_calle             = $leer($f, $cols['calle']);
+                            $v_num_exterior      = $leer($f, $cols['num_exterior']);
+                            $v_num_interior      = $leer($f, $cols['num_interior']);
+                            $v_colonia           = $leer($f, $cols['colonia']);
+                            $v_municipio         = $leer($f, $cols['municipio']);
+                            $v_ciudad            = $leer($f, $cols['ciudad']);
+                            $v_estado            = $leer($f, $cols['estado']);
+                            $v_codigo_postal     = $leer($f, $cols['codigo_postal']);
+                            $v_region            = $leer($f, $cols['region']);
+                            $v_zona              = $leer($f, $cols['zona']);
+                            $v_archivo           = $archivo['name'];
+
+                            // 36 parámetros. Se envían como string; MySQL convierte DECIMAL/DATE según la columna destino.
+                            $types = str_repeat('s', 36);
+                            mysqli_stmt_bind_param($stmt, $types,
+                                $v_fecha_cierre, $v_os, $v_id_cuenta_brm, $v_canal_venta, $v_subcanal,
+                                $v_jefe_plaza, $v_jefe_ventas, $v_distrital, $v_nombre_empleado,
+                                $v_estatus_mesa, $v_nombre_plan, $v_fecha_activacion,
+                                $v_precio_pronto, $v_precio_lista, $v_total_cargo,
+                                $v_cluster, $v_distrito, $v_forma_pago, $v_telefono, $v_plazo,
+                                $v_num_oportunidad, $v_folio_empleado, $v_estatus, $v_id_ot_gim,
+                                $v_cp, $v_calle, $v_num_exterior, $v_num_interior, $v_colonia,
+                                $v_municipio, $v_ciudad, $v_estado, $v_codigo_postal, $v_region,
+                                $v_zona, $v_archivo
+                            );
+
+                            if (mysqli_stmt_execute($stmt)) {
+                                if (mysqli_stmt_affected_rows($stmt) > 0) {
+                                    $total++;
+                                } else {
+                                    $omitidos++;
+                                }
+                            } else {
+                                $errores++;
+                            }
+                        }
+
+                        mysqli_stmt_close($stmt);
+
+                        $tipo_log = 'ventas';
+                        $v_archivo = $archivo['name'];
+                        $log = mysqli_prepare($conexion, "INSERT INTO importaciones_log (tipo, archivo, registros_importados, usuario) VALUES (?,?,?,?)");
+                        if ($log) {
+                            mysqli_stmt_bind_param($log, "ssis", $tipo_log, $v_archivo, $total, $_SESSION['usuario']);
+                            mysqli_stmt_execute($log);
+                            mysqli_stmt_close($log);
+                        }
+
+                        $mensaje = "✅ Importación exitosa: $total registros importados. Omitidos/duplicados: $omitidos. Errores: $errores";
+                        $tipo_mensaje = "exito";
+                    }
+                }
             }
 
-            $tipo_log = 'ventas';
-            $log = mysqli_prepare($conexion, "INSERT INTO importaciones_log (tipo, archivo, registros_importados, usuario) VALUES (?,?,?,?)");
-            mysqli_stmt_bind_param($log, "ssis", $tipo_log, $v_archivo, $total, $_SESSION['usuario']);
-            mysqli_stmt_execute($log);
-            mysqli_stmt_close($log);
-
-            unlink($ruta_temp);
-            $mensaje = "✅ Importación exitosa: $total registros importados. Errores: $errores";
-            $tipo_mensaje = "exito";
+            if (file_exists($ruta_temp)) unlink($ruta_temp);
         } else {
+            if (file_exists($ruta_temp)) unlink($ruta_temp);
             $mensaje = "Error al leer el archivo Excel: " . SimpleXLSX::parseError();
             $tipo_mensaje = "error";
         }
@@ -195,10 +271,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
 <body>
 <div class="card">
     <h2>📥 Importar Ventas</h2>
-    <p class="sub">Sube tu archivo Excel (.xlsx) con el reporte de ventas</p>
+    <p class="sub">Sube tu archivo Excel (.xlsx) con el reporte de ventas Salesforce</p>
 
     <?php if ($mensaje): ?>
-        <div class="<?= $tipo_mensaje ?>"><?= $mensaje ?></div>
+        <div class="<?= $tipo_mensaje ?>"><?= htmlspecialchars($mensaje, ENT_QUOTES, 'UTF-8') ?></div>
     <?php endif; ?>
 
     <form method="POST" enctype="multipart/form-data">
