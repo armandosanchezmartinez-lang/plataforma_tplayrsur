@@ -49,6 +49,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                 return floatval(str_replace(['$', ',', ' '], '', (string)$val));
             };
 
+            // Normalización utilizada para construir el fingerprint de una venta.
+            $normalizarFingerprint = function($val) {
+                if ($val === null || $val === '') return '';
+                return mb_strtoupper(trim((string)$val), 'UTF-8');
+            };
+
+            $precioFingerprint = function($val) {
+                if ($val === null || $val === '') return '';
+                // 760.00 -> 760 | 760.50 -> 760.5
+                return rtrim(rtrim(number_format((float)$val, 2, '.', ''), '0'), '.');
+            };
+
             /* ============================================================
                TALIA | IMPORTADOR DE VENTAS SALESFORCE
 
@@ -62,7 +74,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                por lo que el importador acepta:
                  - formato anterior (sin OS), dejando ventas.os = NULL
                  - formato nuevo (con OS), guardando OS-XXXXXXXX
-               Así evitamos corrimientos si Salesforce agrega/mueve columnas.
+
+               Regla de duplicidad de VENTAS:
+               - numero_oportunidad YA NO es UNIQUE.
+               - Una misma oportunidad puede representar más de un evento de venta.
+               - Sólo se omite una venta EXACTAMENTE repetida según fingerprint:
+                   fecha_cierre + numero_oportunidad + OS + nombre_plan + precio_lista
+               - Esto permite, por ejemplo, una venta sin OS y otra con OS para
+                 la misma oportunidad, pero evita duplicar todo el archivo si se
+                 vuelve a importar por error.
                ============================================================ */
 
             if (empty($filas) || !isset($filas[0])) {
@@ -146,8 +166,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                         numero_oportunidad, folio_empleado, estatus, id_ot_gim,
                         cp, calle, numero_exterior, numero_interior, colonia,
                         municipio, ciudad, estado, codigo_postal, region, zona,
-                        archivo_origen
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                        archivo_origen, fingerprint
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
                     $stmt = mysqli_prepare($conexion, $sql);
 
@@ -196,8 +216,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                             $v_zona              = $leer($f, $cols['zona']);
                             $v_archivo           = $archivo['name'];
 
-                            // 36 parámetros. Se envían como string; MySQL convierte DECIMAL/DATE según la columna destino.
-                            $types = str_repeat('s', 36);
+                            // Fingerprint de evento de venta.
+                            // Permite misma oportunidad si cambia OS, plan o precio,
+                            // pero bloquea la misma venta exacta al reimportar.
+                            $v_fingerprint = hash('sha256', implode('|', [
+                                $v_fecha_cierre ?? '',
+                                $normalizarFingerprint($v_num_oportunidad),
+                                $normalizarFingerprint($v_os),
+                                $normalizarFingerprint($v_nombre_plan),
+                                $precioFingerprint($v_precio_lista)
+                            ]));
+
+                            // 37 parámetros. Se envían como string; MySQL convierte DECIMAL/DATE según la columna destino.
+                            $types = str_repeat('s', 37);
                             mysqli_stmt_bind_param($stmt, $types,
                                 $v_fecha_cierre, $v_os, $v_id_cuenta_brm, $v_canal_venta, $v_subcanal,
                                 $v_jefe_plaza, $v_jefe_ventas, $v_distrital, $v_nombre_empleado,
@@ -207,7 +238,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                                 $v_num_oportunidad, $v_folio_empleado, $v_estatus, $v_id_ot_gim,
                                 $v_cp, $v_calle, $v_num_exterior, $v_num_interior, $v_colonia,
                                 $v_municipio, $v_ciudad, $v_estado, $v_codigo_postal, $v_region,
-                                $v_zona, $v_archivo
+                                $v_zona, $v_archivo, $v_fingerprint
                             );
 
                             if (mysqli_stmt_execute($stmt)) {
@@ -232,7 +263,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['archivo'])) {
                             mysqli_stmt_close($log);
                         }
 
-                        $mensaje = "✅ Importación exitosa: $total registros importados. Omitidos/duplicados: $omitidos. Errores: $errores";
+                        $mensaje = "✅ Importación exitosa: $total registros importados. Duplicados exactos omitidos: $omitidos. Errores: $errores";
                         $tipo_mensaje = "exito";
                     }
                 }
