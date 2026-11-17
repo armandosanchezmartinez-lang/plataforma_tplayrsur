@@ -4017,29 +4017,79 @@ function tx_build_vendedores_regional_hc_dashboard(
             ];
         }
     }
+    // Índice secundario por identidad HIC del vendedor. La llave estructural
+    // Líder|Coach|Vendedor sigue siendo la primera opción; este índice SOLO se usa
+    // cuando una promoción/movimiento jerárquico cambió Líder o Coach entre la
+    // certificación del evento y la fotografía HC del corte.
+    $vendPorPersona=[];
+    foreach ($vend as $claveVend=>$vendedorFoto) {
+        $personaFoto=(string)($vendedorFoto['folio']??'');
+        if ($personaFoto!=='') $vendPorPersona[$personaFoto][]=$claveVend;
+    }
+    $resolverClaveVendedor=static function(string $liderId,string $coachId,string $persona) use (&$vend,$vendPorPersona): ?string {
+        $exacta=$liderId.'|'.$coachId.'|'.$persona;
+        if (isset($vend[$exacta])) return $exacta;
+        if ($persona==='' || empty($vendPorPersona[$persona]) || count($vendPorPersona[$persona])!==1) return null;
+        return (string)$vendPorPersona[$persona][0];
+    };
+
     $lunes=(new DateTimeImmutable($hasta))->modify('monday this week');
     $weeks=[];
     for($i=5;$i>=0;--$i){$w=$lunes->modify('-'.$i.' weeks');$weeks[$w->format('oW')]=count($weeks);}
     $fueraFoto=0;
+    $fallbackIdentidadHistoria=0;
+    $fallbackIdentidadPeriodo=0;
+    $fallbackIdentidadArpu=0;
     foreach ($historia as $ev) {
         $lid=(string)($ev['lider_id']??'');
         $c=(string)($ev['coach_id']??'');
         $p=(string)($ev['vendedor_id']??'');
-        $key=$lid.'|'.$c.'|'.$p;
-        if (!isset($vend[$key])) {
+        $exacta=$lid.'|'.$c.'|'.$p;
+        $key=$resolverClaveVendedor($lid,$c,$p);
+        if ($key===null) {
             if (($ev['fecha']??'') >= $desde && ($ev['fecha']??'') <= $hasta) $fueraFoto++;
             continue;
         }
+        if ($key!==$exacta) ++$fallbackIdentidadHistoria;
         $f=(string)($ev['fecha']??'');
         $dt=new DateTimeImmutable($f);
         $sem=$dt->format('oW');
         if (isset($weeks[$sem])) $vend[$key]['spark'][$weeks[$sem]]++;
     }
     foreach ($cuentas as $ev) {
-        $key=(string)($ev['lider_id']??'').'|'.(string)($ev['coach_id']??'').'|'.(string)($ev['vendedor_id']??'');
-        if (!isset($vend[$key])) continue;
+        $lid=(string)($ev['lider_id']??'');
+        $c=(string)($ev['coach_id']??'');
+        $p=(string)($ev['vendedor_id']??'');
+        $exacta=$lid.'|'.$c.'|'.$p;
+        $key=$resolverClaveVendedor($lid,$c,$p);
+        if ($key===null) continue;
+        if ($key!==$exacta) ++$fallbackIdentidadPeriodo;
         $vend[$key]['instalaciones']++;
     }
+
+    // ARPU usa el mismo fallback de identidad para que una corrección de INS no deje
+    // el desempate comercial en cero. Se agregan ingreso neto y cuentas válidas, no
+    // promedios simples, cuando Motor Comercial entrega esos acumuladores.
+    $arpuPorClave=[];
+    foreach ($arpu as $grupo=>$com) {
+        $partes=explode('|',(string)$grupo);
+        $personaGrupo=(string)array_pop($partes);
+        $coachGrupo=(string)array_pop($partes);
+        $liderGrupo=implode('|',$partes);
+        $keyArpu=$resolverClaveVendedor($liderGrupo,$coachGrupo,$personaGrupo);
+        if ($keyArpu===null) continue;
+        if ($keyArpu!==(string)$grupo) ++$fallbackIdentidadArpu;
+        if (!isset($arpuPorClave[$keyArpu])) $arpuPorClave[$keyArpu]=['ingreso'=>0.0,'cuentas'=>0];
+        if (array_key_exists('arpu_ingreso_neto',$com) && array_key_exists('arpu_cuentas',$com)) {
+            $arpuPorClave[$keyArpu]['ingreso']+=(float)($com['arpu_ingreso_neto']??0);
+            $arpuPorClave[$keyArpu]['cuentas']+=(int)($com['arpu_cuentas']??0);
+        } else {
+            $cuentasArpu=(int)($com['arpu_cuentas']??($com['total']??0));
+            $arpuPorClave[$keyArpu]['ingreso']+=(float)($com['arpu']??0)*$cuentasArpu;
+            $arpuPorClave[$keyArpu]['cuentas']+=$cuentasArpu;
+        }
+    }
+
     foreach ($vend as $key=>&$v) {
         $p=RankingAtribucionServiceV06::productividadVendedor((int)$v['instalaciones'],$v['_seat']);
         $v['jornadas_operativas']=$p['jornadas_operativas'];
@@ -4049,8 +4099,9 @@ function tx_build_vendedores_regional_hc_dashboard(
         // excluye, 40% exacto NO excluye. Fuente exclusiva: hc_standby.
         $v['pct_standby']=(float)($p['disponibilidad']['pct_standby']??0.0);
         $v['cumple_standby']=(bool)($p['disponibilidad']['elegible_hc_sin_ins']??false);
-        $com=$arpu[$key]??[];
-        $v['arpu']=round((float)($com['arpu']??0),2); // Desempate exacto; la tabla sigue mostrando pesos enteros.
+        $arpuAcum=$arpuPorClave[$key]??null;
+        $v['arpu']=($arpuAcum!==null && (int)$arpuAcum['cuentas']>0)
+            ? round((float)$arpuAcum['ingreso']/(int)$arpuAcum['cuentas'],2) : 0.0;
         unset($v['_seat']);
     }
     unset($v);
@@ -4104,6 +4155,9 @@ function tx_build_vendedores_regional_hc_dashboard(
         'excluidos_standby'=>$excluidosStandby, // aplica exclusivamente al BOTTOM
         'excluidos_sin_jornadas'=>$excluidosSinJornadas,
         'fuera_foto'=>$fueraFoto,
+        'fallback_identidad_historia'=>$fallbackIdentidadHistoria,
+        'fallback_identidad_periodo'=>$fallbackIdentidadPeriodo,
+        'fallback_identidad_arpu'=>$fallbackIdentidadArpu,
     ]];
 }
 
@@ -6880,6 +6934,34 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <div class="tx-historical-scroll<?= $periodo === 'semanal' ? ' tx-weekly-scroll' : '' ?>" id="txArpuScroll"><div class="chart-wrap tx-weekly-arpu-inner"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cArpuHist"></canvas></div></div>
         </div>
 
+        <?php if ($mostrar_cumplimiento_canal): ?>
+        <div class="chart-card tx-mix-previous-card">
+            <div class="chart-title">Mix 2P y 3P — <?= $tx_yoy_enabled ? 'Año anterior' : 'Período anterior' ?></div>
+            <div class="tx-compare-subtitle"><?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?></div>
+            <?php if ($tx_mix_previo === null || array_sum($tx_mix_previo)===0 || ($tx_stg_aplicable && !$tx_stg_ok)): ?>
+                <div class="tx-compare-empty"><?= $tx_mix_previo_error!==null ? 'No se pudo verificar el Mix del período anterior.' : 'Sin información comparable clasificada en el Motor Comercial.' ?></div>
+            <?php else:
+                $tx_mix_previo_total=array_sum($tx_mix_previo);
+                $tx_mix_actual_total=(int)$inst_2p+(int)$inst_3p+(int)($tx_stg_mix_sin_clasificar??0);
+                $tx_mix_prev_pct2=100.0*(int)$tx_mix_previo['2P']/$tx_mix_previo_total;
+                $tx_mix_prev_pct3=100.0*(int)$tx_mix_previo['3P']/$tx_mix_previo_total;
+                $tx_mix_actual_pct2=$tx_mix_actual_total>0 ? 100.0*$inst_2p/$tx_mix_actual_total : null;
+                $tx_mix_actual_pct3=$tx_mix_actual_total>0 ? 100.0*$inst_3p/$tx_mix_actual_total : null;
+            ?>
+                <div class="tx-mix-prev-summary"><strong><?= number_format($tx_mix_previo_total) ?> INS</strong>
+                    <span>2P: <?= number_format($tx_mix_previo['2P']) ?></span>
+                    <span>3P: <?= number_format($tx_mix_previo['3P']) ?></span>
+                    <?php if ($tx_mix_previo['Sin clasificar']>0): ?><span>Sin clasificar: <?= number_format($tx_mix_previo['Sin clasificar']) ?></span><?php endif; ?>
+                </div>
+                <div class="chart-wrap"><canvas id="cInstMixPrev"></canvas></div>
+                <div class="tx-mix-prev-change">
+                    Cambio vs actual: 2P <?= $tx_mix_actual_pct2===null?'N/D':sprintf('%+.1f pp',$tx_mix_actual_pct2-$tx_mix_prev_pct2) ?>
+                    · 3P <?= $tx_mix_actual_pct3===null?'N/D':sprintf('%+.1f pp',$tx_mix_actual_pct3-$tx_mix_prev_pct3) ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+
         <div class="chart-card">
             <div class="chart-title">Mix 2P y 3P — Instalaciones<?= ($periodo === 'semanal' ? ' · Semana seleccionada' : (($tx_dashboard_cruza_mes || $tx_evo_daily_custom) ? ' · Rango seleccionado' : '')) ?></div>
             <?php if ($tx_stg_aplicable): ?>
@@ -6912,33 +6994,6 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
             <div class="chart-wrap"<?= ($tx_stg_aplicable && !$tx_stg_ok) ? ' style="display:none"' : '' ?>><canvas id="cInstMix"></canvas></div>
         </div>
 
-        <?php if ($mostrar_cumplimiento_canal): ?>
-        <div class="chart-card tx-mix-previous-card">
-            <div class="chart-title">Mix 2P y 3P — <?= $tx_yoy_enabled ? 'Año anterior' : 'Período anterior' ?></div>
-            <div class="tx-compare-subtitle"><?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?></div>
-            <?php if ($tx_mix_previo === null || array_sum($tx_mix_previo)===0 || ($tx_stg_aplicable && !$tx_stg_ok)): ?>
-                <div class="tx-compare-empty"><?= $tx_mix_previo_error!==null ? 'No se pudo verificar el Mix del período anterior.' : 'Sin información comparable clasificada en el Motor Comercial.' ?></div>
-            <?php else:
-                $tx_mix_previo_total=array_sum($tx_mix_previo);
-                $tx_mix_actual_total=(int)$inst_2p+(int)$inst_3p+(int)($tx_stg_mix_sin_clasificar??0);
-                $tx_mix_prev_pct2=100.0*(int)$tx_mix_previo['2P']/$tx_mix_previo_total;
-                $tx_mix_prev_pct3=100.0*(int)$tx_mix_previo['3P']/$tx_mix_previo_total;
-                $tx_mix_actual_pct2=$tx_mix_actual_total>0 ? 100.0*$inst_2p/$tx_mix_actual_total : null;
-                $tx_mix_actual_pct3=$tx_mix_actual_total>0 ? 100.0*$inst_3p/$tx_mix_actual_total : null;
-            ?>
-                <div class="tx-mix-prev-summary"><strong><?= number_format($tx_mix_previo_total) ?> INS</strong>
-                    <span>2P: <?= number_format($tx_mix_previo['2P']) ?></span>
-                    <span>3P: <?= number_format($tx_mix_previo['3P']) ?></span>
-                    <?php if ($tx_mix_previo['Sin clasificar']>0): ?><span>Sin clasificar: <?= number_format($tx_mix_previo['Sin clasificar']) ?></span><?php endif; ?>
-                </div>
-                <div class="chart-wrap"><canvas id="cInstMixPrev"></canvas></div>
-                <div class="tx-mix-prev-change">
-                    Cambio vs actual: 2P <?= $tx_mix_actual_pct2===null?'N/D':sprintf('%+.1f pp',$tx_mix_actual_pct2-$tx_mix_prev_pct2) ?>
-                    · 3P <?= $tx_mix_actual_pct3===null?'N/D':sprintf('%+.1f pp',$tx_mix_actual_pct3-$tx_mix_prev_pct3) ?>
-                </div>
-            <?php endif; ?>
-        </div>
-        <?php endif; ?>
 
     </div>
 
