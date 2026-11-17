@@ -3778,10 +3778,14 @@ function tx_coaches_foto_motor_hc_staging(RankingAtribucionServiceV06 $motor, st
         $lider=(string)$c['lider_id'];
         $id=(string)$c['id'];
         $d=explode('|',$lider,2)[0];
-        $nombre=(string)$c['nombre'];
-        if ($nombre==='' || $nombre==='VACANTE') continue;
+        $nombre=trim((string)($c['nombre']??''));
+        // Una plaza Coach VACANTE sigue siendo una estructura válida si conserva
+        // vendedores/eventos certificados. No descartarla: Ranking Productividad
+        // la representa como "PLAZA {id_posicion}".
+        if ($id==='') continue;
+        $coachLabel=($nombre==='' || strtoupper($nombre)==='VACANTE') ? 'PLAZA '.$id : $nombre;
         $coaches[$d.'|'.$id]=[
-            'id_posicion'=>$id,'coach'=>$nombre,'distrito'=>$d,
+            'id_posicion'=>$id,'coach'=>$coachLabel,'distrito'=>$d,
             'lider'=>(string)($catalogo[$lider]['nombre']??'VACANTE'),'lider_id'=>$lider,
             'hc_activo'=>0,'jornadas_operativas'=>0,'dias_standby'=>0,
             'antiguedad_meses'=>null,'antiguedad_con_fecha'=>0,'antiguedad_ocupados'=>0,
@@ -3997,7 +4001,10 @@ function tx_build_vendedores_regional_hc_dashboard(
         $coachPos=(string)array_pop($liderCoach);
         $liderId=implode('|',$liderCoach);
         $d=explode('|',$liderId,2)[0];
-        $coachNombre=(string)($foto['coaches'][$claveCoach]['nombre']??'');
+        $coachNombre=trim((string)($foto['coaches'][$claveCoach]['nombre']??''));
+        // Paridad visual con Ranking: si la posición Coach está vacante pero la
+        // estructura conserva vendedores, mostrar la plaza en lugar de "VACANTE".
+        if ($coachNombre==='' || strtoupper($coachNombre)==='VACANTE') $coachNombre='PLAZA '.$coachPos;
         foreach ($plazas as $seat) {
             if (!empty($seat['vacante']) || !empty($seat['es_vacante_status'])) continue;
             $persona=(string)($seat['persona']??'');
