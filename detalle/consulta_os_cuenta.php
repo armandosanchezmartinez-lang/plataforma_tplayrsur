@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.28
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.29
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -197,6 +197,13 @@ function tp_lookup_whatsapp(array $row, array $labels): string {
     return implode("\n", $lines);
 }
 
+/** Compose a single WhatsApp message from all displayed, deduplicated matches. */
+function tp_lookup_whatsapp_all(array $rows, array $labels): string {
+    $messages = [];
+    foreach ($rows as $row) $messages[] = tp_lookup_whatsapp($row, $labels);
+    return implode("\n\n", $messages);
+}
+
 $labels = ['Orden de servicio', 'Cuenta', 'Canal de Venta', 'Vendedor', 'Coach', 'Lider', 'Director', 'Distrito'];
 $rows = []; $error = ''; $searched = false; $truncated = []; $missing = []; $input = ''; $identifiers = [];
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -243,7 +250,7 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.28">
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.29">
     <script src="../assets/js/consulta_os_cuenta.js?v=1.0.27" defer></script>
 </head>
 <body>
@@ -274,6 +281,17 @@ if ($method === 'POST') {
         <?php if ($missing): ?><p class="lookup-message">Sin coincidencias: <?=tp_lookup_h(implode(', ', $missing))?></p><?php endif; ?>
         <?php if ($truncated): ?><p class="lookup-hint">Se muestran las <?=TP_LOOKUP_MAX_RESULTS?> coincidencias más recientes por identificador para: <?=tp_lookup_h(implode(', ', $truncated))?>. Usa una OS completa para localizar una orden específica.</p><?php endif; ?>
         <?php if ($rows): ?>
+            <div class="lookup-copy-all-panel" aria-labelledby="lookup-copy-all-heading">
+                <div class="lookup-copy-all-description">
+                    <h3 id="lookup-copy-all-heading">Texto WhatsApp de todas las coincidencias</h3>
+                    <p>Copia los datos de las <?=count($rows)?> coincidencias en un solo mensaje, separados por una línea en blanco.</p>
+                </div>
+                <textarea id="lookup-whatsapp-todos" readonly rows="7" aria-label="Texto WhatsApp conjunto de todas las coincidencias"><?=tp_lookup_h(tp_lookup_whatsapp_all($rows, $labels))?></textarea>
+                <div class="lookup-copy-all-actions">
+                    <button type="button" class="lookup-copy lookup-copy-all-button" data-copy-target="lookup-whatsapp-todos">Copiar todas las coincidencias</button>
+                    <span class="lookup-copy-status" role="status" aria-live="polite"></span>
+                </div>
+            </div>
             <div class="lookup-table-wrap">
             <table class="lookup-table">
                 <thead><tr><?php foreach ($labels as $label): ?><th scope="col"><?=tp_lookup_h($label)?></th><?php endforeach; ?><th scope="col">Texto WhatsApp</th></tr></thead>
