@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.29
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.30
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -71,7 +71,12 @@ function tp_lookup_batch(array $identifiers, callable $search): array {
             $key = 'id:' . (string)$row[8];
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
-            $rows[] = array_slice($row, 0, 8);
+            $public = array_slice($row, 0, 8);
+            // Contexto interno para atribución HC; nunca se imprime directamente.
+            $public['_sale_id'] = (string)$row[8];
+            $public['_folio'] = (string)($row[9] ?? '');
+            $public['_fecha_cierre'] = (string)($row[10] ?? '');
+            $rows[] = $public;
         }
     }
     return [$rows, $missing, $truncated];
@@ -150,7 +155,7 @@ function tp_lookup_sales_table(mysqli $db, string $prefix): string {
     $available = [];
     while ($column = $columns->fetch_assoc()) $available[strtolower((string)$column['Field'])] = true;
     $columns->free();
-    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','ciudad','fecha_cierre','id'] as $required) {
+    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','ciudad','fecha_cierre','folio_empleado','id'] as $required) {
         if (!isset($available[$required])) throw new RuntimeException('Falta columna ' . $required . ' en tabla de ventas.');
     }
     return $table;
@@ -161,7 +166,7 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
     $prefixed = 'OS-' . $digits;
     // Exact equality on stored identifiers; do not cast to numbers or strip zeros.
     $where = $identifier['osOnly'] ? '`os` IN (?, ?)' : '(`os` IN (?, ?) OR `id_cuenta_brm` = ?)';
-    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `ciudad`, `id`'
+    $sql = 'SELECT `os`, `id_cuenta_brm`, `canal_venta`, `nombre_empleado`, `distrital`, `jefe_ventas`, `jefe_plaza`, `ciudad`, `id`, `folio_empleado`, `fecha_cierre`'
         . ' FROM `' . $table . '` WHERE ' . $where
         . ' ORDER BY `fecha_cierre` DESC, `id` DESC LIMIT ' . (TP_LOOKUP_MAX_RESULTS + 1);
     $stmt = $db->prepare($sql);
@@ -169,14 +174,199 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
         if ($identifier['osOnly']) $stmt->bind_param('ss', $digits, $prefixed);
         else $stmt->bind_param('sss', $digits, $prefixed, $digits);
         $stmt->execute();
-        $stmt->bind_result($os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id);
+        $stmt->bind_result($os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id, $folio, $closeDate);
         $rows = [];
         while ($stmt->fetch()) {
-            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id];
+            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id, $folio, $closeDate];
         }
         $truncated = count($rows) > TP_LOOKUP_MAX_RESULTS;
         return [array_slice($rows, 0, TP_LOOKUP_MAX_RESULTS), $truncated];
     } finally { $stmt->close(); }
+}
+
+/** The public page uses its own system connection without modifying conexionTalia.php. */
+function tp_lookup_system_connection(): mysqli {
+    $path = __DIR__ . '/../conexion.php';
+    if (!is_file($path)) throw new RuntimeException('Falta conexion.php del sistema.');
+    $conexion = null;
+    $level = ob_get_level();
+    ob_start();
+    try {
+        require $path;
+        $output = (string)ob_get_contents();
+    } finally {
+        while (ob_get_level() > $level) ob_end_clean();
+    }
+    if (trim($output) !== '' || !($conexion instanceof mysqli)) {
+        throw new RuntimeException('Conexión del sistema inválida.');
+    }
+    $conexion->set_charset('utf8mb4');
+    return $conexion;
+}
+
+/** All names are resolved from one certified HC photograph, never Salesforce labels. */
+function tp_lookup_hc_position(array $photoRows, string $district, string $position): ?array {
+    if ($position === '') return null;
+    $found = [];
+    foreach ($photoRows as $row) {
+        if (RankingAtribucionServiceV06::normalizarDistrito((string)($row['distrito'] ?? '')) !== $district) continue;
+        if (trim((string)($row['id_posicion'] ?? '')) !== $position) continue;
+        $found[] = $row;
+    }
+    return count($found) === 1 ? $found[0] : null;
+}
+function tp_lookup_hc_name(?array $row): string {
+    $name = trim((string)($row['nombre_colaborador'] ?? ''));
+    return $name !== '' && $name !== '-' ? $name : 'No identificado en HC';
+}
+
+/** Project the exact role names onto the requested eight presentation columns. */
+function tp_lookup_hc_project(array $row, array $resolution, array $photoRows): array {
+    $district = (string)($resolution['lider_id'] ?? '');
+    $district = explode('|', $district, 2)[0] ?? '';
+    $coachId = trim((string)($resolution['coach_id'] ?? ''));
+    $leaderId = trim((string)($resolution['lider_posicion'] ?? ''));
+    $coach = tp_lookup_hc_position($photoRows, $district, $coachId);
+    $leader = tp_lookup_hc_position($photoRows, $district, $leaderId);
+    $directorId = trim((string)($leader['posicion_lr'] ?? ''));
+    $director = tp_lookup_hc_position($photoRows, $district, $directorId);
+
+    $sellerName = trim((string)($resolution['vendedor_nombre'] ?? ''));
+    // Motores HC anteriores a v0.6.8 no exponen vendedor_nombre: solo en ese
+    // caso resolver por el folio certificado dentro de la misma fotografía.
+    if ($sellerName === '') {
+        $sellerFolios = array_filter(array_map('strval', [
+            $resolution['vendedor_folio_original'] ?? '',
+            $resolution['vendedor_id'] ?? '',
+        ]), static fn($folio) => $folio !== '');
+        $sellerNames = [];
+        foreach ($photoRows as $candidate) {
+            if (RankingAtribucionServiceV06::normalizarDistrito((string)($candidate['distrito'] ?? '')) !== $district) continue;
+            if (!in_array(trim((string)($candidate['numero_talento_gs'] ?? '')), $sellerFolios, true)) continue;
+            $name = trim((string)($candidate['nombre_colaborador'] ?? ''));
+            if ($name !== '' && $name !== '-' && strcasecmp($name,'VACANTE')!==0) $sellerNames[$name] = true;
+        }
+        if (count($sellerNames) === 1) $sellerName = (string)array_key_first($sellerNames);
+    }
+    $row[3] = $sellerName !== '' ? $sellerName : 'No identificado en HC';
+    // Preserve required column order: Vendedor, Coach, Líder, Director.
+    $row[4] = tp_lookup_hc_name($coach);
+    $row[5] = tp_lookup_hc_name($leader);
+    $row[6] = tp_lookup_hc_name($director);
+    $row['_coach_talent'] = trim((string)($coach['numero_talento_gs'] ?? ''));
+    return $row;
+}
+
+/** Discard stale names if attribution cannot be certified by the HC engine. */
+function tp_lookup_hc_unresolved(array $row): array {
+    foreach ([3,4,5,6] as $index) $row[$index] = 'No identificado en HC';
+    $row['_coach_talent'] = '';
+    return $row;
+}
+
+/** Use the same HC engine from /plataforma/includes/motor_hc.php as the platform.
+ * Its resolverFilas accepts synthetic sale events: only folio and closing date
+ * are authoritative, and the artificial sale key prevents merging distinct sales
+ * belonging to the same customer account.
+ */
+function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
+    if (!$rows) return [];
+    $path = __DIR__ . '/../includes/motor_hc.php';
+    if (!is_file($path)) throw new RuntimeException('No existe includes/motor_hc.php.');
+    require_once $path;
+    if (!class_exists('RankingAtribucionServiceV06')) {
+        throw new RuntimeException('motor_hc.php no expone RankingAtribucionServiceV06.');
+    }
+    $motor = new RankingAtribucionServiceV06($system);
+    $hicTable = (bool)$system->query(
+        "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='historial_identidad_colaborador' LIMIT 1"
+    )->fetch_row();
+    $hic = $hicTable
+        ? RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic())
+        : ['equivalencias'=>[], 'canonicos'=>[], 'estados'=>[]];
+
+    $byWeek = [];
+    foreach ($rows as $index => $row) {
+        $date = substr((string)($row['_fecha_cierre'] ?? ''), 0, 10);
+        $dt = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if (!$dt || $dt->format('Y-m-d') !== $date) {
+            $rows[$index] = tp_lookup_hc_unresolved($row);
+            continue;
+        }
+        $byWeek[$dt->format('o-W')][$date][] = $index;
+    }
+    foreach ($byWeek as $dates) {
+        $date = array_key_first($dates);
+        // Group dates from same ISO week: one photograph, one resolver call.
+        $indices = array_merge(...array_values($dates));
+        $hc = $motor->cargarHc($date, $date);
+        $events = [];
+        foreach ($indices as $index) {
+            $row = $rows[$index];
+            $events[] = [
+                'cuenta'=>'VENTA_ID_'.(string)$row['_sale_id'],
+                'fecha'=>substr((string)$row['_fecha_cierre'],0,10),
+                'folio_empleado'=>(string)$row['_folio'],
+                'lider'=>'', 'coach'=>'', 'origen_prospecto'=>'', 'subcanal'=>'',
+            ];
+        }
+        $resolved = $motor->resolverFilas($events, $hc, $hic['equivalencias'], $hic['canonicos'], $hic['estados']);
+        $indexed = [];
+        foreach ($resolved as $result) $indexed[(string)($result['cuenta'] ?? '')] = $result;
+        foreach ($indices as $index) {
+            $row = $rows[$index];
+            $result = $indexed['VENTA_ID_'.(string)$row['_sale_id']] ?? null;
+            if ($result === null || ($result['fuente'] ?? '') !== 'HC_FOTO'
+                || empty($result['lider_id']) || empty($result['coach_id'])) {
+                $rows[$index] = tp_lookup_hc_unresolved($row);
+                continue;
+            }
+            $photoKey = (string)($result['hc_foto'] ?? '');
+            $photo = $hc['datos'][$photoKey] ?? [];
+            $rows[$index] = tp_lookup_hc_project($row, $result, $photo);
+        }
+    }
+    return tp_lookup_add_coach_numbers($rows, $system);
+}
+
+/** Read contact numbers by the coach's HC folio. Conflicting assignments are
+ * deliberately treated as missing instead of arbitrarily selecting one number.
+ */
+function tp_lookup_add_coach_numbers(array $rows, mysqli $system): array {
+    $talents = [];
+    foreach ($rows as $row) {
+        $folio = trim((string)($row['_coach_talent'] ?? ''));
+        if ($folio !== '' && $folio !== '-' && stripos($folio, 'VACANTE') === false) $talents[$folio] = true;
+    }
+    if (!$talents) return $rows;
+    $exists = (bool)$system->query(
+        "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='lineas_merida_2026' LIMIT 1"
+    )->fetch_row();
+    if (!$exists) throw new RuntimeException('No existe lineas_merida_2026 en la base del sistema.');
+    $folios = array_keys($talents);
+    $binds = implode(',',array_fill(0,count($folios),'?'));
+    $stmt = $system->prepare('SELECT `numero_talento_gs`, `numero` FROM `lineas_merida_2026` WHERE `numero_talento_gs` IN ('.$binds.')');
+    try {
+        $types = str_repeat('s',count($folios));
+        $stmt->bind_param($types,...$folios);
+        $stmt->execute();
+        $stmt->bind_result($talento, $numero);
+        $numbers = [];
+        while ($stmt->fetch()) {
+            $key = trim((string)$talento);
+            $value = trim((string)$numero);
+            if ($value === '') continue;
+            $value = preg_replace('/[\\x00-\\x1F\\x7F]+/u','', $value) ?? '';
+            if ($value !== '') $numbers[$key][$value] = true;
+        }
+    } finally { $stmt->close(); }
+    foreach ($rows as &$row) {
+        $folio = trim((string)($row['_coach_talent'] ?? ''));
+        $choices = array_keys($numbers[$folio] ?? []);
+        $row['_coach_number'] = count($choices) === 1 ? $choices[0] : '';
+    }
+    unset($row);
+    return $rows;
 }
 
 /** Preserve the explicitly requested positional field/label mapping. */
@@ -189,7 +379,9 @@ function tp_lookup_whatsapp(array $row, array $labels): string {
     // Stored OS can be numeric or already prefixed; never duplicate OS.
     $number = preg_replace('/^(?:OS[\s-]*)+/i', '', $os) ?? $os;
     $heading = $number !== '' ? 'Datos de la OS-' . $number : 'Datos de la cuenta ' . tp_lookup_display_value($row[1] ?? '');
-    $lines = ['*' . $heading . '*'];
+    $coachNumber = trim((string)($row['_coach_number'] ?? ''));
+    // El número de la línea asociada al Coach ocupa la primera línea cuando existe.
+    $lines = $coachNumber !== '' ? [$coachNumber, '', '*' . $heading . '*'] : ['*' . $heading . '*'];
     foreach ($labels as $i => $label) {
         if ($i === 0) continue;
         $lines[] = $label . ': ' . tp_lookup_display_value($row[$i] ?? '');
@@ -229,6 +421,11 @@ if ($method === 'POST') {
             try {
                 $table = tp_lookup_sales_table($db, $prefix);
                 [$rows, $missing, $truncated] = tp_lookup_batch($identifiers, static fn(array $identifier): array => tp_lookup_search($db, $table, $identifier));
+                if ($rows) {
+                    $system = tp_lookup_system_connection();
+                    try { $rows = tp_lookup_resolve_sales_hc($rows, $system); }
+                    finally { $system->close(); }
+                }
                 $searched = true;
             } finally { $db->close(); }
         }
@@ -250,7 +447,7 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.29">
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.30">
     <script src="../assets/js/consulta_os_cuenta.js?v=1.0.27" defer></script>
 </head>
 <body>
