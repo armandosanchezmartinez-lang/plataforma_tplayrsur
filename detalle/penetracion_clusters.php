@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient | Penetración de Clústeres v1.7.3 | 2026-11-12
+ * TotalXpedient | Penetración de Clústeres v1.7.4 | 2026-11-18
  * Ubicación: /plataforma/detalle/penetracion_clusters.php
  * Consulta de snapshots; guarda solamente la configuración global de metas para roles autorizados.
  * Restricción SQL de distrito basada en sesión + HC para Director Distrital.
@@ -148,9 +148,12 @@ function pcObjetivo(array $rows, string $segmento, array $params): array {
         $tipo = (string)($r['tipo_gestion'] ?? $r['tipo']);
         if ($segmento !== 'GENERAL' && $segmento !== $tipo) continue;
         $h = ($r['casas_pasadas'] ?? null) === null ? 0 : (int)$r['casas_pasadas'];
-        if ($h <= 0 || ($r['base_usuarios'] ?? null) === null) continue;
-        $hp += $h;
+        // Los suscriptores observados se conservan aunque Qlik tenga HP=0/NULL.
+        // El denominador y el objetivo sólo usan hijos con HPs comparables.
+        if (($r['base_usuarios'] ?? null) === null) continue;
         $usuarios += (int)$r['base_usuarios'];
+        if ($h <= 0) continue;
+        $hp += $h;
         $meta = $r['meta_pen_gestion'] ?? null;
         if ($meta === null) { $faltanEdad++; continue; }
         $bruto += $h * (float)$meta / 100.0;
@@ -169,7 +172,7 @@ function pcObjetivo(array $rows, string $segmento, array $params): array {
     ];
 }
 
-/** En KPI: mismo universo con base_usuarios conocida y casas_pasadas > 0. */
+/** KPI: todos los suscriptores conocidos; HPs sólo de bases comparables > 0. */
 function pcAgg(array $rows): array {
     $sumHP = 0; $sumU = 0; $comp = 0; $plotRows = 0; $sumVelHP = 0.0; $velHP = 0;
     $parents=[]; $ages=0.0; $agesN=0; $missingCatalog=0;
@@ -179,9 +182,12 @@ function pcAgg(array $rows): array {
         if (($r['edad_gestion'] ?? null) !== null) {
             $ages += (float)$r['edad_gestion']; $agesN++;
         }
-        if ($r['casas_pasadas'] === null || (int)$r['casas_pasadas'] <= 0 || $r['base_usuarios'] === null) continue;
-        $hp = (int)$r['casas_pasadas']; $u = (int)$r['base_usuarios'];
-        $sumHP += $hp; $sumU += $u; $comp++;
+        if (($r['base_usuarios'] ?? null) === null) continue;
+        // Nunca perder usuarios de hijos con HPs=0/NULL al consolidar.
+        $sumU += (int)$r['base_usuarios'];
+        if ($r['casas_pasadas'] === null || (int)$r['casas_pasadas'] <= 0) continue;
+        $hp = (int)$r['casas_pasadas'];
+        $sumHP += $hp; $comp++;
         if ($r['velocidad_penetracion_anual'] !== null) {
             $sumVelHP += $hp * (float)$r['velocidad_penetracion_anual']; $velHP += $hp;
             $plotRows++;
@@ -200,7 +206,10 @@ function pcBubbles(array $rows, string $nivel, float $minHP, array $limits): arr
     $groups = [];
     foreach ($rows as $r) {
         $hp = $r['casas_pasadas'] === null ? 0 : (int)$r['casas_pasadas'];
-        if ($hp <= 0 || $r['base_usuarios'] === null || $r['velocidad_penetracion_anual'] === null) continue;
+        if (($r['base_usuarios'] ?? null) === null) continue;
+        // Los hijos con HP=0/NULL aportan usuarios al padre, pero no crean burbuja propia.
+        // Para HP>0 se conserva el requisito de velocidad para dibujar el grupo.
+        if ($hp > 0 && $r['velocidad_penetracion_anual'] === null) continue;
         $tipo = (string)($r['tipo_gestion'] ?? $r['tipo']);
         if (!isset($limits[$tipo])) continue;
         $key = $r['distrito'].'|'.$tipo.'|'.$r['cluster_padre'].($nivel==='HIJO'?'|'.$r['cluster_hijo']:'');
@@ -211,10 +220,12 @@ function pcBubbles(array $rows, string $nivel, float $minHP, array $limits): arr
             'targetVelSum'=>0.0,'targetMissing'=>false,'nHijos'=>0,'locs'=>[],
         ];
         $g = &$groups[$key];
-        $g['hp'] += $hp; $g['usuarios'] += (int)$r['base_usuarios'];
-        $g['velSum'] += $hp * (float)$r['velocidad_penetracion_anual'];
+        $g['usuarios'] += (int)$r['base_usuarios'];
         $g['nHijos']++;
         $g['locs'][] = trim((string)($r['municipio'] ?? ''));
+        if ($hp <= 0) { unset($g); continue; } // Sin denominador ni meta individual.
+        $g['hp'] += $hp;
+        $g['velSum'] += $hp * (float)$r['velocidad_penetracion_anual'];
         if (($r['meta_pen_gestion'] ?? null) === null || ($r['meta_vel_gestion'] ?? null) === null) {
             $g['targetMissing'] = true;
         } else {
@@ -225,12 +236,12 @@ function pcBubbles(array $rows, string $nivel, float $minHP, array $limits): arr
     }
     $out = ['NORMAL'=>[], 'CLUSTER_A'=>[]];
     foreach ($groups as $g) {
-        if ($g['hp'] < $minHP) continue;
+        if ($g['hp'] <= 0 || $g['hp'] < $minHP) continue; // Sin HPs: penetración ND y sin burbuja.
         $pen = 100.0*$g['usuarios']/$g['hp'];
         $vel = 100.0*$g['velSum']/$g['hp'];
         $targetPen = !$g['targetMissing'] ? $g['targetPenSum']/$g['hp'] : null;
         $targetVel = !$g['targetMissing'] ? $g['targetVelSum']/$g['hp'] : null;
-        // El cuadrante corresponde a las líneas FIJAS trazadas (20/7 A, 30/5 Maduros),
+        // El cuadrante corresponde a las referencias vigentes por tipo (desde BD),
         // mientras que la meta individual por edad figura aparte en tooltip y ranking.
         $quadX=(float)$limits[$g['tipo']]['pen'];
         $quadY=(float)$limits[$g['tipo']]['vel'];
@@ -274,8 +285,10 @@ function pcTargets(array $rows, string $nivel, array $params): array {
         if ($loc!=='') $g['municipios'][$loc]=true;
         $hp=$r['casas_pasadas']===null ? 0 : (int)$r['casas_pasadas'];
         $user=$r['base_usuarios'];
+        // La base de usuarios válida suma incluso cuando el HP del hijo es 0/NULL.
+        if ($user !== null) $g['usuarios'] += (int)$user;
         if ($hp>0 && $user!==null) {
-            $g['comp']++; $g['hp']+=$hp; $g['usuarios']+=(int)$user;
+            $g['comp']++; $g['hp']+=$hp;
             $age=$r['edad_gestion'] ?? null;
             if ($age!==null && is_numeric($age) && (float)$age >= 0) {
                 $g['hpAge']+=$hp;
@@ -328,6 +341,28 @@ function pcTargets(array $rows, string $nivel, array $params): array {
     return $result;
 }
 
+/** Totales del ranking visible: sumas aditivas y porcentajes recalculados. */
+function pcResumenRanking(array $items, array $sourceRows): array {
+    $agg = pcAgg($sourceRows);
+    $consolidado = pcCombineTargetRankingsTotal(pcCombineTargetRankings(['NORMAL'=>$items]));
+    $hpVel=0; $sMetaVel=0.0; $metaVelIncompleta=false;
+    foreach ($sourceRows as $r) {
+        $hp = ($r['casas_pasadas'] ?? null) === null ? 0 : (int)$r['casas_pasadas'];
+        if ($hp <= 0 || ($r['base_usuarios'] ?? null) === null || ($r['velocidad_penetracion_anual'] ?? null) === null) continue;
+        $hpVel += $hp;
+        if (($r['meta_vel_gestion'] ?? null) === null) $metaVelIncompleta=true;
+        else $sMetaVel += $hp * (float)$r['meta_vel_gestion'];
+    }
+    $metaVel = ($hpVel > 0 && !$metaVelIncompleta) ? $sMetaVel/$hpVel : null;
+    return [
+        'edad'=>$agg['antiguedad'], 'hp'=>$agg['hp'], 'usuarios'=>$agg['usuarios'],
+        'pen'=>$agg['pen'], 'vel'=>$agg['vel'],
+        'metaPen'=>$consolidado['metaPen'], 'gapPen'=>$consolidado['gapPen'],
+        'faltan'=>$consolidado['faltan'], 'metaVel'=>$metaVel,
+        'gapVel'=>($agg['vel'] !== null && $metaVel !== null) ? max(0.0,$metaVel-$agg['vel']) : null,
+    ];
+}
+
 function pcSortAttr($value): string {
     return ' data-sort-value="'.pcHtml($value===null?'':(string)$value).'"';
 }
@@ -354,7 +389,8 @@ function pcCombineTargetRankings(array $targetRankings): array {
             $d = (string)($item['distrito'] ?? '');
             if ($d === '') continue;
             $hp = (int)($item['hp'] ?? 0);
-            if ($hp <= 0) continue; // Sin base: no penaliza el objetivo distrital
+            // Los clústeres sin HPs sí suman usuarios al distrito. Sin HP no
+            // aportan denominador, objetivo ni faltante individual.
             if (!isset($map[$d])) {
                 $map[$d] = [
                     'hp'=>0, 'usuarios'=>0, 'targetUsersRaw'=>0.0,
@@ -363,8 +399,9 @@ function pcCombineTargetRankings(array $targetRankings): array {
                 ];
             }
             $g = &$map[$d];
-            $g['hp'] += $hp;
             $g['usuarios'] += (int)($item['usuarios'] ?? 0);
+            if ($hp <= 0) { unset($g); continue; }
+            $g['hp'] += $hp;
             $g['gruposComparables']++;
             if (($item['metaPen'] ?? null) === null) {
                 $g['metaMissing'] = true;
@@ -386,7 +423,7 @@ function pcCombineTargetRankings(array $targetRankings): array {
             ? 100.0*$g['targetUsersRaw']/$g['hp'] : null;
         $g['gapPen'] = ($g['metaPen'] === null || $g['pen'] === null)
             ? null : max(0.0, $g['metaPen']-$g['pen']);
-        if ($g['faltanMissing']) $g['faltan'] = null;
+        if ($g['faltanMissing'] || $g['hp'] <= 0) $g['faltan'] = null;
     }
     unset($g);
     return $map;
@@ -415,7 +452,7 @@ function pcCombineTargetRankingsTotal(array $byDistrict): array {
         ? 100.0*$total['targetUsersRaw']/$total['hp'] : null;
     $total['gapPen'] = ($total['metaPen'] === null || $total['pen'] === null)
         ? null : max(0.0, $total['metaPen']-$total['pen']);
-    if ($total['faltanMissing']) $total['faltan'] = null;
+    if ($total['faltanMissing'] || $total['hp'] <= 0) $total['faltan'] = null;
     return $total;
 }
 
@@ -478,6 +515,25 @@ function pcSemaforoClase(?float $value, ?array $banda): string {
     if ($value <= $max) return 'pc-badge-warn';
     return 'pc-badge-ok';
 }
+/** Semáforo de penetración según % de alcance vs meta real por antigüedad.
+ * Rojo <80%, amarillo [80%,100%), verde >=100% (100% ya cumple).
+ * Sin HPs o sin meta -> ND / neutro. Meta 0% se considera cumplida.
+ */
+function pcSemaforoPenetracion(?float $pen, ?float $meta): string {
+    if ($pen === null || $meta === null || !is_finite($pen) || !is_finite($meta)) return 'pc-badge-neutral';
+    if ($meta <= 0.0) return $pen >= 0.0 ? 'pc-badge-ok' : 'pc-badge-danger';
+    $alcance = 100.0*$pen/$meta;
+    if ($alcance < 80.0) return 'pc-badge-danger';
+    return $alcance < 100.0 ? 'pc-badge-warn' : 'pc-badge-ok';
+}
+function pcSemaforoPenTooltip(?float $pen, ?float $meta): string {
+    if ($pen === null || $meta === null) return 'ND: sin HPs comparables o sin meta de penetración';
+    if ($meta <= 0.0) return 'Objetivo de 0%: sin exigencia de penetración en este corte';
+    $alcance = 100.0*$pen/$meta;
+    return 'Alcance: '.number_format($alcance,1,'.',',').'% = '.pcPct($pen).' / '.pcPct($meta)
+        .' · Rojo <80% · Amarillo 80% a <100% · Verde >=100%';
+}
+
 function pcSemaforoTooltip(?array $banda): string {
     if ($banda === null) return 'ND: no hay base o referencia válida para el semáforo';
     $lo=pcPct((float)$banda['min']); $hi=pcPct((float)$banda['max']);
@@ -648,7 +704,6 @@ try {
     $minHP = is_numeric(pcStr('min_hp')) ? max(0,min(500000, (int)pcStr('min_hp'))) : 0;
 
     $summary = pcAgg($rows);
-    $summaryPenBanda = pcBandasGrupo($rows,'pen',$params);
     $summaryVelBanda = pcBandasGrupo($rows,'vel',$params);
     $mature = pcAgg(array_values(array_filter($rows, static fn($r)=>($r['tipo_gestion'] ?? $r['tipo'])==='NORMAL')));
     $young = pcAgg(array_values(array_filter($rows, static fn($r)=>($r['tipo_gestion'] ?? $r['tipo'])==='CLUSTER_A')));
@@ -735,6 +790,8 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
         .pc-exec-table .pc-badge{font-variant-numeric:tabular-nums;}
         .pc-exec-table .pc-gap-alert{color:#b35422;font-weight:800;}
         .pc-exec-table .pc-gap-ok{color:#08775a;font-weight:750;}
+        .pc-rank-table tfoot th,.pc-rank-table tfoot td{font-weight:800;background:#f3eefc;border-top:2px solid rgba(111,79,255,.22);}
+        .pc-rank-table tfoot td{font-variant-numeric:tabular-nums;}
     </style>
 </head>
 <body class="page-dashboard pc-page">
@@ -921,7 +978,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
             </section>
 
             <!-- Tarjetas ejecutivas: 3 segmentos, 3 indicadores cada uno -->
-            <div class="pc-section-title"><h2>Situación actual · Penetración por segmento</h2><p>Indicadores ponderados sobre bases comparables. La antigüedad es promedio por clúster hijo.</p></div>
+            <div class="pc-section-title"><h2>Situación actual · Penetración por segmento</h2><p>Penetración = todos los suscriptores conocidos / HPs comparables; la antigüedad es promedio por clúster hijo.</p></div>
 
             <section class="pc-segment-cards" aria-label="Resumen general y segmentos">
                 <?php
@@ -966,7 +1023,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                 </article>
                 <?php endforeach; ?>
             </section>
-            <div class="pc-quality-line">Datos completos: <?=count($rows)?> clústeres hijo · <?= $summary['comparables'] ?> con HPs y suscriptores válidos · <strong><?= (int)$summary['sin_catalogo'] ?></strong> municipios pendientes. <span>Fuente Qlik: tipo histórico sin modificar; tipo de gestión basado en la edad real al corte; metas calculadas en motor_clusters.php.</span></div>
+            <div class="pc-quality-line">Datos del corte: <?=count($rows)?> clústeres hijo · <?= $summary['comparables'] ?> con HPs comparables · suscriptores de hijos sin HPs incluidos en consolidados · <strong><?= (int)$summary['sin_catalogo'] ?></strong> municipios pendientes. <span>Fuente Qlik: tipo histórico sin modificar; tipo de gestión basado en la edad real al corte; metas calculadas en motor_clusters.php.</span></div>
 
             <?php if (count($byDistrict)>0): ?>
             <section class="pc-table-card" aria-label="Desglose jerárquico por distrito">
@@ -994,7 +1051,6 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     <tbody>
                     <?php foreach ($byDistrict as $districtName => $districtRows):
                         $ds = pcAgg($districtRows);
-                        $dsPenBanda = pcBandasGrupo($districtRows,'pen',$params);
                         $dsVelBanda = pcBandasGrupo($districtRows,'vel',$params);
                         $districtGoal = $districtOpportunities[$districtName] ?? ['metaPen'=>null,'gapPen'=>null,'faltan'=>null];
                         $districtParams = $_GET;
@@ -1021,7 +1077,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         <td<?=pcSortAttr($ds['antiguedad'])?>><?=pcHtml(pcEdad($ds['antiguedad']))?></td>
                         <td<?=pcSortAttr($ds['hp'])?>><?=pcHtml(pcNum((float)$ds['hp']))?></td>
                         <td<?=pcSortAttr($ds['usuarios'])?>><?=pcHtml(pcNum((float)$ds['usuarios']))?></td>
-                        <td<?=pcSortAttr($ds['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['pen'],$dsPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($dsPenBanda))?>"><?=pcHtml(pcPct($ds['pen']))?></span></td>
+                        <td<?=pcSortAttr($ds['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoPenetracion($ds['pen'],$districtGoal['metaPen'] ?? null))?>" title="<?=pcHtml(pcSemaforoPenTooltip($ds['pen'],$districtGoal['metaPen'] ?? null))?>"><?=pcHtml(pcPct($ds['pen']))?></span></td>
                         <td<?=pcSortAttr($ds['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ds['vel'],$dsVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($dsVelBanda))?>"><?=pcHtml(pcPct($ds['vel']))?></span></td>
                         <td<?=pcSortAttr($districtGoal['metaPen'] ?? null)?>><?=pcHtml(pcPct($districtGoal['metaPen'] ?? null))?></td>
                         <td<?=pcSortAttr($districtGoal['gapPen'] ?? null)?> class="<?= (($districtGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($districtGoal['gapPen'] ?? null,$districtGoal['faltan'] ?? null))?></td>
@@ -1030,7 +1086,6 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     </tr>
                     <?php foreach ($municipalityGroups as $muniName => $muniRows):
                         $ms = pcAgg($muniRows);
-                        $msPenBanda = pcBandasGrupo($muniRows,'pen',$params);
                         $msVelBanda = pcBandasGrupo($muniRows,'vel',$params);
                         $mGoal = pcOpportunityFromRows($muniRows, $nivel, $params);
                         $muniParams = $districtParams;
@@ -1042,7 +1097,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         <td<?=pcSortAttr($ms['antiguedad'])?>><?=pcHtml(pcEdad($ms['antiguedad']))?></td>
                         <td<?=pcSortAttr($ms['hp'])?>><?=pcHtml(pcNum((float)$ms['hp']))?></td>
                         <td<?=pcSortAttr($ms['usuarios'])?>><?=pcHtml(pcNum((float)$ms['usuarios']))?></td>
-                        <td<?=pcSortAttr($ms['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['pen'],$msPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($msPenBanda))?>"><?=pcHtml(pcPct($ms['pen']))?></span></td>
+                        <td<?=pcSortAttr($ms['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoPenetracion($ms['pen'],$mGoal['metaPen'] ?? null))?>" title="<?=pcHtml(pcSemaforoPenTooltip($ms['pen'],$mGoal['metaPen'] ?? null))?>"><?=pcHtml(pcPct($ms['pen']))?></span></td>
                         <td<?=pcSortAttr($ms['vel'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($ms['vel'],$msVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($msVelBanda))?>"><?=pcHtml(pcPct($ms['vel']))?></span></td>
                         <td<?=pcSortAttr($mGoal['metaPen'] ?? null)?>><?=pcHtml(pcPct($mGoal['metaPen'] ?? null))?></td>
                         <td<?=pcSortAttr($mGoal['gapPen'] ?? null)?> class="<?= (($mGoal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($mGoal['gapPen'] ?? null,$mGoal['faltan'] ?? null))?></td>
@@ -1058,7 +1113,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                             <td><?=pcHtml(pcEdad($summary['antiguedad']))?></td>
                             <td><?=pcHtml(pcNum((float)$summary['hp']))?></td>
                             <td><?=pcHtml(pcNum((float)$summary['usuarios']))?></td>
-                            <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($summary['pen'],$summaryPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($summaryPenBanda))?>"><?=pcHtml(pcPct($summary['pen']))?></span></td>
+                            <td><span class="pc-badge <?=pcHtml(pcSemaforoPenetracion($summary['pen'],$regionOpportunityTotal['metaPen'] ?? null))?>" title="<?=pcHtml(pcSemaforoPenTooltip($summary['pen'],$regionOpportunityTotal['metaPen'] ?? null))?>"><?=pcHtml(pcPct($summary['pen']))?></span></td>
                             <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($summary['vel'],$summaryVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($summaryVelBanda))?>"><?=pcHtml(pcPct($summary['vel']))?></span></td>
                             <td><?=pcHtml(pcPct($regionOpportunityTotal['metaPen'] ?? null))?></td>
                             <td class="<?= (($regionOpportunityTotal['gapPen'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($regionOpportunityTotal['gapPen'] ?? null,$regionOpportunityTotal['faltan'] ?? null))?></td>
@@ -1067,7 +1122,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         </tr>
                     </tfoot>
                 </table></div>
-                <p class="pc-fineprint">Meta pen. = Σ(HPs × meta individual por antigüedad) / ΣHPs comparables. Faltan pen. (pp) mide la brecha neta del promedio; «Cumple promedio» puede coexistir con brechas individuales. Faltan suscriptores = suma de déficits positivos por hijo, sin compensar excedentes; concilia Región, Distrito y rankings. Antigüedad promedio = media por clúster hijo con edad válida. Semáforos basados en parámetros vigentes: rojo &lt; mínimo, amarillo entre mínimo y máximo (inclusive), verde &gt; máximo. Cuando se mezclan A y Maduros, los límites se ponderan por HPs del mismo universo del indicador. Pasa el cursor sobre un semáforo para ver sus límites.</p>
+                <p class="pc-fineprint">Penetración consolidada = Σ suscriptores conocidos (incluye hijos con HPs=0/NULL) / Σ HPs comparables; el detalle del hijo sin HPs se muestra ND. Meta pen. = Σ(HPs × meta individual por antigüedad) / ΣHPs comparables. Faltan pen. (pp) mide la brecha neta del promedio; «Cumple promedio» puede coexistir con brechas individuales. Faltan suscriptores = suma de déficits positivos por hijo, sin compensar excedentes; concilia Región, Distrito y rankings. Antigüedad promedio = media por clúster hijo con edad válida. Semáforo de penetración por alcance contra la meta por antigüedad: rojo &lt;80%, amarillo 80% a menos de 100%, verde desde 100%; para velocidad se mantienen las bandas globales ponderadas por HPs. Pasa el cursor sobre los colores para consultar el criterio.</p>
             </section>
             <?php endif; ?>
 
@@ -1117,7 +1172,6 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     }
                     foreach ($summaryCards as [$segmentKey,$label,$s,$segmentRows]):
                         $goal = $objectiveCards[$segmentKey];
-                        $segmentPenBanda=pcBandasGrupo($segmentRows,'pen',$params);
                         $segmentVelBanda=pcBandasGrupo($segmentRows,'vel',$params);
                         $linkArgs=$_GET;
                         $linkArgs['periodo']=$selected['periodo'];
@@ -1131,7 +1185,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         <td><?=pcHtml(pcEdad($s['antiguedad']))?></td>
                         <td><?=pcHtml(pcNum((float)$s['hp']))?></td>
                         <td><?=pcHtml(pcNum((float)$s['usuarios']))?></td>
-                        <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($s['pen'],$segmentPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($segmentPenBanda))?>"><?=pcHtml(pcPct($s['pen']))?></span></td>
+                        <td><span class="pc-badge <?=pcHtml(pcSemaforoPenetracion($s['pen'],$goal['metaPct']))?>" title="<?=pcHtml(pcSemaforoPenTooltip($s['pen'],$goal['metaPct']))?>"><?=pcHtml(pcPct($s['pen']))?></span></td>
                         <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($s['vel'],$segmentVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($segmentVelBanda))?>"><?=pcHtml(pcPct($s['vel']))?></span></td>
                         <td><?=pcHtml(pcPct($goal['metaPct']))?></td>
                         <td class="<?= (($goal['brecha'] ?? 0) > 0.00001) ? 'pc-gap-alert' : 'pc-gap-ok' ?>"><?=pcHtml(pcGapConBrechas($goal['brecha'],$goal['faltan']))?></td>
@@ -1141,7 +1195,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     <?php endforeach; ?>
                     </tbody>
                 </table></div>
-                <p class="pc-fineprint">La antigüedad es promedio simple por clúster hijo con fecha/edad válida, coherente con las tarjetas superiores. Penetración = Σ suscriptores / Σ HPs comparables; velocidad = promedio ponderado por HPs con velocidad disponible. Los objetivos siguen calculándose individualmente por edad en motor_clusters.php. La meta de cada segmento es ponderada por HPs; los suscriptores faltantes son la suma de déficits positivos por hijo sin compensar excedentes. Los colores utilizan las bandas guardadas para cada segmento; el total mezcla ambas bandas ponderando por HPs comparables.</p>
+                <p class="pc-fineprint">La antigüedad es promedio simple por clúster hijo con fecha/edad válida, coherente con las tarjetas superiores. Penetración = Σ suscriptores conocidos (incluidos hijos sin HPs) / Σ HPs comparables; velocidad = promedio ponderado por HPs con velocidad disponible. Los objetivos siguen calculándose individualmente por edad en motor_clusters.php. La meta de cada segmento es ponderada por HPs; los suscriptores faltantes son la suma de déficits positivos por hijo sin compensar excedentes. Penetración cambia de color por el alcance de la meta individual/ponderada: rojo <80%, amarillo 80% a <100% y verde desde 100%. La velocidad conserva las bandas globales por segmento, ponderadas por HPs cuando se combinan ambos tipos.</p>
             </section>
 
 
@@ -1151,8 +1205,9 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
             if ($typeCluster === '' || $typeCluster === 'CLUSTER_A') $rankingCards[] = ['CLUSTER_A','Ranking de brechas · Clústeres_A','Metas vigentes: '.pcPct($params['a_0_12_pen']).' / '.pcPct($params['a_0_12_vel']).' al año 1; '.pcPct($params['a_12_24_pen']).' / '.pcPct($params['a_12_24_vel']).' antes del año 2.'];
             if ($typeCluster === '' || $typeCluster === 'NORMAL') $rankingCards[] = ['NORMAL','Ranking de brechas · Clústeres maduros','Metas vigentes: '.pcPct($params['m_24_60_pen']).' / '.pcPct($params['m_24_60_vel']).' al año 2; '.pcPct($params['m_60_plus_pen']).' / '.pcPct($params['m_60_plus_vel']).' al año 5.'];
             foreach ($rankingCards as [$rankingType,$rankingTitle,$rankingNote]):
-                $rankingPenBanda=pcBandasTipo($rankingType,'pen',$params);
                 $rankingVelBanda=pcBandasTipo($rankingType,'vel',$params);
+                $rankingRows=array_values(array_filter($rows, static fn($r)=>(string)($r['tipo_gestion'] ?? $r['tipo'] ?? '')===$rankingType));
+                $rankingTotal=pcResumenRanking($targetRankings[$rankingType],$rankingRows);
             ?>
             <section class="pc-table-card pc-rank-card" aria-label="<?=pcHtml($rankingTitle)?>">
                 <div class="pc-section-head pc-rank-head">
@@ -1191,7 +1246,7 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                         <td<?=pcSortAttr($item['edad'])?>><?= $item['edad']===null?'ND':pcHtml(pcNum($item['edad'],1)) ?></td>
                         <td<?=pcSortAttr($item['hp'])?>><?=pcHtml(pcNum((float)$item['hp']))?></td>
                         <td<?=pcSortAttr($item['usuarios'])?>><?=pcHtml(pcNum((float)$item['usuarios']))?></td>
-                        <td<?=pcSortAttr($item['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoClase($item['pen'],$rankingPenBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($rankingPenBanda))?>"><?=pcHtml(pcPct($item['pen']))?></span></td>
+                        <td<?=pcSortAttr($item['pen'])?>><span class="pc-badge <?=pcHtml(pcSemaforoPenetracion($item['pen'],$item['metaPen']))?>" title="<?=pcHtml(pcSemaforoPenTooltip($item['pen'],$item['metaPen']))?>"><?=pcHtml(pcPct($item['pen']))?></span></td>
                         <td<?=pcSortAttr($item['metaPen'])?>><?=pcHtml(pcPct($item['metaPen']))?></td>
                         <td<?=pcSortAttr($item['gapPen'])?> class="<?=($item['gapPen']??0)>0.00001?'pc-gap-alert':'pc-gap-ok'?>"><?=pcHtml(pcGapConBrechas($item['gapPen'],$item['faltan']))?></td>
                         <td<?=pcSortAttr($item['faltan'])?> class="<?=($item['faltan']??0)>0?'pc-gap-alert':'pc-gap-ok'?>"><strong><?= $item['faltan']===null?'ND':($item['faltan']===0?'Cumple':pcHtml(pcNum((float)$item['faltan'])))?></strong></td>
@@ -1201,6 +1256,21 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     </tr>
                     <?php endforeach; ?>
                     </tbody>
+                    <tfoot><tr class="pc-ranking-total">
+                        <th scope="row">TOTAL</th>
+                        <td><?=pcHtml(pcNum((float)count($targetRankings[$rankingType])))?> clústeres</td>
+                        <td>—</td>
+                        <td<?=pcSortAttr($rankingTotal['edad'])?>><?= $rankingTotal['edad']===null?'ND':pcHtml(pcNum($rankingTotal['edad'],1)) ?></td>
+                        <td><?=pcHtml(pcNum((float)$rankingTotal['hp']))?></td>
+                        <td><?=pcHtml(pcNum((float)$rankingTotal['usuarios']))?></td>
+                        <td><span class="pc-badge <?=pcHtml(pcSemaforoPenetracion($rankingTotal['pen'],$rankingTotal['metaPen']))?>" title="<?=pcHtml(pcSemaforoPenTooltip($rankingTotal['pen'],$rankingTotal['metaPen']))?>"><?=pcHtml(pcPct($rankingTotal['pen']))?></span></td>
+                        <td><?=pcHtml(pcPct($rankingTotal['metaPen']))?></td>
+                        <td><?=pcHtml(pcGapConBrechas($rankingTotal['gapPen'],$rankingTotal['faltan']))?></td>
+                        <td><strong><?= $rankingTotal['faltan']===null?'ND':($rankingTotal['faltan']===0?'Cumple':pcHtml(pcNum((float)$rankingTotal['faltan']))) ?></strong></td>
+                        <td><span class="pc-badge <?=pcHtml(pcSemaforoClase($rankingTotal['vel'],$rankingVelBanda))?>" title="<?=pcHtml(pcSemaforoTooltip($rankingVelBanda))?>"><?=pcHtml(pcPct($rankingTotal['vel']))?></span></td>
+                        <td><?=pcHtml(pcPct($rankingTotal['metaVel']))?></td>
+                        <td><?=pcHtml(pcGap($rankingTotal['gapVel']))?></td>
+                    </tr></tfoot>
                 </table>
                 </div>
                 <p class="pc-fineprint">
@@ -1209,13 +1279,13 @@ $roleLabel = ['admin'=>'ADMIN','director_regional'=>'DIRECCIÓN REGIONAL','geren
                     <?php else: ?>
                     Penetración aumenta linealmente de <?=pcHtml(pcPct($params['m_24_60_pen']))?> a <?=pcHtml(pcPct($params['m_60_plus_pen']))?> entre 2 y 5 años; velocidad anual baja de <?=pcHtml(pcPct($params['m_24_60_vel']))?> a <?=pcHtml(pcPct($params['m_60_plus_vel']))?>. Desde 5 años, las metas quedan constantes.
                     <?php endif; ?>
-                    Faltantes: suma de brechas por hijo sin compensación entre clústeres. Registros sin HPs/base, antigüedad o velocidad aparecen como ND; hacer clic en los encabezados permite ordenar ascendente/descendente.
+                    Los suscriptores de hijos con HPs=0/NULL suman a los consolidados, aunque su penetración individual siga ND. Los faltantes continúan sumándose por hijo con HPs comparables, sin compensaciones entre clústeres. El color de penetración usa alcance vs meta: rojo &lt;80%, amarillo 80% a &lt;100%, verde desde 100%. Haz clic en encabezados para ordenar.
                 </p>
             </section>
             <?php endforeach; ?>
 
             <?php endif; ?>
-            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.3 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
+            <footer class="pc-footer">TotalXpedient · Penetración de Clústeres v1.7.4 · Datos Qlik por fotografía semanal o mensual · Acceso jerárquico por rol.</footer>
         </div>
     </main>
 </div>
