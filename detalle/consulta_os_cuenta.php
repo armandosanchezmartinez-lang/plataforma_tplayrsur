@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.30
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.31
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -67,15 +67,27 @@ function tp_lookup_batch(array $identifiers, callable $search): array {
         if (!$matches) $missing[] = $identifier['label'];
         if ($hasMore) $truncated[] = $identifier['label'];
         foreach ($matches as $row) {
-            // The ninth SQL field is the internal primary key; never display it.
-            $key = 'id:' . (string)$row[8];
-            if (isset($seen[$key])) continue;
-            $seen[$key] = true;
+            // La misma OS puede aparecer en varias búsquedas y en ambas bases.
+            // Se muestra una vez; si hay duplicado, se prefiere el origen Talia.
+            $source = (string)($row[11] ?? 'talia');
+            $os = trim((string)($row[0] ?? ''));
+            $normalizedOs = preg_replace('/\AOS[\s-]*/i', '', $os) ?? $os;
+            $key = $normalizedOs !== '' ? 'os:' . strtoupper($normalizedOs)
+                : 'id:' . $source . ':' . (string)$row[8];
             $public = array_slice($row, 0, 8);
             // Contexto interno para atribución HC; nunca se imprime directamente.
             $public['_sale_id'] = (string)$row[8];
+            $public['_source'] = $source;
             $public['_folio'] = (string)($row[9] ?? '');
             $public['_fecha_cierre'] = (string)($row[10] ?? '');
+            if (isset($seen[$key])) {
+                $existingIndex = $seen[$key];
+                if ($source === 'talia' && ($rows[$existingIndex]['_source'] ?? '') !== 'talia') {
+                    $rows[$existingIndex] = $public;
+                }
+                continue;
+            }
+            $seen[$key] = count($rows);
             $rows[] = $public;
         }
     }
@@ -161,7 +173,7 @@ function tp_lookup_sales_table(mysqli $db, string $prefix): string {
     return $table;
 }
 
-function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
+function tp_lookup_search(mysqli $db, string $table, array $identifier, string $source = 'talia'): array {
     $digits = $identifier['digits'];
     $prefixed = 'OS-' . $digits;
     // Exact equality on stored identifiers; do not cast to numbers or strip zeros.
@@ -177,11 +189,28 @@ function tp_lookup_search(mysqli $db, string $table, array $identifier): array {
         $stmt->bind_result($os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id, $folio, $closeDate);
         $rows = [];
         while ($stmt->fetch()) {
-            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id, $folio, $closeDate];
+            $rows[] = [$os, $account, $channel, $seller, $districtManager, $salesManager, $plazaManager, $city, $id, $folio, $closeDate, $source];
         }
         $truncated = count($rows) > TP_LOOKUP_MAX_RESULTS;
         return [array_slice($rows, 0, TP_LOOKUP_MAX_RESULTS), $truncated];
     } finally { $stmt->close(); }
+}
+
+/** Validar estructura de ventas de la base del sistema antes de buscar en ella. */
+function tp_lookup_system_sales_table(mysqli $db): string {
+    $table = 'ventas';
+    $check = $db->query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ventas' LIMIT 1");
+    $exists = (bool)$check->fetch_row();
+    $check->free();
+    if (!$exists) throw new RuntimeException('No existe la tabla ventas en la base del sistema.');
+    $columns = $db->query('SHOW COLUMNS FROM `ventas`');
+    $available = [];
+    while ($column = $columns->fetch_assoc()) $available[strtolower((string)$column['Field'])] = true;
+    $columns->free();
+    foreach (['os','id_cuenta_brm','canal_venta','nombre_empleado','jefe_plaza','jefe_ventas','distrital','ciudad','fecha_cierre','folio_empleado','id'] as $required) {
+        if (!isset($available[$required])) throw new RuntimeException('Falta columna ' . $required . ' en ventas del sistema.');
+    }
+    return $table;
 }
 
 /** The public page uses its own system connection without modifying conexionTalia.php. */
@@ -220,8 +249,47 @@ function tp_lookup_hc_name(?array $row): string {
     return $name !== '' && $name !== '-' ? $name : 'No identificado en HC';
 }
 
+/** El motor HC proporciona la posición y la fotografía, pero su SELECT no
+ * incluye numero_base_comisiones. Consultarlo en la MISMA fotografía certificada
+ * (año/semana + distrito + posición) evita usar valores de otra semana.
+ */
+function tp_lookup_photo_commission_bases(mysqli $system, string $photoKey): array {
+    if (!preg_match('/\A([0-9]{4})-([0-9]{1,2})\z/', $photoKey, $matches)) return [];
+    $year = (int)$matches[1];
+    $week = (int)$matches[2];
+    $stmt = $system->prepare('SELECT `distrito`, `id_posicion`, `numero_base_comisiones` FROM `hc` WHERE `anio`=? AND `semana`=?');
+    try {
+        $stmt->bind_param('ii', $year, $week);
+        $stmt->execute();
+        $stmt->bind_result($districtRaw, $positionRaw, $baseRaw);
+        $bases = [];
+        $ambiguous = [];
+        while ($stmt->fetch()) {
+            $district = RankingAtribucionServiceV06::normalizarDistrito((string)$districtRaw);
+            $position = trim((string)$positionRaw);
+            if ($district === null || $district === '' || $position === '') continue;
+            $seat = $district . '|' . $position;
+            if (array_key_exists($seat, $bases)) {
+                $ambiguous[$seat] = true;
+                continue;
+            }
+            $bases[$seat] = trim((string)$baseRaw);
+        }
+        foreach ($ambiguous as $seat => $_) unset($bases[$seat]);
+        return $bases;
+    } finally { $stmt->close(); }
+}
+
+/** Sólo usar el Líder si el Coach está marcado como VACANTE en HC. */
+function tp_lookup_coach_vacant(?array $coach): bool {
+    if ($coach === null) return false;
+    $name = strtoupper(trim((string)($coach['nombre_colaborador'] ?? '')));
+    $status = strtoupper(trim((string)($coach['status'] ?? '')));
+    return str_contains($name, 'VACANT') || $status === 'VACANTE';
+}
+
 /** Project the exact role names onto the requested eight presentation columns. */
-function tp_lookup_hc_project(array $row, array $resolution, array $photoRows): array {
+function tp_lookup_hc_project(array $row, array $resolution, array $photoRows, array $commissionBases): array {
     $district = (string)($resolution['lider_id'] ?? '');
     $district = explode('|', $district, 2)[0] ?? '';
     $coachId = trim((string)($resolution['coach_id'] ?? ''));
@@ -253,14 +321,21 @@ function tp_lookup_hc_project(array $row, array $resolution, array $photoRows): 
     $row[4] = tp_lookup_hc_name($coach);
     $row[5] = tp_lookup_hc_name($leader);
     $row[6] = tp_lookup_hc_name($director);
-    $row['_coach_talent'] = trim((string)($coach['numero_talento_gs'] ?? ''));
+    // El Coach es el contacto normal; si está VACANTE, usar el Líder de HC.
+    // Nunca completar por los nombres antiguos de Salesforce.
+    $contact = tp_lookup_coach_vacant($coach) ? $leader : $coach;
+    // Una segunda vacante (Líder sin ocupante) no autoriza asignar una línea.
+    if (tp_lookup_coach_vacant($contact)) $contact = null;
+    $contactPosition = trim((string)($contact['id_posicion'] ?? ''));
+    $row['_contact_base'] = $contactPosition !== ''
+        ? trim((string)($commissionBases[$district . '|' . $contactPosition] ?? '')) : '';
     return $row;
 }
 
 /** Discard stale names if attribution cannot be certified by the HC engine. */
 function tp_lookup_hc_unresolved(array $row): array {
     foreach ([3,4,5,6] as $index) $row[$index] = 'No identificado en HC';
-    $row['_coach_talent'] = '';
+    $row['_contact_base'] = '';
     return $row;
 }
 
@@ -295,6 +370,7 @@ function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
         }
         $byWeek[$dt->format('o-W')][$date][] = $index;
     }
+    $photoCommissionCache = [];
     foreach ($byWeek as $dates) {
         $date = array_key_first($dates);
         // Group dates from same ISO week: one photograph, one resolver call.
@@ -304,7 +380,7 @@ function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
         foreach ($indices as $index) {
             $row = $rows[$index];
             $events[] = [
-                'cuenta'=>'VENTA_ID_'.(string)$row['_sale_id'],
+                'cuenta'=>'VENTA_ID_'.(string)($row['_source'] ?? 'talia').'_' . (string)$row['_sale_id'],
                 'fecha'=>substr((string)$row['_fecha_cierre'],0,10),
                 'folio_empleado'=>(string)$row['_folio'],
                 'lider'=>'', 'coach'=>'', 'origen_prospecto'=>'', 'subcanal'=>'',
@@ -315,7 +391,7 @@ function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
         foreach ($resolved as $result) $indexed[(string)($result['cuenta'] ?? '')] = $result;
         foreach ($indices as $index) {
             $row = $rows[$index];
-            $result = $indexed['VENTA_ID_'.(string)$row['_sale_id']] ?? null;
+            $result = $indexed['VENTA_ID_'.(string)($row['_source'] ?? 'talia').'_' . (string)$row['_sale_id']] ?? null;
             if ($result === null || ($result['fuente'] ?? '') !== 'HC_FOTO'
                 || empty($result['lider_id']) || empty($result['coach_id'])) {
                 $rows[$index] = tp_lookup_hc_unresolved($row);
@@ -323,19 +399,22 @@ function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
             }
             $photoKey = (string)($result['hc_foto'] ?? '');
             $photo = $hc['datos'][$photoKey] ?? [];
-            $rows[$index] = tp_lookup_hc_project($row, $result, $photo);
+            if (!array_key_exists($photoKey, $photoCommissionCache)) {
+                $photoCommissionCache[$photoKey] = tp_lookup_photo_commission_bases($system, $photoKey);
+            }
+            $rows[$index] = tp_lookup_hc_project($row, $result, $photo, $photoCommissionCache[$photoKey]);
         }
     }
-    return tp_lookup_add_coach_numbers($rows, $system);
+    return tp_lookup_add_contact_numbers($rows, $system);
 }
 
-/** Read contact numbers by the coach's HC folio. Conflicting assignments are
- * deliberately treated as missing instead of arbitrarily selecting one number.
+/** Buscar línea por numero_base_comisiones del Coach o del Líder (si VACANTE).
+ * Si existen varios números para el mismo identificador, no elegir arbitrariamente.
  */
-function tp_lookup_add_coach_numbers(array $rows, mysqli $system): array {
+function tp_lookup_add_contact_numbers(array $rows, mysqli $system): array {
     $talents = [];
     foreach ($rows as $row) {
-        $folio = trim((string)($row['_coach_talent'] ?? ''));
+        $folio = trim((string)($row['_contact_base'] ?? ''));
         if ($folio !== '' && $folio !== '-' && stripos($folio, 'VACANTE') === false) $talents[$folio] = true;
     }
     if (!$talents) return $rows;
@@ -361,9 +440,9 @@ function tp_lookup_add_coach_numbers(array $rows, mysqli $system): array {
         }
     } finally { $stmt->close(); }
     foreach ($rows as &$row) {
-        $folio = trim((string)($row['_coach_talent'] ?? ''));
+        $folio = trim((string)($row['_contact_base'] ?? ''));
         $choices = array_keys($numbers[$folio] ?? []);
-        $row['_coach_number'] = count($choices) === 1 ? $choices[0] : '';
+        $row['_contact_number'] = count($choices) === 1 ? $choices[0] : '';
     }
     unset($row);
     return $rows;
@@ -379,9 +458,9 @@ function tp_lookup_whatsapp(array $row, array $labels): string {
     // Stored OS can be numeric or already prefixed; never duplicate OS.
     $number = preg_replace('/^(?:OS[\s-]*)+/i', '', $os) ?? $os;
     $heading = $number !== '' ? 'Datos de la OS-' . $number : 'Datos de la cuenta ' . tp_lookup_display_value($row[1] ?? '');
-    $coachNumber = trim((string)($row['_coach_number'] ?? ''));
-    // El número de la línea asociada al Coach ocupa la primera línea cuando existe.
-    $lines = $coachNumber !== '' ? [$coachNumber, '', '*' . $heading . '*'] : ['*' . $heading . '*'];
+    $contactNumber = trim((string)($row['_contact_number'] ?? ''));
+    // @ identifica a la línea en WhatsApp; el título va en la línea siguiente.
+    $lines = $contactNumber !== '' ? ['@' . ltrim($contactNumber, '@'), '*' . $heading . '*'] : ['*' . $heading . '*'];
     foreach ($labels as $i => $label) {
         if ($i === 0) continue;
         $lines[] = $label . ': ' . tp_lookup_display_value($row[$i] ?? '');
@@ -420,12 +499,18 @@ if ($method === 'POST') {
             [$db, $prefix] = tp_lookup_connection();
             try {
                 $table = tp_lookup_sales_table($db, $prefix);
-                [$rows, $missing, $truncated] = tp_lookup_batch($identifiers, static fn(array $identifier): array => tp_lookup_search($db, $table, $identifier));
-                if ($rows) {
-                    $system = tp_lookup_system_connection();
-                    try { $rows = tp_lookup_resolve_sales_hc($rows, $system); }
-                    finally { $system->close(); }
-                }
+                $system = tp_lookup_system_connection();
+                try {
+                    $systemSalesTable = null;
+                    $search = static function(array $identifier) use ($db, $table, $system, &$systemSalesTable): array {
+                        $primary = tp_lookup_search($db, $table, $identifier, 'talia');
+                        if ($primary[0]) return $primary;
+                        $systemSalesTable ??= tp_lookup_system_sales_table($system);
+                        return tp_lookup_search($system, $systemSalesTable, $identifier, 'sistema');
+                    };
+                    [$rows, $missing, $truncated] = tp_lookup_batch($identifiers, $search);
+                    if ($rows) $rows = tp_lookup_resolve_sales_hc($rows, $system);
+                } finally { $system->close(); }
                 $searched = true;
             } finally { $db->close(); }
         }
