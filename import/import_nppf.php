@@ -1,7 +1,7 @@
 <?php
 /**
- * TotalXpedient / TalIA - Importador NPPF v1.0.0 (2026-11-19)
- * Destino: detalle/importador_nppf.php
+ * TotalXpedient / TalIA - Importador NPPF v1.0.1 (2026-11-19)
+ * Destino: import/import_nppf.php
  * Requiere las 6 tablas y 2 vistas del esquema totalxpedient_nppf_esquema_v1.sql.
  * Corte NACIONAL diferencial: carga manifiesto -> detalles que cambian -> indicadores ->
  * validacion -> publicacion atomica -> depuracion de staging.
@@ -352,7 +352,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_GET['action'])) {
                 SET r.presente_en_ultimo_corte=0,r.baja_carga_id=$iid,r.baja_fecha='$date'
                 WHERE r.presente_en_ultimo_corte=1 AND m.carga_id IS NULL");
             $v=[(int)($stats['altas']??0),(int)($stats['negocio']??0),(int)($stats['atraso']??0),(int)($gone['n']??0),(int)($stats['reapariciones']??0)];
-            $message='Corte nacional publicado: '.$manifest.' cuentas; SUR disponible en vw_nppf_sur_actual. REVERSO sin interpretación.';
+            $message='Corte nacional publicado: '.$manifest.' cuentas; SUR disponible en vw_nppf_sur_actual. REVERSO incluido como NPPF pendiente.';
             $s=nppf_stmt($conexion,"UPDATE nppf_cargas SET estado='OK', altas=?,actualizaciones_negocio=?,actualizaciones_atraso=?,bajas=?,reapariciones=?,mensaje=?,finalizado_en=NOW() WHERE id=?");
             mysqli_stmt_bind_param($s,'iiiiisi',$v[0],$v[1],$v[2],$v[3],$v[4],$message,$id);nppf_exec($s);mysqli_stmt_close($s);
             nppf_query($conexion,'COMMIT');$inTransaction=false;
@@ -381,10 +381,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_GET['action'])) {
 </head>
 <body>
 <main class="card">
-<div class="meta">TOTALXPEDIENT / TALIA · NPPF v1.0.0</div>
+<div class="meta">TOTALXPEDIENT / TALIA · NPPF v1.0.1</div>
 <h1>Importación diferencial de NPPF</h1>
 <p class="subtitle">Corte nacional acumulado · Cuentas pendientes · Indicadores oficiales por cosecha · Importación por lotes recuperable</p>
-<label for="file" class="drop"><strong>Selecciona el archivo NPPF de Pedro (.xlsb)</strong><small id="fileName">Formato AAAAMMDD_NPPF 2019 - 2026.xlsb</small></label>
+<label for="file" class="drop"><strong>Selecciona el archivo NPPF (.xlsb)</strong><small id="fileName">Formato AAAAMMDD_NPPF 2019 - 2026.xlsb</small></label>
 <input id="file" type="file" accept=".xlsb">
 <div class="summary" id="summary" hidden>
 <div class="tile"><small>Fecha del corte</small><b id="cutDate">—</b></div>
@@ -407,7 +407,7 @@ const $=id=>document.getElementById(id);
 const MONTHS=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
 const COLS=['CUENTA','FECHA ACTIVACION','ESTATUS_CTA','MONTO_FACTURA','TIPO','ATRASO','PLAZA','DISTRITO','CLUSTER','GRUPODISTRIBUIDOR','CANALVENTA','TIPO_CLUSTER','VENDEDOR','DESC_PLAN','JEFE_PLAZA','JEFE_VENTAS','REGION','COSECHA','NO MES','NOM MES','ANO COSECHA'];
 let documentFile=null, records=[], manifest=[], official=[], fileHash='', cutDate='', empty=0, sourceRows=0, countSur=0;
-const norm=v=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase().replace(/[\s_\-]+/g,'');
+const norm=v=>String(v??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 const trim=v=>v==null?'':String(v).trim();
 const txt=v=>trim(v)===''?null:trim(v);
 const number=v=>{if(v==null||trim(v)==='')return null;const n=Number(String(v).replace(/,/g,''));return Number.isFinite(n)?n:null};
@@ -501,12 +501,29 @@ $('file').addEventListener('change',async()=>{
   official=buildIndicators(wb.Sheets[indicatorName]);
   msg('Validando cuentas y construyendo comparador diferencial…');await pulse();
   const raw=XLSX.utils.sheet_to_json(wb.Sheets[detailName],{header:1,defval:null,raw:true,blankrows:true});
-  const head=(raw[0]||[]).map(norm);
+   // Detectar fila de encabezados; el origen tiene 21 columnas con orden conocido.
+   const headerRow=raw.findIndex((r,i)=>i<10 && norm(r?.[0])==='CUENTA' && norm(r?.[2])==='ESTATUSCTA' && norm(r?.[20])==='ANOCOSECHA');
+   if(headerRow<0)throw Error('No se identificaron los 21 encabezados de la hoja de detalle. Revisa el formato del archivo.');
+   const head=(raw[headerRow]||[]).map(norm);
   const c=COLS.map(h=>head.indexOf(norm(h)));
+   let dateColFallback=false;
+   // Algunos XLSB presentan anomalías al exponer B1 al convertirlos a matriz.
+   // Solo recuperar B por posición si las otras 20 columnas están EXACTAMENTE alineadas
+   // y las primeras filas de B contienen fechas reales de instalación.
+   if(c[1]<0 && c.every((ix,j)=>j===1 || ix===j)){
+     const probe=raw.slice(headerRow+1,headerRow+51).find(r=>r && trim(r[0])!=='' && r[1]!==null && r[1]!==undefined);
+     if(probe && formatDate(probe[1])){
+       c[1]=1;
+       dateColFallback=true;
+     }
+   }
   const missing=c.map((ix,i)=>ix<0?COLS[i]:null).filter(Boolean);
-  if(missing.length)throw Error('Columnas faltantes en hoja de detalle: '+missing.join(', '));
-  let duplicates=new Set();empty=0;countSur=0;sourceRows=Math.max(0,raw.length-1);
-  for(let i=1;i<raw.length;i++){
+   if(missing.length){
+     const seen=(raw[headerRow]||[]).slice(0,21).map((v,i)=>`${i+1}:${JSON.stringify(v??null)}`).join(' | ');
+     throw Error('Columnas no reconocidas: '+missing.join(', ')+'. Encabezados detectados: '+seen);
+   }
+   let duplicates=new Set();empty=0;countSur=0;sourceRows=Math.max(0,raw.length-headerRow-1);
+   for(let i=headerRow+1;i<raw.length;i++){
    const v=raw[i]||[];
    if(v.every(x=>x===null || trim(x)==='')){empty++;continue;}
    if(trim(v[c[0]])===''){
@@ -532,7 +549,7 @@ $('file').addEventListener('change',async()=>{
   if(records.length<1)throw Error('No hay cuentas que importar.');
   if(records.length>1000000)throw Error('Excede máximo de 1 millón de registros.');
   $('summary').hidden=false;$('cutDate').textContent=cutDate;$('records').textContent=records.length.toLocaleString('es-MX');$('sur').textContent=countSur.toLocaleString('es-MX');$('indicators').textContent=official.length.toLocaleString('es-MX');
-  $('warning').hidden=false;$('warning').textContent=`Se ignoraron ${empty.toLocaleString('es-MX')} filas vacías. El importador detecta altas, modificaciones, salidas y reapariciones. REVERSO se conserva sin exclusión automática. La fecha del archivo, no la fecha de carga, identifica el corte.`;
+  $('warning').hidden=false;$('warning').textContent=`Se ignoraron ${empty.toLocaleString('es-MX')} filas vacías. El importador detecta altas, modificaciones, salidas y reapariciones. REVERSO permanece incluido en NPPF. La fecha del archivo, no la fecha de carga, identifica el corte.${dateColFallback?' Se reconoció FECHA ACTIVACION por posición B, validando fechas de instalación.':''}`;
   msg('Archivo validado y preparado. Puedes comenzar la importación.','good');$('start').disabled=false;
  }catch(e){msg(e.message||String(e),'err');}
 });
