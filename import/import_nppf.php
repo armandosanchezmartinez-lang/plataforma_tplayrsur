@@ -1,11 +1,11 @@
 <?php
 /**
- * TotalXpedient / TalIA - Importador NPPF v1.0.1 (2026-11-19)
+ * TotalXpedient / TalIA - Importador NPPF v1.0.2 (2026-11-19)
  * Destino: import/import_nppf.php
  * Requiere las 6 tablas y 2 vistas del esquema totalxpedient_nppf_esquema_v1.sql.
  * Corte NACIONAL diferencial: carga manifiesto -> detalles que cambian -> indicadores ->
  * validacion -> publicacion atomica -> depuracion de staging.
- * No interpreta TIPO=REVERSO; conserva exactamente el valor de origen.
+ * TIPO=REVERSO es un pago bancario revertido: permanece dentro del universo NPPF.
  */
 declare(strict_types=1);
 set_time_limit(0);
@@ -381,7 +381,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_GET['action'])) {
 </head>
 <body>
 <main class="card">
-<div class="meta">TOTALXPEDIENT / TALIA · NPPF v1.0.1</div>
+<div class="meta">TOTALXPEDIENT / TALIA · NPPF v1.0.2</div>
 <h1>Importación diferencial de NPPF</h1>
 <p class="subtitle">Corte nacional acumulado · Cuentas pendientes · Indicadores oficiales por cosecha · Importación por lotes recuperable</p>
 <label for="file" class="drop"><strong>Selecciona el archivo NPPF (.xlsb)</strong><small id="fileName">Formato AAAAMMDD_NPPF 2019 - 2026.xlsb</small></label>
@@ -397,7 +397,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_GET['action'])) {
 <div class="track" id="track"><div class="bar" id="bar"></div></div>
 <div class="progress" id="progress"></div>
 <div class="status" id="status"></div>
-<div class="hint">La carga conserva el histórico de cuentas, guarda su presencia en cada corte y sincroniza atraso sin generar falsos movimientos. Una cuenta que desaparece se marca como salida del reporte, NO como pago confirmado. <b>TIPO=REVERSO</b> se importa tal como viene, sin descartarlo ni interpretarlo.</div>
+<div class="hint">La carga conserva el histórico de cuentas, guarda su presencia en cada corte y sincroniza atraso sin generar falsos movimientos. Una cuenta que desaparece se marca como salida del reporte, NO como pago confirmado. <b>TIPO=REVERSO</b> se conserva como NPPF: identifica pagos revertidos por el banco.</div>
 </main>
 <script>
 'use strict';
@@ -494,10 +494,17 @@ $('file').addEventListener('change',async()=>{
   const buf=await documentFile.arrayBuffer();
   const dg=await crypto.subtle.digest('SHA-256',buf);
   fileHash=[...new Uint8Array(dg)].map(b=>b.toString(16).padStart(2,'0')).join('');
+  // XLSB: normalizar ambos lados. norm() elimina puntos, espacios y guiones.
+  // Evitar comparar el nombre normalizado contra literales que conservan puntos.
   const wb=XLSX.read(buf,{type:'array',cellDates:false,cellText:true,cellNF:true,sheets:['2.0 DDBB NPPF QS','1.0 NPPF']});
-  const detailName=wb.SheetNames.find(n=>norm(n)==='2.0DDBBNPPFQS');
-  const indicatorName=wb.SheetNames.find(n=>norm(n)==='1.0NPPF');
-  if(!detailName || !wb.Sheets[detailName])throw Error('No se encontró la hoja 2.0 DDBB NPPF QS.');
+  const detailExpected=norm('2.0 DDBB NPPF QS');
+  const indicatorExpected=norm('1.0 NPPF');
+  const detailName=wb.SheetNames.find(n=>norm(n)===detailExpected);
+  const indicatorName=wb.SheetNames.find(n=>norm(n)===indicatorExpected);
+  if(!detailName || !wb.Sheets[detailName])
+      throw Error('No se pudo leer la hoja 2.0 DDBB NPPF QS. Hojas detectadas: '+wb.SheetNames.join(' | '));
+  if(!indicatorName || !wb.Sheets[indicatorName])
+      throw Error('No se pudo leer la hoja 1.0 NPPF. Hojas detectadas: '+wb.SheetNames.join(' | '));
   official=buildIndicators(wb.Sheets[indicatorName]);
   msg('Validando cuentas y construyendo comparador diferencial…');await pulse();
   const raw=XLSX.utils.sheet_to_json(wb.Sheets[detailName],{header:1,defval:null,raw:true,blankrows:true});
