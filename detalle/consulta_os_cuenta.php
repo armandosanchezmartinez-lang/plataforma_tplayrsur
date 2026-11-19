@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.31
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.32
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -459,11 +459,14 @@ function tp_lookup_whatsapp(array $row, array $labels): string {
     $number = preg_replace('/^(?:OS[\s-]*)+/i', '', $os) ?? $os;
     $heading = $number !== '' ? 'Datos de la OS-' . $number : 'Datos de la cuenta ' . tp_lookup_display_value($row[1] ?? '');
     $contactNumber = trim((string)($row['_contact_number'] ?? ''));
-    // @ identifica a la línea en WhatsApp; el título va en la línea siguiente.
-    $lines = $contactNumber !== '' ? ['@' . ltrim($contactNumber, '@'), '*' . $heading . '*'] : ['*' . $heading . '*'];
+    $lines = ['*' . $heading . '*'];
     foreach ($labels as $i => $label) {
-        if ($i === 0) continue;
-        $lines[] = $label . ': ' . tp_lookup_display_value($row[$i] ?? '');
+        if ($i === 0 || $label === 'Director' || $label === 'Distrito') continue;
+        $value = tp_lookup_display_value($row[$i] ?? '');
+        if ($label === 'Coach' && $contactNumber !== '') {
+            $value .= ' - @' . ltrim($contactNumber, '@');
+        }
+        $lines[] = $label . ': ' . $value;
     }
     return implode("\n", $lines);
 }
@@ -532,8 +535,8 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.30">
-    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.27" defer></script>
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.32">
+    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.32" defer></script>
 </head>
 <body>
 <main class="lookup-shell">
