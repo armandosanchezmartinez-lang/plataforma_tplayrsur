@@ -38,9 +38,16 @@ function rbm_suma(int $a,int $b): int {
     return $a+$b;
 }
 function rbm_pct(int $real,int $meta): ?float { return $meta>0?100.0*$real/$meta:null; }
-/** Podio por alcance del rango, independiente del orden visible de las filas. */
+/** Podio por alcance del rango, independiente del orden visible de las filas.
+ * Solo participan filas con meta del rango definida y alcance del rango >= 100%.
+ */
 function rbm_medallas_rango(array $rows): array {
-    $eligible=array_values(array_filter($rows,static fn($r)=>($r['range']??0)>0 && isset($r['alcance_rango'])));
+    $eligible=array_values(array_filter($rows,static function($r){
+        return ($r['range'] ?? 0) > 0
+            && isset($r['alcance_rango'])
+            && $r['alcance_rango'] !== null
+            && $r['alcance_rango'] >= 100.0;
+    }));
     usort($eligible,static function($a,$b){
         return ($b['alcance_rango'] <=> $a['alcance_rango'])
             ?: ($b['actual'] <=> $a['actual'])

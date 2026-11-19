@@ -1,5 +1,5 @@
 <?php
-/** TalIA · Reto Buen Mes · Noviembre 2026 · v1.2.1 · Sólo lectura. */
+/** TalIA · Reto Buen Mes · Noviembre 2026 · v1.2.2 · Sólo lectura. */
 declare(strict_types=1);
 header('Cache-Control: no-cache, no-store, must-revalidate');
 
@@ -128,7 +128,7 @@ $calendarCells = rbm_calendar_cells();
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reto Buen Mes — TALIA</title>
 <link rel="stylesheet" href="../assets/css/xpedient-v2.css?v=162">
-<link rel="stylesheet" href="../assets/css/reto_buen_mes.css?v=1.2.1">
+<link rel="stylesheet" href="../assets/css/reto_buen_mes.css?v=1.2.2">
 </head>
 <body class="page-ranking page-reto-buen-mes">
 <?php $current_page='reto_buen_mes'; include __DIR__ . '/../includes/sidebar.php'; ?>
@@ -138,7 +138,7 @@ $calendarCells = rbm_calendar_cells();
 <?php else: ?>
 <header class="rbm-hero rbm-panel">
     <div class="rbm-hero-info">
-        <div><h1>Reto Buen Mes</h1><p class="rbm-subtitle">Región SUR · rentas instaladas sin impuestos · noviembre 2026</p></div>
+        <div><h1>Reto Buen Mes</h1><p class="rbm-subtitle">Región SUR · rentas instaladas sin impuestos · noviembre 2026</p><p class="rbm-subtitle rbm-subtitle-note">Este es un aproximado de las Rentas Netas por Distrito, el reporte oficial se puede encontrar en Qlik.</p></div>
     </div>
     <div class="rbm-filter-layout">
     <div class="rbm-hero-lines">
