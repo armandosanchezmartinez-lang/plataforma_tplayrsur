@@ -1,16 +1,16 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.1.2 (2026-11-20)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.0 (2026-11-20)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.1.0 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.0 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
- *   los mismos días calendario del mes previo, M2 = dos meses y M3 = tres.
+ *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
- * - M2/M3 = primera factura AUN pendiente de esas cosechas, NO impago de
+ * - M2/M3/M4 = primera factura AUN pendiente de esas cosechas, NO impago de
  *   segunda/tercera factura ni mediciones históricas al cierre de esos meses.
  * - Corte operativo M1 de la ESCALERA: mismo día de FECHA_ACTIVACION en
  *   el mes siguiente (sin los 5 días de precio de lista). Si fecha de
@@ -26,7 +26,7 @@
  * - Denominador de cada porcentaje = instalaciones certificadas por Motor HC
  *   de esa MISMA cosecha. Cuentas sin certificación quedan en auditoría.
  * - Semanal: el selector elige POSICIONES de días de la semana de referencia,
- *   aplicadas al día calendario equivalente de cada uno de los tres meses.
+ *   aplicadas al día calendario equivalente de cada uno de los cuatro meses.
  * - Mes completo = mes calendario completo para cada una de las 3 cosechas.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
@@ -91,8 +91,8 @@ function np_team_key(string $lider, ?string $coach=null, ?string $vendor=null): 
     return $lider . ($coach===null?'':'|'.$coach) . ($vendor===null?'':'|'.$vendor);
 }
 function np_metrics(): array {
-    return ['ins_m3'=>0,'ins_m2'=>0,'ins_m1'=>0,
-        'nppf_m3'=>0,'nppf_m2'=>0,'nppf_m1'=>0,'prevent_m1'=>0,'reverso'=>0];
+    return ['ins_m4'=>0,'ins_m3'=>0,'ins_m2'=>0,'ins_m1'=>0,
+        'nppf_m4'=>0,'nppf_m3'=>0,'nppf_m2'=>0,'nppf_m1'=>0,'prevent_m1'=>0,'reverso'=>0];
 }
 function np_apply(array &$scores, string $key, string $metric): void {
     if (!isset($scores[$key])) $scores[$key]=np_metrics();
@@ -123,9 +123,11 @@ function np_cohort_label(array $dateKeys): string {
     if($a->format('Y-m')===$b->format('Y-m'))return (int)$a->format('j').'–'.(int)$b->format('j').' '.$m1.' '.$b->format('Y');
     return (int)$a->format('j').' '.$m1.' – '.(int)$b->format('j').' '.$m2.' '.$b->format('Y');
 }
-function np_m1_class(?float $pct): string {
+function np_pct_class(?float $pct): string {
     if ($pct===null) return 'nppf-muted';
-    return 'nppf-risk'; // etiqueta de prioridad M1, no semáforo de meta trimestral
+    if ($pct < 4.0) return 'nppf-good';
+    if ($pct <= 5.0) return 'nppf-caution';
+    return 'nppf-risk';
 }
 
 $now=date('Y-m-d');
@@ -201,9 +203,9 @@ if($periodo==='semanal'){
     $subtitleRange='Referencia '.$meses[$month].' · '.$monthYear;
 }
 // Cohortes de instalaciones (no vencimientos). El calendario visible es la referencia.
-$cohortDates=['m3'=>[], 'm2'=>[], 'm1'=>[]];
+$cohortDates=['m4'=>[], 'm3'=>[], 'm2'=>[], 'm1'=>[]];
 if($periodo==='mensual' && $rangeMode==='completo') {
-    foreach([3,2,1] as $m) {
+    foreach([4,3,2,1] as $m) {
         $start=np_shift_months($monthCurrent->format('Y-m-01'),$m);
         $end=np_date($start)->format('Y-m-t');
         for($d=np_date($start);$d<=np_date($end);$d=$d->modify('+1 day')) {
@@ -211,7 +213,7 @@ if($periodo==='mensual' && $rangeMode==='completo') {
         }
     }
 } elseif($periodo==='mensual') {
-    foreach([3,2,1] as $m) {
+    foreach([4,3,2,1] as $m) {
         $start=np_shift_months($actualStart,$m);
         $end=np_shift_months($actualEnd,$m);
         for($d=np_date($start);$d<=np_date($end);$d=$d->modify('+1 day')) {
@@ -222,11 +224,11 @@ if($periodo==='mensual' && $rangeMode==='completo') {
     for($d=np_date($actualStart);$d<=np_date($actualEnd);$d=$d->modify('+1 day')) {
         if(!in_array((int)$d->format('N'),$days,true))continue;
         $ref=$d->format('Y-m-d');
-        foreach([3,2,1] as $m) $cohortDates['m'.$m][np_shift_months($ref,$m)]=true;
+        foreach([4,3,2,1] as $m) $cohortDates['m'.$m][np_shift_months($ref,$m)]=true;
     }
 }
 $cohortLabels=[];$cohortIndex=[];$activationAll=[];
-foreach([3,2,1] as $m){
+foreach([4,3,2,1] as $m){
     $name='m'.$m;
     $cohortLabels[$name]=np_cohort_label(array_keys($cohortDates[$name]));
     foreach($cohortDates[$name] as $activation=>$_){
@@ -243,7 +245,7 @@ $activationFrom=$activationAll?min($activationAll):$now;
 $activationTo=$activationAll?max($activationAll):$now;
 
 $catalog=[];$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
-$audit=['m3'=>[], 'm2'=>[], 'm1'=>[]];
+$audit=['m4'=>[], 'm3'=>[], 'm2'=>[], 'm1'=>[]];
 $photo=null;$accountDetail=[];
 if(!$errors){
  try {
@@ -331,8 +333,8 @@ if(!$errors){
     foreach($catalog as $lid=>$l)$scores[$lid]??=np_metrics();
     foreach($coaches as $ck=>$c)$scores[$ck]??=np_metrics();
     foreach($vendors as $vk=>$v)$scores[$vk]??=np_metrics();
-    $notCertified=count($audit['m3'])+count($audit['m2'])+count($audit['m1']);
-    if($notCertified)$warnings['pendientes']="{$notCertified} cuentas NPPF en M3/M2/M1 no pudieron asignarse de forma certificada a un líder; se muestran en auditoría, fuera de porcentajes.";
+    $notCertified=count($audit['m4'])+count($audit['m3'])+count($audit['m2'])+count($audit['m1']);
+    if($notCertified)$warnings['pendientes']="{$notCertified} cuentas NPPF en M4/M3/M2/M1 no pudieron asignarse de forma certificada a un líder; se muestran en auditoría, fuera de porcentajes.";
     if($corte<$eval)$warnings['frescura']='Pendientes según archivo del '.$corte.'; M1/Preventivo evaluado al '.$eval.'. Algunos clientes pudieron pagar después del corte.';
  }catch(Throwable $e){$errors[]='Motor NPPF / HC: '.$e->getMessage();}
 }
@@ -377,26 +379,39 @@ if(!$errors){
         }
         $row['antiguedad_meses']=$ages?(int)round(array_sum($ages)/count($ages)):null;
         $row['antiguedad']=np_age_fmt($row['antiguedad_meses']);
-        foreach([3,2,1] as $m)$row['pct_m'.$m]=np_rate($row['nppf_m'.$m],$row['ins_m'.$m]);
+        foreach([4,3,2,1] as $m)$row['pct_m'.$m]=np_rate($row['nppf_m'.$m],$row['ins_m'.$m]);
         $row['pct_prevent_m1']=np_rate($row['prevent_m1'],$row['ins_m1']);
         $rows[]=$row;
     }
     // Prioridad default: riesgo de cartera vencida más antigua M3, después M2 y M1.
     usort($rows,static function($a,$b){
-        foreach(['pct_m3','pct_m2','pct_m1'] as $p){
+        foreach(['pct_m4','pct_m3','pct_m2','pct_m1'] as $p){
             $aa=$a[$p]??-1;$bb=$b[$p]??-1;
             if($aa!==$bb)return $bb<=>$aa;
         }
-        return ($b['nppf_m3']<=>$a['nppf_m3']) ?: strcmp($a['entidad'],$b['entidad']);
+        return ($b['nppf_m4']<=>$a['nppf_m4']) ?: strcmp($a['entidad'],$b['entidad']);
     });
     if($view==='cuentas'&&$scopeRows){
-        foreach($scopeRows as $r)foreach($accountDetail[$r['key']]??[] as $record)$detailRows[]=$record;
-        $priority=['M3'=>0,'M2'=>1,'M1'=>2,'PREVENTIVO M1'=>3];
-        usort($detailRows,static fn($a,$b)=>($priority[$a['_class']]??4)<=>($priority[$b['_class']]??4) ?: strcmp($a['fecha_activacion'],$b['fecha_activacion']));
+        foreach($scopeRows as $r){
+            foreach($accountDetail[$r['key']]??[] as $record){
+                if (($record['_cohort'] ?? '') !== 'm1') continue;
+                $detailRows[]=$record;
+            }
+        }
+        $priority=['M1'=>0,'PREVENTIVO M1'=>1];
+        usort($detailRows,static fn($a,$b)=>($priority[$a['_class']]??9)<=>($priority[$b['_class']]??9) ?: strcmp($a['fecha_activacion'],$b['fecha_activacion']));
     }
 }
 $tot=np_total($rows);
 if($view==='cuentas'&&$rows)$tot=$scores[$rows[0]['key']]??np_metrics();
+$vendorTrendLabels=[];$vendorTrendCounts=[];$vendorTrendRates=[];
+if($view==='cuentas'&&$rows){
+    foreach([4,3,2,1] as $m){
+        $vendorTrendLabels[]='M'.$m;
+        $vendorTrendCounts[]=(int)($tot['nppf_m'.$m]??0);
+        $vendorTrendRates[]=(float)($rows[0]['pct_m'.$m]??0);
+    }
+}
 $rootLink=np_q(['view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]);
 $coachLink=np_q(['view'=>'ranking_coach','lider_id'=>null,'coach_pos'=>null,'folio'=>null]);
 $backLeaders=np_q(['view'=>'coaches','coach_pos'=>null,'folio'=>null]);
@@ -430,19 +445,22 @@ body.page-ranking .nppf-table .nppf-sort{cursor:pointer;user-select:none}body.pa
 body.page-ranking .nppf-card-hint{color:#667085;font-size:11px;margin-top:2px}
 body.page-ranking .nppf-month-input{font:inherit;border:1px solid #e0e4f0;border-radius:9px;padding:8px}
 body.page-ranking .nppf-rangepanel{min-width:315px}body.page-ranking .nppf-detail-table{min-width:1270px}
+body.page-ranking .nppf-chart-panel{margin-top:14px}
+body.page-ranking .nppf-chart-wrap{position:relative;height:340px}
 body.page-ranking .nppf-raw{font-weight:700;color:#5a2678}
 body.page-ranking .nppf-filters{display:flex;align-items:center;flex-wrap:wrap;gap:7px}
-body.page-ranking .nppf-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+body.page-ranking .nppf-cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
 body.page-ranking .nppf-cards .card{min-width:0}
 body.page-ranking .nppf-cards .label{font-size:11px}
 body.page-ranking .nppf-cohort-sub{display:block;font-size:10px;font-weight:500;color:#667085;white-space:normal;margin-top:4px}
 body.page-ranking .nppf-table .nppf-group.nppf-stair{background:#f3eaff;color:#572688}
 
-/* v1.1.1 - Malla de 15 columnas fija, sin ensanchamiento unilateral de M3.
-   4 identificacion + 3 cosecha + 6 NPPF + 2 preventivo = 15. */
+/* v1.2.0 - Malla de 17 columnas fija.
+   4 identificación + 4 cosecha + 8 NPPF + 2 preventivo = 18?
+   La tabla visible usa 4 + 4 + 8 + 2 = 18 columnas totales contando índice, distrito, entidad y antigüedad. */
 body.page-ranking #nppfTable{
   width:100% !important;
-  min-width:1380px;
+  min-width:1560px;
   table-layout:fixed !important;
   border-collapse:collapse;
 }
@@ -495,10 +513,10 @@ body.page-ranking #nppfTable tbody td.nppf-entity{
   line-height:1.35;
 }
 body.page-ranking #nppfTable tbody td:nth-child(5),
-body.page-ranking #nppfTable tbody td:nth-child(8),
-body.page-ranking #nppfTable tbody td:nth-child(14),
-body.page-ranking #nppfTable thead tr:nth-child(2) th:nth-child(4),
-body.page-ranking #nppfTable thead tr:nth-child(2) th:nth-child(10){
+body.page-ranking #nppfTable tbody td:nth-child(9),
+body.page-ranking #nppfTable tbody td:nth-child(17),
+body.page-ranking #nppfTable thead tr:nth-child(2) th:nth-child(5),
+body.page-ranking #nppfTable thead tr:nth-child(2) th:nth-child(13){
   border-left:2px solid #dfe3f0;
 }
 body.page-ranking #nppfTable tbody #totalRow td{
@@ -532,8 +550,8 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <section class="topbar">
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
-  <p>Escalera de cosechas M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.1.2</strong></p>
+  <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.0</strong></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -600,7 +618,8 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <?php foreach($errors as $error):?><div class="nppf-panel nppf-alert" role="alert">⚠ <?=np_h($error)?></div><?php endforeach;?>
 <?php if(!$errors):?>
 <section class="cards nppf-cards" id="nppfCards">
- <div class="card"><div class="label">COSECHA · INSTALACIONES M1</div><div class="value" id="kpiInsM1"><?=np_num($tot['ins_m1'])?></div><div class="hint"><?=np_h($cohortLabels['m1'])?><div class="nppf-card-hint">M3: <span id="kpiInsM3"><?=np_num($tot['ins_m3'])?></span> · M2: <span id="kpiInsM2"><?=np_num($tot['ins_m2'])?></span></div></div></div>
+ <div class="card"><div class="label">COSECHA · INSTALACIONES M1</div><div class="value" id="kpiInsM1"><?=np_num($tot['ins_m1'])?></div><div class="hint"><?=np_h($cohortLabels['m1'])?><div class="nppf-card-hint">M4: <span id="kpiInsM4"><?=np_num($tot['ins_m4'])?></span> · M3: <span id="kpiInsM3"><?=np_num($tot['ins_m3'])?></span> · M2: <span id="kpiInsM2"><?=np_num($tot['ins_m2'])?></span></div></div></div>
+ <div class="card"><div class="label">NPPF M4</div><div class="value" id="kpiM4"><?=np_num($tot['nppf_m4'])?></div><div class="hint"><span id="kpiM4Pct"><?=np_pct(np_rate($tot['nppf_m4'],$tot['ins_m4']))?></span> de INS M4<div class="nppf-card-hint"><?=np_h($cohortLabels['m4'])?></div></div></div>
  <div class="card"><div class="label">NPPF M3</div><div class="value" id="kpiM3"><?=np_num($tot['nppf_m3'])?></div><div class="hint"><span id="kpiM3Pct"><?=np_pct(np_rate($tot['nppf_m3'],$tot['ins_m3']))?></span> de INS M3<div class="nppf-card-hint"><?=np_h($cohortLabels['m3'])?></div></div></div>
  <div class="card"><div class="label">NPPF M2</div><div class="value" id="kpiM2"><?=np_num($tot['nppf_m2'])?></div><div class="hint"><span id="kpiM2Pct"><?=np_pct(np_rate($tot['nppf_m2'],$tot['ins_m2']))?></span> de INS M2<div class="nppf-card-hint"><?=np_h($cohortLabels['m2'])?></div></div></div>
  <div class="card"><div class="label">NPPF M1</div><div class="value" id="kpiM1"><?=np_num($tot['nppf_m1'])?></div><div class="hint"><span id="kpiM1Pct"><?=np_pct(np_rate($tot['nppf_m1'],$tot['ins_m1']))?></span> de INS M1<div class="nppf-card-hint">Corte mensual alcanzado</div></div></div>
@@ -608,7 +627,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 </section>
 <section class="nppf-panel" style="margin-top:12px">
  <strong>Metodología de cosechas · NPPF</strong>
- <div class="nppf-caption">El período seleccionado es una <strong>referencia calendario</strong>. Las instalaciones M1, M2 y M3 corresponden a los mismos días de <strong>uno, dos y tres meses anteriores</strong>; en mes completo se toman los meses completos. M2 y M3 representan <strong>primeras facturas todavía pendientes</strong>, no la segunda ni tercera factura del cliente. Cada porcentaje utiliza las instalaciones <strong>certificadas por Motor HC de su propia cosecha</strong>. La separación operativa de <strong>M1 y Preventivo</strong> depende del <strong>día de corte mensual</strong> (fecha de instalación trasladada un mes) y de la fecha de evaluación: el mismo día del corte ya cuenta como M1. Los <strong>cinco días posteriores de precio de lista</strong> NO retrasan esa clasificación en este Ranking; su fecha límite se conserva en el detalle por cuenta. <strong>Esta segmentación operativa no equivale al indicador de primera factura vencida al final de precio de lista.</strong> Todos los pendientes provienen del <strong>último archivo NPPF publicado</strong>; no se reconstruyen saldos históricos de esos meses. REVERSO permanece incluido. La meta trimestral oficial no se utiliza como semáforo de estos porcentajes operativos.</div>
+ <div class="nppf-caption">El período seleccionado es una <strong>referencia calendario</strong>. Las instalaciones M1, M2, M3 y M4 corresponden a los mismos días de <strong>uno, dos, tres y cuatro meses anteriores</strong>; en mes completo se toman los meses completos. M2, M3 y M4 representan <strong>primeras facturas todavía pendientes</strong>, no la segunda, tercera ni cuarta factura del cliente. Cada porcentaje utiliza las instalaciones <strong>certificadas por Motor HC de su propia cosecha</strong>. La separación operativa de <strong>M1 y Preventivo</strong> depende del <strong>día de corte mensual</strong> (fecha de instalación trasladada un mes) y de la fecha de evaluación: el mismo día del corte ya cuenta como M1. Los <strong>cinco días posteriores de precio de lista</strong> NO retrasan esa clasificación en este Ranking; su fecha límite se conserva en el detalle por cuenta. <strong>Esta segmentación operativa no equivale al indicador de primera factura vencida al final de precio de lista.</strong> Todos los pendientes provienen del <strong>último archivo NPPF publicado</strong>; no se reconstruyen saldos históricos de esos meses. REVERSO permanece incluido. La meta trimestral oficial no se utiliza como semáforo de estos porcentajes operativos.</div>
 </section>
 <?php foreach($warnings as $warn):?><div class="nppf-note">⚠ <?=np_h($warn)?></div><?php endforeach;?>
 <?php if($view!=='cuentas'):?>
@@ -623,22 +642,25 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <div class="table-wrap"><table class="nppf-table" id="nppfTable">
 <colgroup>
  <col class="np-rank"><col class="np-district"><col class="np-name"><col class="np-age">
- <col class="np-ins"><col class="np-ins"><col class="np-ins">
- <col class="np-quantity"><col class="np-quantity"><col class="np-quantity">
- <col class="np-percent"><col class="np-percent"><col class="np-percent">
+ <col class="np-ins"><col class="np-ins"><col class="np-ins"><col class="np-ins">
+ <col class="np-quantity"><col class="np-quantity"><col class="np-quantity"><col class="np-quantity">
+ <col class="np-percent"><col class="np-percent"><col class="np-percent"><col class="np-percent">
  <col class="np-prevent-quantity"><col class="np-prevent-percent">
 </colgroup><thead>
 <tr><th rowspan="2" class="center">#</th><th rowspan="2">Distrito</th><th rowspan="2"><?=($view==='lideres')?'Líder':($view==='vendedores'?'Vendedor':'Coach')?></th><th rowspan="2" class="center nppf-sort" data-key="antiguedad_meses">Antigüedad<br>prom. equipo ↕</th>
- <th colspan="3" class="nppf-group ins">COSECHA · INSTALACIONES</th>
- <th colspan="6" class="nppf-group nppf-stair">NPPF</th>
+ <th colspan="4" class="nppf-group ins">COSECHA · INSTALACIONES</th>
+ <th colspan="8" class="nppf-group nppf-stair">NPPF</th>
  <th colspan="2" class="nppf-group prevent">NPPF M1 PREVENTIVO</th></tr>
 <tr>
+ <th class="num nppf-sort" data-key="ins_m4">INS M4 ↕<span class="nppf-cohort-sub"><?=np_h($cohortLabels['m4'])?></span></th>
  <th class="num nppf-sort" data-key="ins_m3">INS M3 ↕<span class="nppf-cohort-sub"><?=np_h($cohortLabels['m3'])?></span></th>
  <th class="num nppf-sort" data-key="ins_m2">INS M2 ↕<span class="nppf-cohort-sub"><?=np_h($cohortLabels['m2'])?></span></th>
  <th class="num nppf-sort" data-key="ins_m1">INS M1 ↕<span class="nppf-cohort-sub"><?=np_h($cohortLabels['m1'])?></span></th>
+ <th class="num nppf-sort" data-key="nppf_m4"># M4 ↕</th>
  <th class="num nppf-sort" data-key="nppf_m3"># M3 ↕</th>
  <th class="num nppf-sort" data-key="nppf_m2"># M2 ↕</th>
  <th class="num nppf-sort" data-key="nppf_m1"># M1 ↕</th>
+ <th class="center nppf-sort" data-key="pct_m4">% M4 ↕</th>
  <th class="center nppf-sort" data-key="pct_m3">% M3 ↕</th>
  <th class="center nppf-sort" data-key="pct_m2">% M2 ↕</th>
  <th class="center nppf-sort" data-key="pct_m1">% M1 ↕</th>
@@ -648,23 +670,25 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <?php foreach($rows as $i=>$r):
  $href=$view==='lideres'?np_q(['view'=>'coaches','lider_id'=>$r['lid'],'coach_pos'=>null,'folio'=>null])
     :(in_array($view,['ranking_coach','coaches'],true)?np_q(['view'=>'vendedores','lider_id'=>$r['lid'],'coach_pos'=>$r['co'],'folio'=>null]):np_q(['view'=>'cuentas','lider_id'=>$r['lid'],'coach_pos'=>$r['co'],'folio'=>$r['v']]));
- $dataset=['ins_m3'=>$r['ins_m3'],'ins_m2'=>$r['ins_m2'],'ins_m1'=>$r['ins_m1'],
-   'nppf_m3'=>$r['nppf_m3'],'nppf_m2'=>$r['nppf_m2'],'nppf_m1'=>$r['nppf_m1'],
-   'pct_m3'=>$r['pct_m3']??-1,'pct_m2'=>$r['pct_m2']??-1,'pct_m1'=>$r['pct_m1']??-1,
+ $dataset=['ins_m4'=>$r['ins_m4'],'ins_m3'=>$r['ins_m3'],'ins_m2'=>$r['ins_m2'],'ins_m1'=>$r['ins_m1'],
+   'nppf_m4'=>$r['nppf_m4'],'nppf_m3'=>$r['nppf_m3'],'nppf_m2'=>$r['nppf_m2'],'nppf_m1'=>$r['nppf_m1'],
+   'pct_m4'=>$r['pct_m4']??-1,'pct_m3'=>$r['pct_m3']??-1,'pct_m2'=>$r['pct_m2']??-1,'pct_m1'=>$r['pct_m1']??-1,
    'prevent_m1'=>$r['prevent_m1'],'pct_prevent_m1'=>$r['pct_prevent_m1']??-1,
    'antiguedad_meses'=>$r['antiguedad_meses']??-1,'reverso'=>$r['reverso']];
 ?><tr class="nppf-row data-row" tabindex="0" data-district="<?=np_h($r['distrito'])?>" data-href="<?=np_h($href)?>" <?php foreach($dataset as $k=>$v)echo ' data-'.str_replace('_','-', $k).'="'.np_h($v).'"';?> >
 <td class="center rank"><?=$i+1?></td><td><?=np_h($r['distrito'])?></td><td class="nppf-entity"><?=np_h($r['entidad'])?></td><td class="center"><?=np_h($r['antiguedad'])?></td>
-<td class="num"><?=np_num($r['ins_m3'])?></td><td class="num"><?=np_num($r['ins_m2'])?></td><td class="num"><?=np_num($r['ins_m1'])?></td>
-<td class="num"><?=np_num($r['nppf_m3'])?></td><td class="num"><?=np_num($r['nppf_m2'])?></td><td class="num"><?=np_num($r['nppf_m1'])?></td>
-<td class="center"><span class="nppf-pill <?=np_m1_class($r['pct_m3'])?>"><?=np_pct($r['pct_m3'])?></span></td>
-<td class="center"><span class="nppf-pill <?=np_m1_class($r['pct_m2'])?>"><?=np_pct($r['pct_m2'])?></span></td>
-<td class="center"><span class="nppf-pill <?=np_m1_class($r['pct_m1'])?>"><?=np_pct($r['pct_m1'])?></span></td>
-<td class="num"><?=np_num($r['prevent_m1'])?></td><td class="center"><span class="nppf-pill nppf-caution"><?=np_pct($r['pct_prevent_m1'])?></span></td></tr>
+<td class="num"><?=np_num($r['ins_m4'])?></td><td class="num"><?=np_num($r['ins_m3'])?></td><td class="num"><?=np_num($r['ins_m2'])?></td><td class="num"><?=np_num($r['ins_m1'])?></td>
+<td class="num"><?=np_num($r['nppf_m4'])?></td><td class="num"><?=np_num($r['nppf_m3'])?></td><td class="num"><?=np_num($r['nppf_m2'])?></td><td class="num"><?=np_num($r['nppf_m1'])?></td>
+<td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m4'])?>"><?=np_pct($r['pct_m4'])?></span></td>
+<td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m3'])?>"><?=np_pct($r['pct_m3'])?></span></td>
+<td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m2'])?>"><?=np_pct($r['pct_m2'])?></span></td>
+<td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m1'])?>"><?=np_pct($r['pct_m1'])?></span></td>
+<td class="num"><?=np_num($r['prevent_m1'])?></td><td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_prevent_m1'])?>"><?=np_pct($r['pct_prevent_m1'])?></span></td></tr>
 <?php endforeach;?>
 <tr class="total-row" id="totalRow"><td colspan="3"><strong>TOTAL CERTIFICADO</strong></td><td class="center">—</td>
-<td class="num" id="tInsM3"><?=np_num($tot['ins_m3'])?></td><td class="num" id="tInsM2"><?=np_num($tot['ins_m2'])?></td><td class="num" id="tInsM1"><?=np_num($tot['ins_m1'])?></td>
-<td class="num" id="tM3"><?=np_num($tot['nppf_m3'])?></td><td class="num" id="tM2"><?=np_num($tot['nppf_m2'])?></td><td class="num" id="tM1"><?=np_num($tot['nppf_m1'])?></td>
+<td class="num" id="tInsM4"><?=np_num($tot['ins_m4'])?></td><td class="num" id="tInsM3"><?=np_num($tot['ins_m3'])?></td><td class="num" id="tInsM2"><?=np_num($tot['ins_m2'])?></td><td class="num" id="tInsM1"><?=np_num($tot['ins_m1'])?></td>
+<td class="num" id="tM4"><?=np_num($tot['nppf_m4'])?></td><td class="num" id="tM3"><?=np_num($tot['nppf_m3'])?></td><td class="num" id="tM2"><?=np_num($tot['nppf_m2'])?></td><td class="num" id="tM1"><?=np_num($tot['nppf_m1'])?></td>
+<td class="center" id="tPctM4"><?=np_pct(np_rate($tot['nppf_m4'],$tot['ins_m4']))?></td>
 <td class="center" id="tPctM3"><?=np_pct(np_rate($tot['nppf_m3'],$tot['ins_m3']))?></td>
 <td class="center" id="tPctM2"><?=np_pct(np_rate($tot['nppf_m2'],$tot['ins_m2']))?></td>
 <td class="center" id="tPctM1"><?=np_pct(np_rate($tot['nppf_m1'],$tot['ins_m1']))?></td>
@@ -672,17 +696,19 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <td class="center" id="tPctPre"><?=np_pct(np_rate($tot['prevent_m1'],$tot['ins_m1']))?></td></tr>
 </tbody></table></div></section>
 <?php else: ?>
-<section class="table-card"><div class="table-head"><strong>Detalle por cuenta · <?=np_h($vendors[np_team_key($liderId,$coachId,$vendorId)]['nombre']??'VENDEDOR')?></strong><span>REVERSO sigue contando como NPPF</span></div>
+<section class="table-card"><div class="table-head"><strong>Detalle por cuenta · <?=np_h($vendors[np_team_key($liderId,$coachId,$vendorId)]['nombre']??'VENDEDOR')?></strong><span>Solo se muestran cuentas M1 y M1 Preventivo · REVERSO sigue contando como NPPF</span></div>
 <div class="table-wrap"><table class="nppf-table nppf-detail-table"><thead><tr><th>Cuenta</th><th>Cosecha</th><th>Instalación</th><th>Corte mensual M1</th><th>Fin precio lista</th><th>Clasificación</th><th>TIPO</th><th>Atraso</th><th>Distrito</th><th>Canal</th><th>Plan</th><th class="num">Factura</th></tr></thead><tbody>
 <?php foreach($detailRows as $d):?><tr><td><?=np_h($d['cuenta'])?></td><td><strong><?=np_h(strtoupper($d['_cohort']))?></strong></td><td><?=np_h($d['fecha_activacion'])?></td><td><?=np_h($d['_monthly_cut'])?></td><td><?=np_h($d['_due'])?></td><td><span class="nppf-pill <?=$d['_class']==='PREVENTIVO M1'?'nppf-caution':'nppf-risk'?>"><?=np_h($d['_class'])?></span></td><td><?php if($d['_reverso']):?><span class="nppf-pill nppf-caution" title="El banco revirtió el pago. La cuenta permanece como NPPF.">REVERSO</span><?php else:?><?=np_h($d['tipo'])?><?php endif;?></td><td><?=np_h($d['atraso']??'—')?></td><td><?=np_h($d['distrito'])?></td><td><?=np_h($d['canal_venta'])?></td><td><?=np_h($d['desc_plan'])?></td><td class="num"><?=number_format((float)$d['monto_factura'],2,'.',',')?></td></tr><?php endforeach;?>
 <?php if(!$detailRows):?><tr><td colspan="12" class="center">Sin cuentas pendientes certificadas de las cosechas seleccionadas.</td></tr><?php endif;?>
 </tbody></table></div></section>
+<section class="table-card nppf-chart-panel"><div class="table-head"><strong>Histórico NPPF del vendedor</strong><span>Barras = cuentas NPPF · Línea = índice de CHURN (%)</span></div><div class="nppf-chart-wrap"><canvas id="vendorTrendChart"></canvas></div></section>
 <?php endif;?>
-<?php if(in_array($view,['lideres','ranking_coach'],true) && (count($audit['m3'])||count($audit['m2'])||count($audit['m1']))):?>
-<div class="nppf-panel nppf-alert"><strong>Conciliación NPPF / HC</strong><p class="nppf-caption">Cuentas pendientes sin asociación certificada: M3 <?=count($audit['m3'])?> · M2 <?=count($audit['m2'])?> · M1 <?=count($audit['m1'])?>. Estas cuentas no se asignan a colaboradores ni se incluyen en los porcentajes del ranking.</p></div>
+<?php if(in_array($view,['lideres','ranking_coach'],true) && (count($audit['m4'])||count($audit['m3'])||count($audit['m2'])||count($audit['m1']))):?>
+<div class="nppf-panel nppf-alert"><strong>Conciliación NPPF / HC</strong><p class="nppf-caption">Cuentas pendientes sin asociación certificada: M4 <?=count($audit['m4'])?> · M3 <?=count($audit['m3'])?> · M2 <?=count($audit['m2'])?> · M1 <?=count($audit['m1'])?>. Estas cuentas no se asignan a colaboradores ni se incluyen en los porcentajes del ranking.</p></div>
 <?php endif;?>
 <?php endif;?>
 </main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script>
 'use strict';
 (function(){
@@ -711,32 +737,53 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  function syncDays(){if(!input)return;let sel=[...days].filter(b=>b.classList.contains('selected-start')).map(b=>Number(b.dataset.day));if(!sel.length){days[0]?.classList.add('selected-start','selected-end');sel=[1]}input.value=sel.join(',')}
  days.forEach(b=>b.addEventListener('click',()=>{b.classList.toggle('selected-start');b.classList.toggle('selected-end');syncDays()}));
  document.getElementById('fullWeek')?.addEventListener('click',()=>{days.forEach(b=>b.classList.add('selected-start','selected-end'));syncDays()});
- const table=document.getElementById('nppfTable');if(!table)return;
- const tbody=table.tBodies[0],total=document.getElementById('totalRow');
- const rows=()=>[...tbody.querySelectorAll('.data-row')];
- const n=(r,k)=>Number(r.getAttribute('data-'+k.replace(/_/g,'-')))||0;
- let filter='ALL',sortKey='pct_m3',dir='desc';
- function num(x){return Math.round(x).toLocaleString('en-US')};
- function pct(a,b){return b>0?(100*a/b).toFixed(1)+'%':'—'};
- function visible(){return rows().filter(r=>r.style.display!=='none')}
- function paint(){
-   rows().forEach(r=>r.style.display=(filter==='ALL'||r.dataset.district===filter)?'':'none');
-   const rr=visible();rr.forEach((r,i)=>{r.querySelector('.rank').textContent=i+1});
-   const keys=['ins_m3','ins_m2','ins_m1','nppf_m3','nppf_m2','nppf_m1','prevent_m1','reverso'];
-   const s=Object.fromEntries(keys.map(k=>[k,rr.reduce((acc,r)=>acc+n(r,k),0)]));
-   const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v};
-   for(let m=3;m>=1;m--){set('kpiInsM'+m,num(s['ins_m'+m]));set('kpiM'+m,num(s['nppf_m'+m]));set('kpiM'+m+'Pct',pct(s['nppf_m'+m],s['ins_m'+m]));
-     set('tInsM'+m,num(s['ins_m'+m]));set('tM'+m,num(s['nppf_m'+m]));set('tPctM'+m,pct(s['nppf_m'+m],s['ins_m'+m]));}
-   set('kpiPre',num(s.prevent_m1));set('kpiPrePct',pct(s.prevent_m1,s.ins_m1));set('kpiReverso',num(s.reverso));
-   set('tPre',num(s.prevent_m1));set('tPctPre',pct(s.prevent_m1,s.ins_m1));
-   set('visibleCounter','Mostrando '+rr.length+' de '+rows().length+' registros'+(filter==='ALL'?'':' · '+filter));
+ const table=document.getElementById('nppfTable');
+ if(table){
+   const tbody=table.tBodies[0],total=document.getElementById('totalRow');
+   const rows=()=>[...tbody.querySelectorAll('.data-row')];
+   const n=(r,k)=>Number(r.getAttribute('data-'+k.replace(/_/g,'-')))||0;
+   let filter='ALL',sortKey='pct_m4',dir='desc';
+   function num(x){return Math.round(x).toLocaleString('en-US')};
+   function pct(a,b){return b>0?(100*a/b).toFixed(1)+'%':'—'};
+   function visible(){return rows().filter(r=>r.style.display!=='none')}
+   function paint(){
+     rows().forEach(r=>r.style.display=(filter==='ALL'||r.dataset.district===filter)?'':'none');
+     const rr=visible();rr.forEach((r,i)=>{const rank=r.querySelector('.rank');if(rank)rank.textContent=i+1});
+     const keys=['ins_m4','ins_m3','ins_m2','ins_m1','nppf_m4','nppf_m3','nppf_m2','nppf_m1','prevent_m1','reverso'];
+     const s=Object.fromEntries(keys.map(k=>[k,rr.reduce((acc,r)=>acc+n(r,k),0)]));
+     const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v};
+     for(let m=4;m>=1;m--){set('kpiInsM'+m,num(s['ins_m'+m]));set('kpiM'+m,num(s['nppf_m'+m]));set('kpiM'+m+'Pct',pct(s['nppf_m'+m],s['ins_m'+m]));
+       set('tInsM'+m,num(s['ins_m'+m]));set('tM'+m,num(s['nppf_m'+m]));set('tPctM'+m,pct(s['nppf_m'+m],s['ins_m'+m]));}
+     set('kpiPre',num(s.prevent_m1));set('kpiPrePct',pct(s.prevent_m1,s.ins_m1));set('kpiReverso',num(s.reverso));
+     set('tPre',num(s.prevent_m1));set('tPctPre',pct(s.prevent_m1,s.ins_m1));
+     set('visibleCounter','Mostrando '+rr.length+' de '+rows().length+' registros'+(filter==='ALL'?'':' · '+filter));
+   }
+   document.querySelectorAll('.filter-btn[data-district]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.filter-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');filter=b.dataset.district;paint()}));
+   document.querySelectorAll('.nppf-sort').forEach(th=>th.addEventListener('click',()=>{
+     const key=th.dataset.key;dir=(sortKey===key&&dir==='desc')?'asc':'desc';sortKey=key;
+     rows().sort((a,b)=>{const aa=n(a,key),bb=n(b,key);return dir==='desc'?bb-aa:aa-bb}).forEach(r=>tbody.insertBefore(r,total));paint();
+   }));
+   rows().forEach(r=>{r.addEventListener('click',()=>{if(r.dataset.href)location.href=r.dataset.href});r.addEventListener('keydown',e=>{if(e.key==='Enter'&&r.dataset.href)location.href=r.dataset.href})});
+   paint();
  }
- document.querySelectorAll('.filter-btn[data-district]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.filter-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');filter=b.dataset.district;paint()}));
- document.querySelectorAll('.nppf-sort').forEach(th=>th.addEventListener('click',()=>{
-   const key=th.dataset.key;dir=(sortKey===key&&dir==='desc')?'asc':'desc';sortKey=key;
-   rows().sort((a,b)=>{const aa=n(a,key),bb=n(b,key);return dir==='desc'?bb-aa:aa-bb}).forEach(r=>tbody.insertBefore(r,total));paint();
- }));
- rows().forEach(r=>{r.addEventListener('click',()=>{if(r.dataset.href)location.href=r.dataset.href});r.addEventListener('keydown',e=>{if(e.key==='Enter'&&r.dataset.href)location.href=r.dataset.href})});
- paint();
+ const trendCanvas=document.getElementById('vendorTrendChart');
+ if(trendCanvas && window.Chart){
+   new Chart(trendCanvas,{
+     data:{
+       labels:<?=json_encode($vendorTrendLabels, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?>,
+       datasets:[
+         {type:'bar', label:'Cuentas NPPF', yAxisID:'y', data:<?=json_encode($vendorTrendCounts)?>, backgroundColor:'rgba(121,37,220,0.55)', borderColor:'rgba(121,37,220,1)', borderWidth:1, borderRadius:8},
+         {type:'line', label:'Índice CHURN %', yAxisID:'y1', data:<?=json_encode($vendorTrendRates)?>, borderColor:'rgba(234,88,12,1)', backgroundColor:'rgba(234,88,12,0.2)', tension:0.25, pointRadius:4, pointHoverRadius:5}
+       ]
+     },
+     options:{responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+       plugins:{legend:{position:'top'}},
+       scales:{
+         y:{beginAtZero:true, title:{display:true, text:'Cuentas NPPF'}},
+         y1:{beginAtZero:true, position:'right', grid:{drawOnChartArea:false}, title:{display:true, text:'CHURN %'}, ticks:{callback:(v)=>Number(v).toFixed(1)+'%'}}
+       }
+     }
+   });
+ }
 })();
 </script></body></html>
