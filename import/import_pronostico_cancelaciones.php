@@ -370,7 +370,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'&&isset($_GET['action'])){
 ?>
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TalIA · Pronóstico diferencial v3.0 STAGING</title>
+<title>TalIA · Pronóstico diferencial v3.0.3 STAGING</title>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.11.1/build/sha256.min.js"></script>
 <style>
@@ -386,7 +386,7 @@ h1{font-size:26px;margin:0 0 5px}.micro{font-size:12px;letter-spacing:.09em;font
 .track{height:14px;border-radius:10px;background:#e7e1ef;overflow:hidden;margin-top:16px;display:none}.bar{height:100%;width:0;background:linear-gradient(100deg,#8f41e5,#f005a4);transition:width .12s}.count{color:var(--secondary);font-size:12px;margin-top:5px}
 @media(max-width:650px){body{padding:10px}main{padding:18px}.grid{grid-template-columns:1fr}h1{font-size:22px}}
 </style></head><body><main>
-<div class="micro">TOTALXPEDIENT · TALIA · PC3 STAGING v3.0</div>
+<div class="micro">TOTALXPEDIENT · TALIA · PC3 STAGING v3.0.3</div>
 <h1>Pronóstico de cancelaciones diferencial</h1>
 <p class="sub">Archivo nacional XLSB · carga inicial compacta · comparador de cuentas · bitácora de cierres candidatos</p>
 <div class="warning"><strong>Modo seguro:</strong> este importador solo escribe tablas <code>pc3_*</code>. Las vistas productivas <code>vw_pronostico_cancelaciones_actual</code> y <code>vw_pronostico_cancelaciones_sur_actual</code> permanecen intactas. Verifica el espacio disponible antes de ejecutar el SQL.</div>
@@ -412,7 +412,7 @@ const COLS=['CUENTA','PLAZA','DISTRITO','CLUSTER','REGION','ESTATUS_CTA','ATRASO
  'SALDO_SERV','SERVICIO_TERCEROS','SERVICIOS_TOTALPLAY','NOMBRE_PLAN','SUB_CANAL','TIPO_PAGO','FECHA FINAL','SEMANA FINAL','RENTA','SUBESTATUS'];
 const VOL=[6,14,15,16,17], EVENT=[2,4,5,9,10,12,13,21,22,23,24];
 const $=id=>document.getElementById(id);
-let file=null,raw=[],indices=[],columns=[],headRow=0,manifest=[],hash='',cut='',sur=0;
+let file=null,raw=[],indices=[],columns=[],headRow=0,hash='',cut='',sur=0;
 const norm=v=>String(v??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 const str=v=>v==null?'':String(v).trim();
 const txt=v=>str(v)===''?null:str(v);
@@ -438,7 +438,6 @@ function fieldsAt(position){
  for(const i of [15,16,17,23])f[i]=money(row[columns[i]]);
  return f;
 }
-let sheet=null;
 function hashes(f){const data=f.filter((_,i)=>!VOL.includes(i)),ev=EVENT.map(i=>f[i]);return [sha256(JSON.stringify(data)),sha256(JSON.stringify(ev))];}
 async function api(action,p){
  const resp=await fetch(location.pathname+'?action='+encodeURIComponent(action),{
@@ -451,20 +450,34 @@ function dateFromFile(name){const m=name.normalize('NFKD').replace(/[\u0300-\u03
  const n=names.indexOf(m[2].toUpperCase());if(n<0)throw Error('Mes de corte inválido');
  const y=Number($('anio').value);if(!Number.isInteger(y)||y<2025||y>2100)throw Error('Año de corte inválido');
  return String(y)+'-'+String(n+1).padStart(2,'0')+'-'+m[1].padStart(2,'0');}
+// La lectura del XLSB vive en una función separada: al terminar, el navegador
+// puede liberar el ArrayBuffer de 30 MB y el objeto SheetJS (millones de celdas).
+async function parseXLSB(f){
+ show('1/4 · Leyendo archivo XLSB…');
+ let buf=await f.arrayBuffer();
+ show('2/4 · Calculando SHA-256…');await pulse();
+ const digest=await crypto.subtle.digest('SHA-256',buf);
+ const sha=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
+ show('3/4 · Abriendo hoja Pronóstico (esta etapa puede exigir memoria)…');await pulse();
+ let book=XLSX.read(buf,{type:'array',cellDates:false,cellText:false,dense:true,sheets:['Pronóstico']});
+ buf=null;
+ const name=book.SheetNames.find(x=>norm(x)==='PRONOSTICO');
+ if(!name||!book.Sheets[name])throw Error('No se encontró la hoja Pronóstico.');
+ show('4/4 · Organizando filas…');await pulse();
+ const rows=XLSX.utils.sheet_to_json(book.Sheets[name],{header:1,defval:null,raw:true,blankrows:true});
+ book.Sheets[name]=null;book=null;
+ return {rows,sha};
+}
 $('anio').addEventListener('change',()=>{ $('run').disabled=true;show('Año modificado: vuelve a elegir el archivo para validar el corte.');});
 $('file').addEventListener('change',async()=>{
- file=$('file').files?.[0]||null;raw=[];manifest=[];indices=[];columns=[];hash='';sheet=null;sur=0;
+ file=$('file').files?.[0]||null;raw=[];indices=[];columns=[];hash='';sur=0;
  $('run').disabled=true;$('tiles').hidden=true;$('track').style.display='none';$('counter').textContent='';
  if(!file)return;$('fname').textContent=file.name;
  try{
  if(typeof XLSX==='undefined'||typeof sha256==='undefined')throw Error('Falta SheetJS o SHA-256 (CDN).');
  if(!/\.xlsb$/i.test(file.name))throw Error('Selecciona .xlsb');
  cut=dateFromFile(file.name);
- show('Leyendo XLSB y calculando SHA-256…');const buf=await file.arrayBuffer();
- const digest=await crypto.subtle.digest('SHA-256',buf);hash=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
- const book=XLSX.read(buf,{type:'array',cellDates:false,cellText:true,sheets:['Pronóstico']});
- const name=book.SheetNames.find(x=>norm(x)==='PRONOSTICO');if(!name||!book.Sheets[name])throw Error('No se encontró hoja Pronóstico.');
- sheet=book.Sheets[name];raw=XLSX.utils.sheet_to_json(sheet,{header:1,defval:null,raw:true,blankrows:true});
+ const parsed=await parseXLSB(file);raw=parsed.rows;hash=parsed.sha;
  // blankrows:true preserva los números físicos de fila para acceder a A1, A2, etc.
  headRow=raw.findIndex((r,i)=>i<15&&norm(r?.[0])==='CUENTA'&&r.map(norm).includes('ESTATUSCTA'));
  if(headRow<0)throw Error('No se localizaron los encabezados originales.');
@@ -476,12 +489,11 @@ $('file').addEventListener('change',async()=>{
   const row=raw[i]||[];if(row.every(x=>x===null||str(x)===''))continue;
   // Almacenamos el índice de la hoja; la posición lógica del manifiesto es consecutiva.
   indices.push(i);const pos=indices.length;
-  const f=fieldsAt(pos);
-  if(seen.has(f[0]))throw Error('CUENTA duplicada en archivo: '+f[0]);seen.add(f[0]);
-  const [hd,he]=hashes(f);
-  manifest.push([pos,f[0],hd,he,f[6],f[15],f[16],f[17],f[14]]);
-  if(norm(f[4])==='SUR')sur++;
-  if(pos%12000===0){show('Preparando manifiesto: '+pos.toLocaleString('es-MX')+' cuentas');await pulse();}
+  const account=str(row[columns[0]]);
+  if(!/^\d{1,100}$/.test(account))throw Error('CUENTA inválida en fila '+(i+1)+': '+account);
+  if(seen.has(account))throw Error('CUENTA duplicada: '+account);seen.add(account);
+  if(norm(row[columns[4]])==='SUR')sur++;
+  if(pos%12000===0){show('Reconociendo cuentas: '+pos.toLocaleString('es-MX'));await pulse();}
  }
  seen.clear();if(indices.length<1||indices.length>1000000)throw Error('Número de registros no válido.');
  $('tiles').hidden=false;$('cut').textContent=cut;$('national').textContent=indices.length.toLocaleString('es-MX');$('sur').textContent=sur.toLocaleString('es-MX');
@@ -506,7 +518,12 @@ $('run').addEventListener('click',async()=>{
    step='Aprobación de base';const r=await api('base_finish',{carga_id:id});show('BASE STAGING aprobada: '+r.total.toLocaleString('es-MX')+' cuentas. Sin modificar FCST productivo.','good');
   }else{
    step='Manifiesto';while(done<total){const end=Math.min(done+BATCH,total);
-    const res=await api('manifest_batch',{carga_id:id,offset:done,rows:manifest.slice(done,end)});done=res.total;progress('Manifiesto nacional',done,total);
+    const lines=[];
+    for(let i=done;i<end;i++){
+     const f=fieldsAt(i+1), [hd,he]=hashes(f);
+     lines.push([i+1,f[0],hd,he,f[6],f[15],f[16],f[17],f[14]]);
+    }
+    const res=await api('manifest_batch',{carga_id:id,offset:done,rows:lines});done=res.total;progress('Manifiesto nacional',done,total);
    }
    const f=await api('manifest_finish',{carga_id:id});
    show('Manifiesto recibido. Detalles nuevos/modificados: '+f.detalles_necesarios.toLocaleString('es-MX'));
