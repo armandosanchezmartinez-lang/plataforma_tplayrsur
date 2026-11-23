@@ -26,6 +26,9 @@ header('Cache-Control: no-store, max-age=0');
 
 const PC3_BATCH=1500;
 const PC3_MAX=1000000;
+// XLSB original contiene algunas CUENTA literales con formato 1.xxxxxxx.
+// Se preservan como identificadores de texto, no se reinterpretan como numeros.
+const PC3_CUENTA_PATTERN='/^(?:[0-9]{1,100}|1\.[0-9]{7})$/D';
 const PC3_COLS=['cuenta','plaza','distrito','cluster','region','estatus_cta','atraso','nse',
  'fecha_activacion','fecha_cancelacion','tipo_cancelacion','ciclo','fecha_pronostico',
  'semana_pronostico','reloj','saldo_serv','servicio_terceros','servicios_totalplay',
@@ -88,7 +91,7 @@ function pc3_validate(array $fields):void {
   if($v!==null&&!is_string($v))throw new RuntimeException("El campo $i debe ser string o null.");
   if($v!==null&&mb_strlen($v,'UTF-8')>320)throw new RuntimeException("Campo $i demasiado largo.");
  }
- if(!is_string($fields[0])||!preg_match('/^\d{1,100}$/D',$fields[0]))throw new RuntimeException('CUENTA debe ser numérica (máximo 100 caracteres).');
+ if(!is_string($fields[0])||!preg_match(PC3_CUENTA_PATTERN,$fields[0]))throw new RuntimeException('CUENTA debe tener formato dígitos o literal 1.xxxxxxx del XLSB.');
  foreach([8,9,12,21] as $i){
   $v=$fields[$i];if($v===null)continue;
   if(!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/D',$v,$m)||!checkdate((int)$m[2],(int)$m[3],(int)$m[1]))
@@ -219,7 +222,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'&&isset($_GET['action'])){
    foreach($rows as $j=>$r){
     if(!is_array($r)||count($r)!==9)throw new RuntimeException('Registro de manifiesto incorrecto.');
     [$fila,$cuenta,$hd,$he,$at,$saldo,$terc,$total,$reloj]=$r;
-    if((int)$fila!==$offset+$j+1||!preg_match('/^\d{1,100}$/D',(string)$cuenta)||!preg_match('/^[a-f0-9]{64}$/D',(string)$hd)||!preg_match('/^[a-f0-9]{64}$/D',(string)$he))throw new RuntimeException('Fila/hash/cuenta inválido: '.($offset+$j+1));
+    if((int)$fila!==$offset+$j+1||!preg_match(PC3_CUENTA_PATTERN,(string)$cuenta)||!preg_match('/^[a-f0-9]{64}$/D',(string)$hd)||!preg_match('/^[a-f0-9]{64}$/D',(string)$he))throw new RuntimeException('Fila/hash/cuenta inválido: '.($offset+$j+1));
     $v=[$id,(int)$fila,(string)$cuenta,(string)$hd,(string)$he,$at,$saldo,$terc,$total,$reloj];
     pc3_bind($s,'iissssssss',$v);pc3_exec($s);
    }mysqli_stmt_close($s);
@@ -370,7 +373,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'&&isset($_GET['action'])){
 ?>
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TalIA · Pronóstico diferencial v3.0.3 STAGING</title>
+<title>TalIA · Pronóstico diferencial v3.0.4 STAGING</title>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.11.1/build/sha256.min.js"></script>
 <style>
@@ -386,7 +389,7 @@ h1{font-size:26px;margin:0 0 5px}.micro{font-size:12px;letter-spacing:.09em;font
 .track{height:14px;border-radius:10px;background:#e7e1ef;overflow:hidden;margin-top:16px;display:none}.bar{height:100%;width:0;background:linear-gradient(100deg,#8f41e5,#f005a4);transition:width .12s}.count{color:var(--secondary);font-size:12px;margin-top:5px}
 @media(max-width:650px){body{padding:10px}main{padding:18px}.grid{grid-template-columns:1fr}h1{font-size:22px}}
 </style></head><body><main>
-<div class="micro">TOTALXPEDIENT · TALIA · PC3 STAGING v3.0.3</div>
+<div class="micro">TOTALXPEDIENT · TALIA · PC3 STAGING v3.0.4</div>
 <h1>Pronóstico de cancelaciones diferencial</h1>
 <p class="sub">Archivo nacional XLSB · carga inicial compacta · comparador de cuentas · bitácora de cierres candidatos</p>
 <div class="warning"><strong>Modo seguro:</strong> este importador solo escribe tablas <code>pc3_*</code>. Las vistas productivas <code>vw_pronostico_cancelaciones_actual</code> y <code>vw_pronostico_cancelaciones_sur_actual</code> permanecen intactas. Verifica el espacio disponible antes de ejecutar el SQL.</div>
@@ -402,17 +405,19 @@ h1{font-size:26px;margin:0 0 5px}.micro{font-size:12px;letter-spacing:.09em;font
 <div class="track" id="track"><div class="bar" id="bar"></div></div>
 <div id="counter" class="count"></div>
 <div id="notice"></div>
-<div class="warning">Orden de validación: 17 → 20 → 23 de noviembre de 2026. El primer corte no genera cancelaciones históricas; los siguientes identifican diferencias. Una transición a <code>Cerrada</code> es un <strong>candidato</strong>, no un real oficial sin conciliación Qlik.</div>
+<div class="warning">CUENTA: los identificadores no numéricos que el XLSB trae como <code>1.xxxxxxx</code> se conservan literalmente; no se deducen ni corrigen automáticamente. Requieren conciliación con la fuente corporativa.<br><br>Orden de validación: 17 → 20 → 23 de noviembre de 2026. El primer corte no genera cancelaciones históricas; los siguientes identifican diferencias. Una transición a <code>Cerrada</code> es un <strong>candidato</strong>, no un real oficial sin conciliación Qlik.</div>
 </main><script>
 'use strict';
 const CSRF=<?php echo json_encode($csrf,JSON_UNESCAPED_SLASHES);?>;
 const BATCH=1500;
+// Identificador opaco: preservar el valor literal del XLSB sin quitar puntos ni ceros.
+const CUENTA_VALIDA=/^(?:\d{1,100}|1\.\d{7})$/;
 const COLS=['CUENTA','PLAZA','DISTRITO','CLUSTER','REGION','ESTATUS_CTA','ATRASO','NSE','FECHA_ACTIVACION',
  'FECHA_CANCELACION','TIPO_CANCELACION','CICLO','FECHA_PRONOSTICO','SEMANA_PRONOSTICO','RELOJ',
  'SALDO_SERV','SERVICIO_TERCEROS','SERVICIOS_TOTALPLAY','NOMBRE_PLAN','SUB_CANAL','TIPO_PAGO','FECHA FINAL','SEMANA FINAL','RENTA','SUBESTATUS'];
 const VOL=[6,14,15,16,17], EVENT=[2,4,5,9,10,12,13,21,22,23,24];
 const $=id=>document.getElementById(id);
-let file=null,raw=[],indices=[],columns=[],headRow=0,hash='',cut='',sur=0;
+let file=null,raw=[],indices=[],columns=[],headRow=0,hash='',cut='',sur=0,atipicas=0;
 const norm=v=>String(v??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 const str=v=>v==null?'':String(v).trim();
 const txt=v=>str(v)===''?null:str(v);
@@ -432,7 +437,7 @@ function fieldsAt(position){
  const idx=indices[position-1];if(idx===undefined)throw Error('Posición inexistente '+position);
  const row=raw[idx],f=columns.map(c=>txt(row[c]));
  // Igual al importador legacy: usar el valor RAW, no el texto formateado (cell.w).
- f[0]=str(f[0]);if(!/^\d{1,100}$/.test(f[0]))throw Error('CUENTA inválida en fila '+(idx+1));
+ f[0]=str(f[0]);if(!CUENTA_VALIDA.test(f[0]))throw Error('CUENTA inválida en fila '+(idx+1));
  for(const i of [8,9,12,21])f[i]=formatDate(row[columns[i]]);
  for(const i of [6,11,13,22])f[i]=intVal(row[columns[i]]);
  for(const i of [15,16,17,23])f[i]=money(row[columns[i]]);
@@ -470,7 +475,7 @@ async function parseXLSB(f){
 }
 $('anio').addEventListener('change',()=>{ $('run').disabled=true;show('Año modificado: vuelve a elegir el archivo para validar el corte.');});
 $('file').addEventListener('change',async()=>{
- file=$('file').files?.[0]||null;raw=[];indices=[];columns=[];hash='';sur=0;
+ file=$('file').files?.[0]||null;raw=[];indices=[];columns=[];hash='';sur=0;atipicas=0;
  $('run').disabled=true;$('tiles').hidden=true;$('track').style.display='none';$('counter').textContent='';
  if(!file)return;$('fname').textContent=file.name;
  try{
@@ -490,14 +495,15 @@ $('file').addEventListener('change',async()=>{
   // Almacenamos el índice de la hoja; la posición lógica del manifiesto es consecutiva.
   indices.push(i);const pos=indices.length;
   const account=str(row[columns[0]]);
-  if(!/^\d{1,100}$/.test(account))throw Error('CUENTA inválida en fila '+(i+1)+': '+account);
+  if(!CUENTA_VALIDA.test(account))throw Error('CUENTA inválida en fila '+(i+1)+': '+account);
+  if(account.includes('.'))atipicas++;
   if(seen.has(account))throw Error('CUENTA duplicada: '+account);seen.add(account);
   if(norm(row[columns[4]])==='SUR')sur++;
   if(pos%12000===0){show('Reconociendo cuentas: '+pos.toLocaleString('es-MX'));await pulse();}
  }
  seen.clear();if(indices.length<1||indices.length>1000000)throw Error('Número de registros no válido.');
  $('tiles').hidden=false;$('cut').textContent=cut;$('national').textContent=indices.length.toLocaleString('es-MX');$('sur').textContent=sur.toLocaleString('es-MX');
- $('run').disabled=false;show('Archivo validado. Clic en importar para iniciar STAGING.','good');
+ $('run').disabled=false;show('Archivo validado. '+indices.length.toLocaleString('es-MX')+' cuentas; '+atipicas.toLocaleString('es-MX')+' con identificador atípico literal conservado sin modificación. Clic en importar para iniciar STAGING.','good');
  }catch(e){show(e.message||String(e),'bad');}
 });
 $('run').addEventListener('click',async()=>{
