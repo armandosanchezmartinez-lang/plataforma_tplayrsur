@@ -40,3 +40,6 @@
 .lookup-footer-copy:focus-visible{outline:2px solid #b897ff;outline-offset:3px;border-radius:4px}
 .lookup-footer-copy-source{position:absolute!important;left:-10000px!important;top:auto!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
 .lookup-footer-copy-status{margin-top:5px;text-align:center}
+
+/* v1.0.34: hidden clipboard sources may differ from the visible phone-number text. */
+.lookup-copy-source-hidden{position:absolute!important;left:-10000px!important;top:auto!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}

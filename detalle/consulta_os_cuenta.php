@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.33
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.34
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -409,8 +409,8 @@ function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
 }
 
 /** Buscar línea por numero_base_comisiones del Coach o del Líder (si VACANTE).
- * Los botones de copia existentes conservan `numero`.
- * El clic del footer usa `whats_id` cuando exista y sólo cae a `numero` si no hay whats_id.
+ * El texto visible conserva siempre `numero`.
+ * Todas las acciones de copia usan `whats_id` cuando exista y sólo caen a `numero` si no hay whats_id.
  * Si existen varios valores distintos para el mismo identificador, no elegir arbitrariamente.
  */
 function tp_lookup_add_contact_numbers(array $rows, mysqli $system): array {
@@ -425,7 +425,7 @@ function tp_lookup_add_contact_numbers(array $rows, mysqli $system): array {
     )->fetch_row();
     if (!$exists) throw new RuntimeException('No existe lineas_merida_2026 en la base del sistema.');
 
-    // `whats_id` is optional during deployment. If absent, footer copy falls back to numero.
+    // `whats_id` is optional during deployment. If absent, copy actions fall back to numero.
     $columns = $system->query('SHOW COLUMNS FROM `lineas_merida_2026`');
     $available = [];
     while ($column = $columns->fetch_assoc()) $available[strtolower((string)$column['Field'])] = true;
@@ -467,13 +467,15 @@ function tp_lookup_add_contact_numbers(array $rows, mysqli $system): array {
         $whatsChoices = array_keys($whatsIds[$folio] ?? []);
         $legacyNumber = count($numberChoices) === 1 ? $numberChoices[0] : '';
         $usesWhatsId = count($whatsChoices) === 1;
-        $footerNumber = $usesWhatsId
+        $copyNumber = $usesWhatsId
             ? $whatsChoices[0]
             : (count($whatsChoices) === 0 ? $legacyNumber : '');
 
+        // Visible textarea: always the ordinary phone number.
         $row['_contact_number'] = $legacyNumber;
-        $row['_contact_footer_number'] = $footerNumber;
-        $row['_contact_footer_uses_whats_id'] = $usesWhatsId;
+        // Clipboard variant: prefer whats_id, fall back to numero.
+        $row['_contact_copy_number'] = $copyNumber;
+        $row['_contact_copy_uses_whats_id'] = $usesWhatsId;
     }
     unset($row);
     return $rows;
@@ -496,7 +498,7 @@ function tp_lookup_whatsapp(array $row, array $labels, string $contactField = '_
         $value = tp_lookup_display_value($row[$i] ?? '');
         if ($label === 'Coach' && $contactNumber !== '') {
             $mention = '@' . ltrim($contactNumber, '@');
-            if ($contactField === '_contact_footer_number' && !empty($row['_contact_footer_uses_whats_id'])) {
+            if ($contactField === '_contact_copy_number' && !empty($row['_contact_copy_uses_whats_id'])) {
                 // Preserve whats_id exactly when it already contains WhatsApp syntax
                 // (including Unicode format characters). Only add @ to a bare value.
                 $mention = str_contains($contactNumber, '@') ? $contactNumber : '@' . $contactNumber;
@@ -572,8 +574,8 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.33">
-    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.33" defer></script>
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.34">
+    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.34" defer></script>
 </head>
 <body>
 <main class="lookup-shell">
@@ -609,8 +611,9 @@ if ($method === 'POST') {
                     <p>Copia los datos de las <?=count($rows)?> coincidencias en un solo mensaje, separados por una línea en blanco.</p>
                 </div>
                 <textarea id="lookup-whatsapp-todos" readonly rows="7" aria-label="Texto WhatsApp conjunto de todas las coincidencias"><?=tp_lookup_h(tp_lookup_whatsapp_all($rows, $labels))?></textarea>
+                <textarea id="lookup-whatsapp-todos-copy" class="lookup-copy-source-hidden" readonly tabindex="-1" aria-hidden="true"><?=tp_lookup_h(tp_lookup_whatsapp_all($rows, $labels, '_contact_copy_number'))?></textarea>
                 <div class="lookup-copy-all-actions">
-                    <button type="button" class="lookup-copy lookup-copy-all-button" data-copy-target="lookup-whatsapp-todos">Copiar todas las coincidencias</button>
+                    <button type="button" class="lookup-copy lookup-copy-all-button" data-copy-target="lookup-whatsapp-todos-copy">Copiar todas las coincidencias</button>
                     <span class="lookup-copy-status" role="status" aria-live="polite"></span>
                 </div>
             </div>
@@ -621,7 +624,8 @@ if ($method === 'POST') {
                     <tr><?php foreach ($labels as $i => $label): ?><td data-label="<?=tp_lookup_h($label)?>"><?=tp_lookup_h(tp_lookup_display_value($row[$i] ?? ''))?></td><?php endforeach; ?>
                     <td class="lookup-whatsapp" data-label="Texto WhatsApp">
                         <textarea id="lookup-whatsapp-<?=$index?>" rows="9" readonly aria-label="Texto WhatsApp de la coincidencia <?=$index+1?>"><?=tp_lookup_h(tp_lookup_whatsapp($row, $labels))?></textarea>
-                        <button type="button" class="lookup-copy" data-copy-target="lookup-whatsapp-<?=$index?>">Copiar</button>
+                        <textarea id="lookup-whatsapp-<?=$index?>-copy" class="lookup-copy-source-hidden" readonly tabindex="-1" aria-hidden="true"><?=tp_lookup_h(tp_lookup_whatsapp($row, $labels, '_contact_copy_number'))?></textarea>
+                        <button type="button" class="lookup-copy" data-copy-target="lookup-whatsapp-<?=$index?>-copy">Copiar</button>
                         <span class="lookup-copy-status" role="status" aria-live="polite"></span>
                     </td></tr>
                 <?php endforeach; ?></tbody>
@@ -632,7 +636,7 @@ if ($method === 'POST') {
     <?php endif; ?>
     <footer class="lookup-footer">
         <?php if ($rows): ?>
-            <textarea id="lookup-whatsapp-footer" class="lookup-footer-copy-source" readonly tabindex="-1" aria-hidden="true"><?=tp_lookup_h(tp_lookup_whatsapp_all($rows, $labels, '_contact_footer_number'))?></textarea>
+            <textarea id="lookup-whatsapp-footer" class="lookup-footer-copy-source" readonly tabindex="-1" aria-hidden="true"><?=tp_lookup_h(tp_lookup_whatsapp_all($rows, $labels, '_contact_copy_number'))?></textarea>
             <button type="button" class="lookup-footer-copy" data-copy-target="lookup-whatsapp-footer" data-copy-preserve-label="1" aria-describedby="lookup-footer-copy-status">Consulta de información comercial · Talia Pulso</button>
             <span id="lookup-footer-copy-status" class="lookup-copy-status lookup-footer-copy-status" role="status" aria-live="polite"></span>
         <?php else: ?>
