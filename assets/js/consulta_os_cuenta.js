@@ -6,6 +6,7 @@ document.addEventListener("click", async (event) => {
     const field = document.getElementById(button.dataset.copyTarget);
     if (!(field instanceof HTMLTextAreaElement)) return;
     const status = button.parentElement.querySelector(".lookup-copy-status");
+    const preserveLabel = button.dataset.copyPreserveLabel === "1";
     button.disabled = true;
     let copied = false;
     try {
@@ -16,7 +17,7 @@ document.addEventListener("click", async (event) => {
             field.focus(); field.select(); field.setSelectionRange(0, field.value.length);
             try { copied = document.execCommand("copy"); } catch (_) { copied = false; }
         }
-        button.textContent = copied ? "Copiado" : "Copiar";
+        if (!preserveLabel) button.textContent = copied ? "Copiado" : "Copiar";
         if (status) status.textContent = copied ? "Texto copiado al portapapeles." : "Texto seleccionado. Usa Ctrl+C o la opción Copiar de tu dispositivo.";
         if (copied) button.focus();
     } finally { button.disabled = false; }
