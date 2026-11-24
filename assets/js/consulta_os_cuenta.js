@@ -1,5 +1,5 @@
 "use strict";
-// Copy the exact visible text. Clipboard API requires HTTPS or localhost.
+// Copy the configured clipboard source. The visible textarea may intentionally show the phone number instead. Clipboard API requires HTTPS or localhost.
 document.addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-copy-target]");
     if (!button) return;
