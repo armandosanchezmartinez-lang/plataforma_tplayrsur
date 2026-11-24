@@ -31,3 +31,12 @@
 .lookup-copy-all-panel>textarea:focus-visible{outline:2px solid #b897ff;outline-offset:2px}
 .lookup-whatsapp textarea{font-size:14px;line-height:1.6}
 @media(max-width:480px){.lookup-copy-all-panel{padding:13px}.lookup-copy-all-actions .lookup-copy{width:100%}.lookup-form .lookup-hint{font-size:14px}}
+
+
+/* v1.0.33: footer copies the WhatsApp variant that prioritizes lineas_merida_2026.whats_id. */
+.lookup-footer{position:relative}
+.lookup-footer-copy{appearance:none;border:0;background:transparent;padding:0;color:inherit;font:inherit;cursor:pointer;text-align:center}
+.lookup-footer-copy:hover{text-decoration:underline;text-underline-offset:3px}
+.lookup-footer-copy:focus-visible{outline:2px solid #b897ff;outline-offset:3px;border-radius:4px}
+.lookup-footer-copy-source{position:absolute!important;left:-10000px!important;top:auto!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+.lookup-footer-copy-status{margin-top:5px;text-align:center}

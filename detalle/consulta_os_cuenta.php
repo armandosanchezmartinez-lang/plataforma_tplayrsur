@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.32
+/** Talia Pulso · Consulta pública OS / Cuenta · v1.0.33
  *  Archivo independiente: no carga sesión, Pulso ni WordPress.
  */
 ini_set('display_errors', '0');
@@ -409,7 +409,9 @@ function tp_lookup_resolve_sales_hc(array $rows, mysqli $system): array {
 }
 
 /** Buscar línea por numero_base_comisiones del Coach o del Líder (si VACANTE).
- * Si existen varios números para el mismo identificador, no elegir arbitrariamente.
+ * Los botones de copia existentes conservan `numero`.
+ * El clic del footer usa `whats_id` cuando exista y sólo cae a `numero` si no hay whats_id.
+ * Si existen varios valores distintos para el mismo identificador, no elegir arbitrariamente.
  */
 function tp_lookup_add_contact_numbers(array $rows, mysqli $system): array {
     $talents = [];
@@ -422,27 +424,56 @@ function tp_lookup_add_contact_numbers(array $rows, mysqli $system): array {
         "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='lineas_merida_2026' LIMIT 1"
     )->fetch_row();
     if (!$exists) throw new RuntimeException('No existe lineas_merida_2026 en la base del sistema.');
+
+    // `whats_id` is optional during deployment. If absent, footer copy falls back to numero.
+    $columns = $system->query('SHOW COLUMNS FROM `lineas_merida_2026`');
+    $available = [];
+    while ($column = $columns->fetch_assoc()) $available[strtolower((string)$column['Field'])] = true;
+    $columns->free();
+    foreach (['numero_talento_gs','numero'] as $required) {
+        if (!isset($available[$required])) throw new RuntimeException('Falta columna ' . $required . ' en lineas_merida_2026.');
+    }
+    $hasWhatsId = isset($available['whats_id']);
+
     $folios = array_keys($talents);
     $binds = implode(',',array_fill(0,count($folios),'?'));
-    $stmt = $system->prepare('SELECT `numero_talento_gs`, `numero` FROM `lineas_merida_2026` WHERE `numero_talento_gs` IN ('.$binds.')');
+    $selectWhatsId = $hasWhatsId ? ', `whats_id`' : ', NULL AS `whats_id`';
+    $stmt = $system->prepare('SELECT `numero_talento_gs`, `numero`' . $selectWhatsId . ' FROM `lineas_merida_2026` WHERE `numero_talento_gs` IN ('.$binds.')');
     try {
         $types = str_repeat('s',count($folios));
         $stmt->bind_param($types,...$folios);
         $stmt->execute();
-        $stmt->bind_result($talento, $numero);
+        $stmt->bind_result($talento, $numero, $whatsId);
         $numbers = [];
+        $whatsIds = [];
         while ($stmt->fetch()) {
             $key = trim((string)$talento);
-            $value = trim((string)$numero);
-            if ($value === '') continue;
-            $value = preg_replace('/[\\x00-\\x1F\\x7F]+/u','', $value) ?? '';
-            if ($value !== '') $numbers[$key][$value] = true;
+            if ($key === '') continue;
+
+            $numberValue = trim((string)$numero);
+            $numberValue = preg_replace('/[\x00-\x1F\x7F]+/u','', $numberValue) ?? '';
+            if ($numberValue !== '') $numbers[$key][$numberValue] = true;
+
+            // Keep Unicode format characters intact; they may be meaningful in the WhatsApp identifier.
+            $whatsValue = trim((string)$whatsId);
+            $whatsValue = preg_replace('/[\x00-\x1F\x7F]+/u','', $whatsValue) ?? '';
+            if ($whatsValue !== '') $whatsIds[$key][$whatsValue] = true;
         }
     } finally { $stmt->close(); }
+
     foreach ($rows as &$row) {
         $folio = trim((string)($row['_contact_base'] ?? ''));
-        $choices = array_keys($numbers[$folio] ?? []);
-        $row['_contact_number'] = count($choices) === 1 ? $choices[0] : '';
+        $numberChoices = array_keys($numbers[$folio] ?? []);
+        $whatsChoices = array_keys($whatsIds[$folio] ?? []);
+        $legacyNumber = count($numberChoices) === 1 ? $numberChoices[0] : '';
+        $usesWhatsId = count($whatsChoices) === 1;
+        $footerNumber = $usesWhatsId
+            ? $whatsChoices[0]
+            : (count($whatsChoices) === 0 ? $legacyNumber : '');
+
+        $row['_contact_number'] = $legacyNumber;
+        $row['_contact_footer_number'] = $footerNumber;
+        $row['_contact_footer_uses_whats_id'] = $usesWhatsId;
     }
     unset($row);
     return $rows;
@@ -453,18 +484,24 @@ function tp_lookup_display_value($value): string {
     $value = trim((string)($value ?? ''));
     return $value !== '' ? $value : '—';
 }
-function tp_lookup_whatsapp(array $row, array $labels): string {
+function tp_lookup_whatsapp(array $row, array $labels, string $contactField = '_contact_number'): string {
     $os = trim((string)($row[0] ?? ''));
     // Stored OS can be numeric or already prefixed; never duplicate OS.
     $number = preg_replace('/^(?:OS[\s-]*)+/i', '', $os) ?? $os;
     $heading = $number !== '' ? 'Datos de la OS-' . $number : 'Datos de la cuenta ' . tp_lookup_display_value($row[1] ?? '');
-    $contactNumber = trim((string)($row['_contact_number'] ?? ''));
+    $contactNumber = trim((string)($row[$contactField] ?? ''));
     $lines = ['*' . $heading . '*'];
     foreach ($labels as $i => $label) {
         if ($i === 0 || $label === 'Director' || $label === 'Distrito') continue;
         $value = tp_lookup_display_value($row[$i] ?? '');
         if ($label === 'Coach' && $contactNumber !== '') {
-            $value .= ' - @' . ltrim($contactNumber, '@');
+            $mention = '@' . ltrim($contactNumber, '@');
+            if ($contactField === '_contact_footer_number' && !empty($row['_contact_footer_uses_whats_id'])) {
+                // Preserve whats_id exactly when it already contains WhatsApp syntax
+                // (including Unicode format characters). Only add @ to a bare value.
+                $mention = str_contains($contactNumber, '@') ? $contactNumber : '@' . $contactNumber;
+            }
+            $value .= ' - ' . $mention;
         }
         $lines[] = $label . ': ' . $value;
     }
@@ -472,9 +509,9 @@ function tp_lookup_whatsapp(array $row, array $labels): string {
 }
 
 /** Compose a single WhatsApp message from all displayed, deduplicated matches. */
-function tp_lookup_whatsapp_all(array $rows, array $labels): string {
+function tp_lookup_whatsapp_all(array $rows, array $labels, string $contactField = '_contact_number'): string {
     $messages = [];
-    foreach ($rows as $row) $messages[] = tp_lookup_whatsapp($row, $labels);
+    foreach ($rows as $row) $messages[] = tp_lookup_whatsapp($row, $labels, $contactField);
     return implode("\n\n", $messages);
 }
 
@@ -535,8 +572,8 @@ if ($method === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow,noarchive">
     <title>Consulta OS o Cuenta · Talia Pulso</title>
-    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.32">
-    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.32" defer></script>
+    <link rel="stylesheet" href="../assets/css/consulta_os_cuenta.css?v=1.0.33">
+    <script src="../assets/js/consulta_os_cuenta.js?v=1.0.33" defer></script>
 </head>
 <body>
 <main class="lookup-shell">
@@ -593,7 +630,15 @@ if ($method === 'POST') {
         <?php endif; ?>
     </section>
     <?php endif; ?>
-    <footer class="lookup-footer">Consulta de información comercial · Talia Pulso</footer>
+    <footer class="lookup-footer">
+        <?php if ($rows): ?>
+            <textarea id="lookup-whatsapp-footer" class="lookup-footer-copy-source" readonly tabindex="-1" aria-hidden="true"><?=tp_lookup_h(tp_lookup_whatsapp_all($rows, $labels, '_contact_footer_number'))?></textarea>
+            <button type="button" class="lookup-footer-copy" data-copy-target="lookup-whatsapp-footer" data-copy-preserve-label="1" aria-describedby="lookup-footer-copy-status">Consulta de información comercial · Talia Pulso</button>
+            <span id="lookup-footer-copy-status" class="lookup-copy-status lookup-footer-copy-status" role="status" aria-live="polite"></span>
+        <?php else: ?>
+            <span>Consulta de información comercial · Talia Pulso</span>
+        <?php endif; ?>
+    </footer>
 </main>
 </body>
 </html>
