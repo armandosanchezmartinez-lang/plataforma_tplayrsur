@@ -1,12 +1,12 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.7 (2026-11-24)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.8 (2026-11-25)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.2.7 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.8 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
  *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
@@ -48,6 +48,13 @@
  * - Cambio de nómina/posición Coach: consolidación VISUAL de asientos de la
  *   misma persona con HC histórico + HIC; sin duplicar cuentas ni líderes.
  *   La atribución histórica por plaza/posición NO se modifica.
+ * - Continuidad jerárquica transitoria (solo NPPF): si una plaza de Coach
+ *   reporta temporalmente a Dirección Distrital, pero antes y después está
+ *   vinculada a líderes certificados, permite recuperar instalaciones solo
+ *   con identidad HC/HIC inequívoca, misma plaza, mismo distrito y nombres
+ *   de líder/coach del evento compatibles. Admite plaza Coach VACANTE tras
+ *   promoción a Líder comprobada. Nunca infiere por nombres solamente.
+ *   Fuente reportada como HC_CONTINUIDAD_TRANSITORIA, distinta de HC_FOTO.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -127,6 +134,138 @@ function np_district(string $d): string { return RankingAtribucionServiceV06::no
 function np_team_key(string $lider, ?string $coach=null, ?string $vendor=null): string {
     return $lider . ($coach===null?'':'|'.$coach) . ($vendor===null?'':'|'.$vendor);
 }
+/** Posiciones únicas de una foto HC (duplicados de plaza = invalidez). */
+function np_gap_seats(array $rows): array {
+    $seats=[];
+    foreach($rows as $r){
+        $d=RankingAtribucionServiceV06::normalizarDistrito((string)($r['distrito']??''));
+        $p=trim((string)($r['id_posicion']??''));
+        if($d===null || $p==='')continue;
+        $id=$d.'|'.$p;
+        if(array_key_exists($id,$seats))$seats[$id]=null;
+        else $seats[$id]=$r;
+    }
+    return $seats;
+}
+function np_gap_leader_row(?array $row): bool {
+    return $row!==null && np_person_valid((string)($row['nombre_colaborador']??''))
+        && str_contains(RankingAtribucionServiceV06::norm((string)($row['puesto_lr']??'')),'DIRECTOR DISTRITAL');
+}
+function np_gap_person_same(array $a,array $b,array $canonicos,array $hicEstados): bool {
+    $nameA=(string)($a['nombre_colaborador']??'');$nameB=(string)($b['nombre_colaborador']??'');
+    if(!np_person_valid($nameA) || !np_person_valid($nameB) || np_person_name_key($nameA)!==np_person_name_key($nameB))return false;
+    $aTal=trim((string)($a['numero_talento_gs']??''));$bTal=trim((string)($b['numero_talento_gs']??''));
+    if($aTal==='' || $bTal==='' || $aTal==='VACANTE' || $bTal==='VACANTE')return false;
+    if(($hicEstados[$aTal]??'')==='HIC_AMBIGUA' || ($hicEstados[$bTal]??'')==='HIC_AMBIGUA')return false;
+    return (string)($canonicos[$aTal]??$aTal)===(string)($canonicos[$bTal]??$bTal);
+}
+/** Puentes por POSICIÓN Coach, certificados con las fotos anterior / intermedia / posterior.
+ *  Nunca modifica registros HC: toda decisión se limita al Ranking NPPF. */
+function np_gap_verified_coaches(array $before,array $during,array $after,array $catalog,array $canonicos,array $hicEstados): array {
+    $prev=np_gap_seats($before);$gap=np_gap_seats($during);$next=np_gap_seats($after);
+    $bridges=[];
+    foreach($gap as $seat=>$middle){
+        if($middle===null || !isset($prev[$seat],$next[$seat]))continue;
+        $old=$prev[$seat];$new=$next[$seat];
+        if($old===null || $new===null || !np_gap_person_same($old,$middle,$canonicos,$hicEstados))continue;
+        if(!str_contains(RankingAtribucionServiceV06::norm((string)($middle['puesto_lr']??'')),'DIRECTOR DISTRITAL'))continue;
+        if(!str_contains(RankingAtribucionServiceV06::norm((string)($old['puesto_lr']??'')),'LIDER'))continue;
+        if(!str_contains(RankingAtribucionServiceV06::norm((string)($new['puesto_lr']??'')),'LIDER'))continue;
+        $d=substr($seat,0,strpos($seat,'|'));
+        $oldSup=trim((string)($old['posicion_lr']??''));$newSup=trim((string)($new['posicion_lr']??''));
+        if($oldSup==='' || $newSup==='')continue;
+        $oldLeader=$d.'|'.$oldSup;$newLeader=$d.'|'.$newSup;
+        if(!isset($catalog[$oldLeader]) || !np_gap_leader_row($prev[$oldLeader]??null) || !np_gap_leader_row($next[$newLeader]??null))continue;
+        // Solo un líder anterior inequívoco; un cambio de nombre del evento NO crea autoridad.
+        $promoted=false;
+        if(np_person_valid((string)($new['nombre_colaborador']??''))){
+            if(!np_gap_person_same($middle,$new,$canonicos,$hicEstados))continue;
+        }else{
+            // La plaza Coach se desocupa porque su ocupante ahora es Líder.
+            // Demostrarlo con la identidad completa y la nueva plaza de líder.
+            if(!str_contains(RankingAtribucionServiceV06::norm((string)($new['nombre_colaborador']??'')),'VACANT'))continue;
+            $newBoss=$next[$newLeader];
+            if(np_person_name_key((string)$newBoss['nombre_colaborador'])!==np_person_name_key((string)$middle['nombre_colaborador']))continue;
+            $promoted=true;
+        }
+        $bridges[$seat]=[
+            'lider_id'=>$oldLeader,
+            'coach_id'=>trim((string)$middle['id_posicion']),
+            'coach_nombre'=>RankingAtribucionServiceV06::norm((string)$middle['nombre_colaborador']),
+            'lider_nombre'=>RankingAtribucionServiceV06::norm((string)$prev[$oldLeader]['nombre_colaborador']),
+            'promocion'=>$promoted,
+        ];
+    }
+    return $bridges;
+}
+/** Recupera únicamente pendientes por ausencia de cadena HC en una semana intermedia.
+ *  Excluye folios ambiguos, conflictos de foto/coach, ausencia de foto adyacente
+ *  y cualquier cuenta que el Motor ya certificó. */
+function np_gap_recover_pending(RankingAtribucionServiceV06 $motor,array $pending,array $cohortIndex,array $catalog,array $canonicos,array $hicEstados): array {
+    $byWeek=[];
+    foreach($pending as $ev){
+        if(($ev['estado']??'')!=='SIN_ASOCIACION_HC' || ($ev['identidad_hic']??'')==='HIC_AMBIGUA')continue;
+        $date=substr((string)($ev['fecha']??''),0,10);
+        if(!np_date_valid($date) || !isset($cohortIndex[$date]) || !np_person_valid((string)($ev['coach_evento_texto']??''))
+            || !np_person_valid((string)($ev['lider_evento_original']??'')) || trim((string)($ev['vendedor_id']??''))==='')continue;
+        $d=np_date($date);$key=$d->format('o').'-'.(int)$d->format('W');
+        if((string)($ev['hc_foto']??'')!==$key)continue; // foto real de ESA semana, no fallback anterior
+        $byWeek[$key][]=$ev;
+    }
+    $out=[];$weeks=[];
+    foreach($byWeek as $key=>$events){
+        $d=np_date(substr((string)$events[0]['fecha'],0,10))->modify('monday this week');
+        $oldDate=$d->modify('-7 days');$newDate=$d->modify('+7 days');
+        $beforeKey=$oldDate->format('o').'-'.(int)$oldDate->format('W');
+        $afterKey=$newDate->format('o').'-'.(int)$newDate->format('W');
+        $hc=$motor->cargarHc($oldDate->format('Y-m-d'),$newDate->format('Y-m-d'));
+        // Exigir tres snapshots EXACTOS; no recuperar desde una foto heredada.
+        foreach([$beforeKey,$key,$afterKey] as $k){
+            $photo=$hc['fotos'][$k]??null;
+            if(!$photo || implode('-',$photo)!==$k || !isset($hc['datos'][$k]))continue 2;
+        }
+        $before=$hc['datos'][$beforeKey];$during=$hc['datos'][$key];$after=$hc['datos'][$afterKey];
+        $bridges=np_gap_verified_coaches($before,$during,$after,$catalog,$canonicos,$hicEstados);
+        if(!$bridges)continue;
+        $sellerRows=[];$sellerPositionCount=[];
+        foreach($during as $r){
+            $distrito=RankingAtribucionServiceV06::normalizarDistrito((string)($r['distrito']??''));
+            $pos=trim((string)($r['id_posicion']??''));$tal=trim((string)($r['numero_talento_gs']??''));
+            if($distrito===null || $pos==='' || $tal==='' || $tal==='VACANTE' || ($hicEstados[$tal]??'')==='HIC_AMBIGUA')continue;
+            $person=(string)($canonicos[$tal]??$tal);
+            $sellerRows[$person][]=$r;
+            $sellerPositionCount[$person][$distrito.'|'.$pos]=true;
+        }
+        foreach($events as $ev){
+            $seller=(string)$ev['vendedor_id'];$candidates=[];
+            // Al igual que Motor HC, no resolver identidad presente en dos posiciones.
+            if(count($sellerPositionCount[$seller]??[])!==1)continue;
+            foreach($sellerRows[$seller]??[] as $r){
+                $district=RankingAtribucionServiceV06::normalizarDistrito((string)($r['distrito']??''));
+                if($district===null || !str_contains(RankingAtribucionServiceV06::norm((string)($r['puesto_lr']??'')),'COACH'))continue;
+                $coachSeat=$district.'|'.trim((string)($r['posicion_lr']??''));
+                $bridge=$bridges[$coachSeat]??null;
+                if(!$bridge)continue;
+                if(np_person_name_key((string)($ev['coach_evento_texto']??''))!==np_person_name_key((string)$bridge['coach_nombre']))continue;
+                if(np_person_name_key((string)($ev['lider_evento_original']??''))!==np_person_name_key((string)$bridge['lider_nombre']))continue;
+                $id=$bridge['lider_id'].'|'.$bridge['coach_id'];
+                $candidates[$id]=[$bridge,$r];
+            }
+            if(count($candidates)!==1)continue;
+            [$chosen,$hcVendedor]=array_values($candidates)[0];
+            $ev['lider_id']=$chosen['lider_id'];$ev['coach_id']=$chosen['coach_id'];
+            $ev['lider_posicion']=substr($chosen['lider_id'],strpos($chosen['lider_id'],'|')+1);
+            $ev['coach_evento']=$chosen['coach_nombre'];
+            $ev['vendedor_nombre']=RankingAtribucionServiceV06::norm((string)($hcVendedor['nombre_colaborador']??''));
+            $ev['vendedor_fecha_alta']=substr((string)($hcVendedor['fecha_alta']??''),0,10);
+            $ev['fuente']='HC_CONTINUIDAD_TRANSITORIA';$ev['estado']='PUENTE_HC_CERTIFICADO_LOCAL';
+            $ev['_gap_promoted']=$chosen['promocion'];
+            $out[]=$ev;$weeks[$key]=true;
+        }
+    }
+    return ['cuentas'=>$out,'semanas'=>array_keys($weeks)];
+}
+
 function np_metrics(): array {
     return ['ins_m4'=>0,'ins_m3'=>0,'ins_m2'=>0,'ins_m1'=>0,
         'nppf_m4'=>0,'nppf_m3'=>0,'nppf_m2'=>0,'nppf_m1'=>0,'prevent_m1'=>0,'reverso'=>0,
@@ -659,7 +798,7 @@ $activationTo=$activationAll?max($activationAll):$now;
 
 $catalog=[];$leaderDisplay=[];$operationalLeader=[];$operationalHcPhoto='';$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
 $audit=['m4'=>[], 'm3'=>[], 'm2'=>[], 'm1'=>[]];
-$photo=null;$accountDetail=[];
+$photo=null;$accountDetail=[];$continuity=['cuentas'=>[],'semanas'=>[]];
 if(!$errors){
  try {
     $motor=new RankingAtribucionServiceV06($conexion);
@@ -691,8 +830,17 @@ if(!$errors){
         $person=(string)$s['persona'];
         $vendors[$key.'|'.$person]=['id'=>$person,'nombre'=>(string)$s['nombre'],'fecha_alta'=>(string)($s['fecha_alta']??'')];
     }
-    // Fuente exclusiva de jerarquía: cuentas con atribución HC/HIC certificada.
-    foreach($res['cuentas'] as $event){
+    // Cuentas con certificación ordinaria del Motor HC + recuperación local
+    // estrictamente comprobada de intervalos transitorios DIRECTOR -> LIDER.
+    // La fuente del Motor NO se modifica; cada cuenta extra conserva marca de origen.
+    try {
+        $continuity=np_gap_recover_pending($motor,$res['auditoria_pendientes']??[],
+            $cohortIndex,$catalog,$hic['canonicos'],$hic['estados']);
+    } catch(Throwable $ignored) {
+        $continuity=['cuentas'=>[],'semanas'=>[]];
+    }
+    // Las 2 fuentes están disjuntas: el Motor separa certificadas de pendientes.
+    foreach(array_merge($res['cuentas'],$continuity['cuentas']) as $event){
         $key=np_account($event['cuenta']??'');
         $date=substr((string)($event['fecha']??''),0,10);
         if($key===''||!np_date_valid($date)||!isset($cohortIndex[$date]))continue;
@@ -795,6 +943,7 @@ if(!$errors){
             $coachId=substr($canonical,strlen($liderId)+1);
         }
     }
+    $continuityCount=count($continuity['cuentas']);
     $notCertified=count($audit['m4'])+count($audit['m3'])+count($audit['m2'])+count($audit['m1']);
     if($notCertified)$warnings['pendientes']="{$notCertified} cuentas NPPF en M4/M3/M2/M1 no pudieron asignarse de forma certificada a un líder; se muestran en auditoría, fuera de porcentajes.";
     if($corte<$eval)$warnings['frescura']='Pendientes según archivo del '.$corte.'; M1/Preventivo evaluado al '.$eval.'. Algunos clientes pudieron pagar después del corte.';
@@ -1058,7 +1207,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.7</strong></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.8</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -1199,7 +1348,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <td class="center nppf-consolidated"><span class="nppf-total-emphasis <?=np_pct_class($r['pct_m4_m1'])?>" title="NPPF M4–M1 ÷ INS M4–M1 × 100"><?=np_pct($r['pct_m4_m1'])?></span></td>
 <td class="num"><?=np_num($r['prevent_m1'])?></td><td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_prevent_m1'])?>"><?=np_pct($r['pct_prevent_m1'])?></span></td></tr>
 <?php endforeach;?>
-<tr class="total-row" id="totalRow"><td colspan="3"><strong>TOTAL CERTIFICADO</strong></td><td class="center">—</td>
+<tr class="total-row" id="totalRow"><td colspan="3"><strong><?=($continuityCount??0)>0?'TOTAL HC + CONTINUIDAD':'TOTAL CERTIFICADO'?></strong></td><td class="center">—</td>
 <td class="num" id="tInsM4"><?=np_num($tot['ins_m4'])?></td><td class="num" id="tInsM3"><?=np_num($tot['ins_m3'])?></td><td class="num" id="tInsM2"><?=np_num($tot['ins_m2'])?></td><td class="num" id="tInsM1"><?=np_num($tot['ins_m1'])?></td>
 <td class="num nppf-consolidated" id="tInsM4M1"><?=np_num($tot['ins_m4']+$tot['ins_m3']+$tot['ins_m2']+$tot['ins_m1'])?></td>
 <td class="num" id="tM4"><?=np_num($tot['nppf_m4'])?></td><td class="num" id="tM3"><?=np_num($tot['nppf_m3'])?></td><td class="num" id="tM2"><?=np_num($tot['nppf_m2'])?></td><td class="num" id="tM1"><?=np_num($tot['nppf_m1'])?></td>
