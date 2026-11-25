@@ -1,12 +1,12 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.2 (2026-11-24)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.3 (2026-11-24)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.2.2 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.3 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
  *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
@@ -36,8 +36,10 @@
  *   NO incluye M1 Preventivo en numerador.
  *   % M4–M1 = suma ARITMÉTICA de % M4, % M3, % M2, % M1,
  *   no tasa ponderada. Sin base en una cosecha, se omite su porcentaje.
- * - Ranking: mayor a menor SUMA % M4–M1; sin denominadores al final.
+ * - Ranking: menor a mayor SUMA % M4–M1; sin denominadores al final.
  * - Detalle: M1 Preventivo primero; después M1, M2, M3 y M4.
+ * - Nombres visibles de líderes: HC del período de referencia, con fecha máxima HOY;
+ *   la atribución histórica por plaza/posición NO se modifica.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -284,7 +286,7 @@ if(!$activationAll)$errors[]='No hay días de cosecha seleccionados.';
 $activationFrom=$activationAll?min($activationAll):$now;
 $activationTo=$activationAll?max($activationAll):$now;
 
-$catalog=[];$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
+$catalog=[];$leaderDisplay=[];$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
 $audit=['m4'=>[], 'm3'=>[], 'm2'=>[], 'm1'=>[]];
 $photo=null;$accountDetail=[];
 if(!$errors){
@@ -295,6 +297,26 @@ if(!$errors){
         throw new RuntimeException('Se requiere API 0.6.8 del motor_hc 0.6.9.');
     $catalog=$motor->catalogoLideres($activationFrom,$activationTo);
     if(!$catalog) throw new RuntimeException('No hay plazas de líder certificadas por motor_hc en este período.');
+    // El catálogo de atribución usa las COSECHAS (p. ej. julio–octubre para NOV),
+    // de modo que una plaza VACANTE en octubre puede estar ocupada en HC noviembre.
+    // Resolver SOLO el NOMBRE VISIBLE en la fotografía HC de la fecha de referencia
+    // (hasta hoy), cruzando ID estable de plaza/distrito; jamás mover históricos.
+    $displayAsOf=($actualEnd<$now)?$actualEnd:$now;
+    try {
+        $catalogReference=$motor->catalogoLideres($displayAsOf,$displayAsOf);
+        foreach($catalogReference as $refId=>$refLider){
+            $refId=(string)$refId;
+            if(!isset($catalog[$refId])) continue;
+            if((string)($refLider['plaza']??'') !== (string)($catalog[$refId]['plaza']??'')) continue;
+            if(np_district((string)($refLider['distrito']??'')) !== np_district((string)($catalog[$refId]['distrito']??''))) continue;
+            $nombreReferencia=RankingAtribucionServiceV06::norm((string)($refLider['nombre']??''));
+            if($nombreReferencia!=='')$leaderDisplay[$refId]=$nombreReferencia;
+        }
+    } catch(Throwable $ignored) {
+        // Si no hay foto HC del período visible, usar etiqueta del catálogo histórico.
+        // Las instalaciones y el vínculo entre plaza y cuenta siguen certificados.
+    }
+
     $hic=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic());
     $photo=$motor->construirFotoProductividad($activationFrom,$activationTo,$catalog,$hic['canonicos'],[]);
     foreach($photo['coaches'] as $c){
@@ -319,7 +341,7 @@ if(!$errors){
         $vk=$ck.'|'.$vendor;
         if(!isset($vendors[$vk]))$vendors[$vk]=['id'=>$vendor,'nombre'=>(string)($event['vendedor_nombre']??'VENDEDOR NO IDENTIFICADO'),'fecha_alta'=>(string)($event['vendedor_fecha_alta']??'')];
         if(isset($matched[$key])){
-            $warnings['duplicada']='Una cuenta presenta más de una instalación certificada entre las tres cosechas; revisar conciliación, sin duplicar.';
+            $warnings['duplicada']='Una cuenta presenta más de una instalación certificada entre las cuatro cosechas; revisar conciliación, sin duplicar.';
             continue;
         }
         $event['_cohort']=$cohort;
@@ -386,7 +408,7 @@ if(!$errors){
     $scopeRows=[];
     if($view==='lideres'){
         $viewLabel='Ranking NPPF · Líder';
-        foreach($catalog as $lid=>$l)$scopeRows[]=['key'=>$lid,'distrito'=>(string)$l['distrito'],'entidad'=>(string)$l['nombre'],'lid'=>$lid,'co'=>'','v'=>''];
+        foreach($catalog as $lid=>$l)$scopeRows[]=['key'=>$lid,'distrito'=>(string)$l['distrito'],'entidad'=>(string)($leaderDisplay[(string)$lid]??$l['nombre']),'lid'=>$lid,'co'=>'','v'=>''];
     }elseif($view==='ranking_coach'||$view==='coaches'){
         $viewLabel=$view==='ranking_coach'?'Ranking NPPF · Coach':'Coaches del Líder';
         if($view==='coaches'&&!isset($catalog[$liderId]))$errors[]='Líder no identificado en el catálogo HC.';
@@ -428,14 +450,14 @@ if(!$errors){
         $row['pct_m4_m1']=np_sum_cohort_rates($row);
         $rows[]=$row;
     }
-    // Ranking default: mayor a menor suma de % NPPF M4–M1.
+    // Ranking default: menor a mayor suma de % NPPF M4–M1.
     // Los casos sin ninguna cohorte con instalaciones quedan al final.
     usort($rows,static function($a,$b){
         $pa=$a['pct_m4_m1']; $pb=$b['pct_m4_m1'];
         if($pa===null && $pb!==null)return 1;
         if($pb===null && $pa!==null)return -1;
-        if($pa!==null && $pb!==null && $pa!==$pb)return $pb<=>$pa;
-        if($a['nppf_m4_m1']!==$b['nppf_m4_m1'])return $b['nppf_m4_m1']<=>$a['nppf_m4_m1'];
+        if($pa!==null && $pb!==null && $pa!==$pb)return $pa<=>$pb;
+        if($a['nppf_m4_m1']!==$b['nppf_m4_m1'])return $a['nppf_m4_m1']<=>$b['nppf_m4_m1'];
         return strcmp($a['entidad'],$b['entidad']);
     });
     if($view==='cuentas'&&$scopeRows){
@@ -623,7 +645,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.2</strong></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.3</strong></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -679,7 +701,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <?php if($view==='lideres'):?><span class="breadcrumb-current">🏆 Ranking Líder</span><a class="breadcrumb-link" href="<?=np_h($coachLink)?>">👥 Ranking Coach</a>
  <?php elseif($view==='ranking_coach'):?><a class="breadcrumb-link" href="<?=np_h($rootLink)?>">🏆 Ranking Líder</a><span class="breadcrumb-current">👥 Ranking Coach</span>
  <?php else:?><a class="breadcrumb-link" href="<?=np_h($rootLink)?>">🏆 Ranking Líder</a><a class="breadcrumb-link" href="<?=np_h($coachLink)?>">👥 Ranking Coach</a>
-  <span class="breadcrumb-sep">›</span><span class="breadcrumb-current"><?=np_h($catalog[$liderId]['nombre']??'LÍDER')?></span>
+  <span class="breadcrumb-sep">›</span><span class="breadcrumb-current"><?=np_h($leaderDisplay[$liderId]??($catalog[$liderId]['nombre']??'LÍDER'))?></span>
   <?php if(in_array($view,['vendedores','cuentas'],true)):?><span class="breadcrumb-sep">›</span><span class="breadcrumb-current"><?=np_h($coaches[np_team_key($liderId,$coachId)]['nombre']??'COACH')?></span><?php endif;?>
   <?php if($view==='cuentas'):?><span class="breadcrumb-sep">›</span><span class="breadcrumb-current"><?=np_h($vendors[np_team_key($liderId,$coachId,$vendorId)]['nombre']??'VENDEDOR')?></span><?php endif;?>
  <?php endif;?></div></div><div class="level-actions">
@@ -699,11 +721,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="card nppf-finance-card"><div class="label">ARPU NPPF EN RIESGO · EST.</div><div class="value" id="kpiArpu"><?=np_arpu_mxn($tot['factura_nppf_centavos'],$tot['factura_nppf_validas'])?></div><div class="hint">MXN · ticket promedio MONTO_FACTURA<div class="nppf-card-hint"><span id="kpiArpuCount"><?=np_num($tot['factura_nppf_validas'])?></span> cuentas con factura válida</div></div></div>
  <div class="card nppf-finance-card"><div class="label">FACTURACIÓN NPPF EN RIESGO</div><div class="value" id="kpiRentaRiesgo"><?=np_mxn($tot['factura_nppf_centavos'])?></div><div class="hint">MXN · suma de facturas de M4–M1<div class="nppf-card-hint">Preventivo adicional: <span id="kpiPreventAmount"><?=np_mxn($tot['factura_prevent_centavos'])?></span></div></div></div>
 </section>
-<section class="nppf-panel" style="margin-top:12px">
- <strong>Metodología de cosechas · NPPF</strong>
- <div class="nppf-caption">El período seleccionado es una <strong>referencia calendario</strong>. Las instalaciones M1, M2, M3 y M4 corresponden a los mismos días de <strong>uno, dos, tres y cuatro meses anteriores</strong>; en mes completo se toman los meses completos. M2, M3 y M4 representan <strong>primeras facturas todavía pendientes</strong>, no la segunda, tercera ni cuarta factura del cliente. Cada porcentaje utiliza las instalaciones <strong>certificadas por Motor HC de su propia cosecha</strong>. La separación operativa de <strong>M1 y Preventivo</strong> depende del <strong>día de corte mensual</strong> (fecha de instalación trasladada un mes) y de la fecha de evaluación: el mismo día del corte ya cuenta como M1. Los <strong>cinco días posteriores de precio de lista</strong> NO retrasan esa clasificación en este Ranking; su fecha límite se conserva en el detalle por cuenta. <strong>Esta segmentación operativa no equivale al indicador de primera factura vencida al final de precio de lista.</strong> Todos los pendientes provienen del <strong>último archivo NPPF publicado</strong>; no se reconstruyen saldos históricos de esos meses. REVERSO permanece incluido. <strong>El consolidado M4–M1</strong> suma las instalaciones, las cuentas NPPF (sin Preventivo) y <strong>aritméticamente los porcentajes de las cuatro cosechas</strong>; este último valor sirve para ordenar de mayor a menor, y <strong>no equivale a una tasa global ponderada</strong>. Semáforo operativo: verde &lt;4%, amarillo 4%–5%, rojo &gt;5%. Las tarjetas económicas suman <strong>MONTO_FACTURA</strong> de cuentas certificadas como NPPF M4–M1; su ticket promedio es una aproximación a la renta expuesta, <strong>no cancelación confirmada ni ARPU recurrente validado</strong>. La meta trimestral oficial no se utiliza como semáforo de estos porcentajes operativos.</div>
-</section>
-<?php foreach($warnings as $warn):?><div class="nppf-note">⚠ <?=np_h($warn)?></div><?php endforeach;?>
+
 <?php if($view!=='cuentas'):?>
 <section class="filters nppf-filters">
  <?php if(in_array($view,['lideres','ranking_coach'],true)):?>
@@ -740,7 +758,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <th class="center nppf-sort" data-key="pct_m3">% M3 ↕</th>
  <th class="center nppf-sort" data-key="pct_m2">% M2 ↕</th>
  <th class="center nppf-sort" data-key="pct_m1">% M1 ↕</th>
- <th class="center nppf-sort nppf-consolidated" data-key="pct_m4_m1" title="Suma aritmética de % M4 + % M3 + % M2 + % M1 (no tasa ponderada)">Σ % NPPF M4–M1 ↓</th>
+ <th class="center nppf-sort nppf-consolidated" data-key="pct_m4_m1" title="Suma aritmética de % M4 + % M3 + % M2 + % M1 (no tasa ponderada)">Σ % NPPF M4–M1 ↑</th>
  <th class="num nppf-sort" data-key="prevent_m1"># M1 Prev. ↕</th>
  <th class="center nppf-sort" data-key="pct_prevent_m1">% M1 Prev. ↕</th>
 </tr></thead><tbody>
@@ -789,9 +807,6 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 </tbody></table></div></section>
 <section class="table-card nppf-chart-panel"><div class="table-head"><strong>Cartera NPPF del vendedor · por cosecha</strong><span>Barras violeta = NPPF · Ámbar = Preventivo M1 · Línea = % NPPF / INS</span></div><div class="nppf-chart-wrap"><canvas id="vendorTrendChart"></canvas></div><p class="nppf-caption" style="text-align:center;margin:0 12px 3px">Fotografía del último archivo publicado. La línea es la tasa NPPF de cada cosecha; no representa CHURN real ni evolución histórica por fecha.</p></section>
 <?php endif;?>
-<?php if(in_array($view,['lideres','ranking_coach'],true) && (count($audit['m4'])||count($audit['m3'])||count($audit['m2'])||count($audit['m1']))):?>
-<div class="nppf-panel nppf-alert"><strong>Conciliación NPPF / HC</strong><p class="nppf-caption">Cuentas pendientes sin asociación certificada: M4 <?=count($audit['m4'])?> · M3 <?=count($audit['m3'])?> · M2 <?=count($audit['m2'])?> · M1 <?=count($audit['m1'])?>. Estas cuentas no se asignan a colaboradores ni se incluyen en los porcentajes del ranking.</p></div>
-<?php endif;?>
 <?php endif;?>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -828,7 +843,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
    const tbody=table.tBodies[0],total=document.getElementById('totalRow');
    const rows=()=>[...tbody.querySelectorAll('.data-row')];
    const n=(r,k)=>Number(r.getAttribute('data-'+k.replace(/_/g,'-')))||0;
-   let filter='ALL',sortKey='pct_m4_m1',dir='desc';
+   let filter='ALL',sortKey='pct_m4_m1',dir='asc';
    function num(x){return Math.round(x).toLocaleString('en-US')};
    function pct(a,b){return b>0?(100*a/b).toFixed(1)+'%':'—'};
    const money=c=>'$'+(c/100).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
