@@ -1,12 +1,12 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.10 (2026-11-25)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.11 (2026-11-25)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.2.10 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.11 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
  *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
@@ -61,6 +61,11 @@
  *   catálogo histórico. Contradicciones/duplicados se rechazan.
  * - Diagnóstico de continuidad HC bajo demanda: ?diag_hc=1 (solo Admin/Regional),
  *   muestra motivos exactos sin cambiar cuentas, tasas ni metas.
+ * - Cartera operativa: incluye cuentas NPPF certificadas y por conciliar
+ *   del mismo último corte; atribución no certificada NO afecta KPIs, semáforos
+ *   ni responsables. M1 Preventivo distingue detectadas / certificadas /
+ *   pendientes y muestra el motivo de cada exclusión sin ocultar cuentas.
+ * - Consulta y CSV operativo habilitados sólo para Admin / Director Regional.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -471,6 +476,103 @@ function np_gap_diagnose(
     }
     arsort($out['status']);arsort($out['stages']);
     return $out;
+}
+
+/**
+ * Libro operativo de CUENTAS NPPF, sin inferir jerarquía desde nombres.
+ * Su estado CERTIFICADA depende de la MISMA conciliación que suma al KPI;
+ * una mera coincidencia en $matched no basta (fecha/cohorte/distrito).
+ * Cada clave original Mx|cuenta se cuenta una única vez por cohorte.
+ */
+function np_operational_ledger(array $raw,array $matched,array $audit,array $pending,array $catalog,array $currentNames=[],array $applied=[]): array {
+    $byAccount=[];
+    foreach($pending as $event){
+        $account=np_account($event['cuenta']??'');
+        $date=substr((string)($event['fecha']??''),0,10);
+        if($account!=='' && np_date_valid($date))$byAccount[$account][]=$event;
+    }
+    $ledger=[];
+    foreach($raw as $cohort=>$records){
+        foreach($records as $account=>$r){
+            $account=(string)$account;
+            $date=(string)($r['fecha_activacion']??'');
+            $district=np_district((string)($r['distrito']??''));
+            if(!np_date_valid($date))continue;
+            // Única fuente de certificación: la cuenta que EFECTIVAMENTE incrementó el KPI.
+            $certified=isset($applied[$cohort][$account]);
+            $ev=$certified?$matched[$account]:null;
+            $origin='';
+            $matching=[];
+            if(!$certified){
+                foreach($byAccount[$account]??[] as $candidate){
+                    $install=substr((string)($candidate['fecha']??''),0,10);
+                    if(!np_date_valid($install))continue;
+                    $delta=abs((int)np_date($install)->diff(np_date($date))->format('%r%a'));
+                    if($delta<=1)$matching[]=$candidate;
+                }
+                if(count($matching)===1)$ev=$matching[0];
+                // Si existen múltiples eventos, no adjudicar Coach ni Líder a ninguno.
+                elseif(count($matching)>1)$origin='MÚLTIPLES EVENTOS DE INSTALACIÓN';
+            }
+            $source=$certified?(string)($ev['fuente']??'HC_FOTO'):'NO CERTIFICADA';
+            $reason=$certified?'—':(string)($audit[$cohort][$account]??'PENDIENTE DE CONCILIACIÓN');
+            if(!$certified && $ev!==null && !empty($ev['estado'])){
+                $reason=(string)$ev['estado'];
+                $auditReason=(string)($audit[$cohort][$account]??'');
+                if($auditReason!=='' && $auditReason!=='SIN INSTALACIÓN CERTIFICADA')$reason.=' · '.$auditReason;
+            }
+            if($origin!=='')$reason=$origin.' · '.$reason;
+            $leaderId=$certified?(string)($ev['lider_id']??''):'';
+            $leader=$leaderId!==''?(string)($currentNames[$leaderId]??'Por confirmar'):'POR CONCILIAR';
+            $ledger[]=[
+                'clave'=>$account,'cuenta'=>(string)($r['cuenta']??$account),
+                'cohorte'=>strtoupper((string)$cohort),
+                'clase'=>(string)($r['_class']??''),
+                'distrito'=>$district,'fecha'=>$date,
+                'corte'=>(string)($r['_monthly_cut']??''),
+                'tipo'=>(string)($r['tipo']??''),
+                'vendedor_nppf'=>(string)($r['vendedor']??''),
+                'vendedor_talento'=>(string)($ev['vendedor_folio_original']??''),
+                'coach_historico'=>(string)($ev['coach_evento_texto']??''),
+                'lider_historico'=>(string)($ev['lider_evento_original']??''),
+                'lider_operativo'=>$leader,
+                'certificada'=>$certified,'estado'=>$certified?'CERTIFICADA':'POR CONCILIAR',
+                'motivo'=>$reason,'fuente'=>$source,
+                'monto'=>$r['monto_factura']??null,
+                'plan'=>(string)($r['desc_plan']??''),
+                'canal'=>(string)($r['canal_venta']??'')
+            ];
+        }
+    }
+    usort($ledger,static function($a,$b){
+        $compare=strcmp($a['distrito'],$b['distrito']);
+        if($compare!==0)return $compare;
+        if($a['certificada']!==$b['certificada'])return $a['certificada']?1:-1;
+        return strcmp($a['fecha'],$b['fecha'])?:strcmp($a['clave'],$b['clave']);
+    });
+    return $ledger;
+}
+
+/** Estado de alcance M1 (prev / vencido) o todas las cosechas. */
+function np_operational_filter(array $ledger,string $district,string $class,string $state='todos'): array {
+    return array_values(array_filter($ledger,static function($r)use($district,$class,$state){
+        if($district!=='TODOS' && $r['distrito']!==$district)return false;
+        if($class==='preventivo' && $r['clase']!=='PREVENTIVO M1')return false;
+        if($class==='m1' && $r['clase']!=='M1')return false;
+        if($state==='pendientes' && $r['certificada'])return false;
+        if($state==='certificadas' && !$r['certificada'])return false;
+        return true;
+    }));
+}
+function np_operational_summary(array $ledger): array {
+    $certified=0;
+    foreach($ledger as $r)if($r['certificada'])$certified++;
+    return ['detectadas'=>count($ledger),'certificadas'=>$certified,'pendientes'=>count($ledger)-$certified];
+}
+/** Evitar inyección de fórmulas en Excel al exportar texto comercial. */
+function np_operational_csv_field($value): string {
+    $s=(string)($value??'');
+    return preg_match('/^[\s]*[=+\-@]/u',$s) ? "'".$s : $s;
 }
 
 function np_metrics(): array {
@@ -889,11 +991,19 @@ function np_apply_presentation_coach_aliases(
     }
 }
 
-$npDiagEnabled=in_array($rol,['admin','director_regional'],true) && (string)($_GET['diag_hc']??'')==='1';
+$npCanOperate=in_array($rol,['admin','director_regional'],true);
+$npDiagEnabled=$npCanOperate && (string)($_GET['diag_hc']??'')==='1';
+$opDistrict=np_district((string)($_GET['op_distrito']??''));
+if(!in_array($opDistrict,['CANCUN','COATZA-MINA','MERIDA','TUXTLA','VILLAHERMOSA'],true))$opDistrict='TODOS';
+$opClass=(string)($_GET['op_clase']??'preventivo');
+if(!in_array($opClass,['preventivo','m1','todas'],true))$opClass='preventivo';
+$opState=(string)($_GET['op_estado']??'todos');
+if(!in_array($opState,['todos','certificadas','pendientes'],true))$opState='todos';
 $npDiagReport=null;
 $now=date('Y-m-d');
 $view=(string)($_GET['view']??'lideres');
-if (!in_array($view,['lideres','ranking_coach','coaches','vendedores','cuentas'],true)) $view='lideres';
+if (!in_array($view,['lideres','ranking_coach','coaches','vendedores','cuentas','cartera_operativa'],true)) $view='lideres';
+if($view==='cartera_operativa' && !$npCanOperate){http_response_code(403);exit('Cartera operativa: se requiere Administrador o Director Regional.');}
 $periodo=(string)($_GET['periodo']??'semanal');
 if (!in_array($periodo,['semanal','mensual'],true)) $periodo='semanal';
 $distritoParam=np_district((string)($_GET['distrito']??''));
@@ -1007,7 +1117,7 @@ $activationTo=$activationAll?max($activationAll):$now;
 
 $catalog=[];$leaderDisplay=[];$operationalLeader=[];$operationalHcPhoto='';$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
 $audit=['m4'=>[], 'm3'=>[], 'm2'=>[], 'm1'=>[]];
-$photo=null;$accountDetail=[];$continuity=['cuentas'=>[],'semanas'=>[]];
+$photo=null;$accountDetail=[];$continuity=['cuentas'=>[],'semanas'=>[]];$opCertifiedApplied=[];
 if(!$errors){
  try {
     $motor=new RankingAtribucionServiceV06($conexion);
@@ -1107,6 +1217,7 @@ if(!$errors){
             $audit[$cohort][$key]='DISTRITO NPPF DIFERENTE DE HC';continue;
         }
         $metric=($r['_class']==='PREVENTIVO M1')?'prevent_m1':'nppf_'.$cohort;
+        $opCertifiedApplied[$cohort][$key]=true; // Mismo universo certificado utilizado por Ranking.
         foreach([$lid,np_team_key($lid,$co),np_team_key($lid,$co,$ven)] as $hier){
             np_apply($scores,$hier,$metric);
             if($r['_reverso'])np_apply($scores,$hier,'reverso');
@@ -1176,9 +1287,24 @@ foreach($catalog as $id=>$leader){
         $leaderDisplay[$lid]??($leader['nombre']??null)
     );
 }
+// La cartera operativa sólo se construye para perfiles autorizados.
+// IMPORTANTE: no participa en $scores, $tot, $accountDetail ni en los rankings.
+$opLedger=[];$opSelected=[];$opAllStatus=[];$opSummary=[];$opGlobalSummary=[];$opByDistrict=[];
+if(!$errors && $npCanOperate){
+    $opLedger=np_operational_ledger($raw,$matched,$audit,$res['auditoria_pendientes']??[],$catalog,$leaderVisible,$opCertifiedApplied);
+    $opAllStatus=np_operational_filter($opLedger,$opDistrict,$opClass,'todos');
+    $opSelected=np_operational_filter($opLedger,$opDistrict,$opClass,$opState);
+    $opSummary=np_operational_summary($opAllStatus);
+    $opGlobalSummary=np_operational_summary(np_operational_filter($opLedger,'TODOS','preventivo','todos'));
+    foreach(['CANCUN','COATZA-MINA','MERIDA','TUXTLA','VILLAHERMOSA'] as $d){
+        $opByDistrict[$d]=np_operational_summary(np_operational_filter($opLedger,$d,'preventivo','todos'));
+    }
+}
 if(!$errors){
     $scopeRows=[];
-    if($view==='lideres'){
+    if($view==='cartera_operativa'){
+        $viewLabel='Cartera NPPF · Seguimiento operativo';
+    }elseif($view==='lideres'){
         $viewLabel='Ranking NPPF · Líder';
         foreach($catalog as $lid=>$l)$scopeRows[]=['key'=>$lid,'distrito'=>(string)$l['distrito'],'entidad'=>(string)($leaderVisible[(string)$lid]??'Por confirmar'),'lid'=>$lid,'co'=>'','v'=>''];
     }elseif($view==='ranking_coach'||$view==='coaches'){
@@ -1263,6 +1389,27 @@ $previousMonthsLabel=$meses[(int)$prevMonth->format('n')];
 $periodTitle=$periodo==='semanal'?'Semana '.$week.' · '.$year:$monthsDisplay.' · '.$monthYear;
 $gridStart=$monthCurrent->modify('-'.((int)$monthCurrent->format('N')-1).' days');
 $roleNames=['admin'=>'Administrador','director_regional'=>'Director Regional','director_distrital'=>'Director Distrital','lider'=>'Líder','coach'=>'Coach','vendedor'=>'Vendedor'];
+if($view==='cartera_operativa' && (string)($_GET['op_csv']??'')==='1'){
+    if(!$npCanOperate || $errors){http_response_code(403);exit('Exportación operativa no disponible.');}
+    $safeName=preg_replace('/[^A-Za-z0-9_-]/','_',$opDistrict.'_'.$opClass.'_'.$opState);
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="NPPF_Cartera_'.(string)$safeName.'_'.date('Ymd').'.csv"');
+    $fp=fopen('php://output','w');
+    fwrite($fp,"\xEF\xBB\xBF");
+    fputcsv($fp,['Cuenta','Distrito','Cosecha','Clasificación','Fecha instalación','Corte mensual','Estado certificación',
+        'Motivo de conciliación','Vendedor NPPF','Folio vendedor instalación','Coach histórico instalación',
+        'Líder histórico instalación','Líder operativo certificado','Fuente de certificación','Tipo','Plan','Canal','Monto factura (MXN)',
+        'Gestión / Resultado','Compromiso / Fecha','Observaciones'],',','"','');
+    foreach($opSelected as $r){
+        $row=[$r['cuenta'],$r['distrito'],$r['cohorte'],$r['clase'],$r['fecha'],$r['corte'],$r['estado'],
+            $r['motivo'],$r['vendedor_nppf'],$r['vendedor_talento'],$r['coach_historico'],
+            $r['lider_historico'],$r['lider_operativo'],$r['fuente'],$r['tipo'],$r['plan'],$r['canal'],
+            ($r['monto']!==null && is_numeric($r['monto']))?number_format((float)$r['monto'],2,'.',''):'',
+            '', '', ''];
+        fputcsv($fp,array_map('np_operational_csv_field',$row),',','"','');
+    }
+    fclose($fp);exit;
+}
 ?>
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1412,6 +1559,26 @@ body.page-ranking .table-wrap:has(>#nppfTable){
   max-width:100%;
 }
 
+/* Cartera operativa: no mezclar pendientes con KPI ni semáforo. */
+body.page-ranking .np-op-band{background:#fff;border:1px solid #e1d9ef;border-left:4px solid #8d37d6;border-radius:14px;padding:14px 18px;margin:12px 0;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+body.page-ranking .np-op-links{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+body.page-ranking .np-op-link{display:inline-flex;padding:7px 11px;border-radius:999px;border:1px solid #e1d9ee;color:#582a85;font-size:12px;font-weight:750;text-decoration:none;background:#faf6ff}
+body.page-ranking .np-op-link.active{background:#822bd7;color:white;border-color:#822bd7}
+body.page-ranking .np-op-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 14px}
+body.page-ranking .np-op-kpi{border:1px solid #e3e5ef;background:#fff;border-radius:14px;padding:14px 18px}
+body.page-ranking .np-op-kpi .count{font-size:27px;font-weight:850;color:#17253f;line-height:1.2;margin-top:4px}
+body.page-ranking .np-op-table{min-width:1570px;border-collapse:collapse}
+body.page-ranking .np-op-table th{font-size:11px;text-align:left;white-space:nowrap;background:#f1f2fb;color:#444d68;padding:10px 9px}
+body.page-ranking .np-op-table td{padding:10px 9px;font-size:12px;border-top:1px solid #edf0f7;vertical-align:top}
+body.page-ranking .np-op-table tbody tr:nth-child(even){background:#fafafe}
+body.page-ranking .np-op-table .op-vendor{min-width:195px;max-width:240px;white-space:normal}
+body.page-ranking .np-op-table .op-motivo{min-width:220px;max-width:300px;overflow-wrap:break-word;white-space:normal}
+body.page-ranking .np-op-pill{border-radius:999px;padding:4px 8px;display:inline-block;white-space:nowrap;font-size:10px;font-weight:850}
+body.page-ranking .np-op-certified{background:#e7f8ed;color:#14623d}
+body.page-ranking .np-op-pending{background:#fff0d6;color:#8e5c09}
+body.page-ranking .np-op-count-text{color:#525c70;font-size:12px}
+body.page-ranking .np-op-search{padding:9px 12px;font-size:12px;border:1px solid #d6d9e8;border-radius:9px;min-width:210px}
+@media(max-width:850px){body.page-ranking .np-op-grid{grid-template-columns:1fr}}
 @media(max-width:1400px){body.page-ranking .nppf-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:780px){body.page-ranking .nppf-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:520px){body.page-ranking .nppf-cards{grid-template-columns:1fr}}
@@ -1424,7 +1591,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.10</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.11</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -1477,7 +1644,8 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  </div>
 </section>
 <section class="breadcrumb-card"><div class="breadcrumb-top"><div><div class="breadcrumb-title">Nivel de análisis</div><div class="breadcrumb-path">
- <?php if($view==='lideres'):?><span class="breadcrumb-current">🏆 Ranking Líder</span><a class="breadcrumb-link" href="<?=np_h($coachLink)?>">👥 Ranking Coach</a>
+ <?php if($view==='cartera_operativa'):?><a class="breadcrumb-link" href="<?=np_h($rootLink)?>">🏆 Ranking Líder</a><span class="breadcrumb-sep">›</span><span class="breadcrumb-current">📋 Cartera operativa</span>
+ <?php elseif($view==='lideres'):?><span class="breadcrumb-current">🏆 Ranking Líder</span><a class="breadcrumb-link" href="<?=np_h($coachLink)?>">👥 Ranking Coach</a>
  <?php elseif($view==='ranking_coach'):?><a class="breadcrumb-link" href="<?=np_h($rootLink)?>">🏆 Ranking Líder</a><span class="breadcrumb-current">👥 Ranking Coach</span>
  <?php else:?><a class="breadcrumb-link" href="<?=np_h($rootLink)?>">🏆 Ranking Líder</a><a class="breadcrumb-link" href="<?=np_h($coachLink)?>">👥 Ranking Coach</a>
   <span class="breadcrumb-sep">›</span><span class="breadcrumb-current"><?=np_h($leaderVisible[$liderId]??'LÍDER')?></span>
@@ -1514,7 +1682,71 @@ body.page-ranking .table-wrap:has(>#nppfTable){
   <?php else:?><p>El diagnóstico no generó datos.</p><?php endif;?>
  </section>
  <?php endif;?>
- <section class="cards nppf-cards" id="nppfCards">
+  <?php if($view==='cartera_operativa' && $npCanOperate):?>
+  <section class="np-op-band">
+    <div><strong style="font-size:17px">Cartera NPPF · Seguimiento operativo</strong>
+      <div class="np-op-count-text">Último archivo publicado: <?=np_h($corte)?> · Estado evaluado: <?=np_h($eval)?> · El Ranking estadístico no cambia.</div>
+    </div>
+    <div class="np-op-links">
+      <a class="np-op-link" href="<?=np_h(np_q(['view'=>'lideres','op_csv'=>null,'op_distrito'=>null,'op_clase'=>null,'op_estado'=>null,'lider_id'=>null,'coach_pos'=>null,'folio'=>null,'diag_hc'=>null]))?>">← Volver al Ranking</a>
+      <a class="np-op-link active" href="<?=np_h(np_q(['op_csv'=>1,'diag_hc'=>null]))?>">Exportar CSV para gestión</a>
+    </div>
+  </section>
+  <p class="nppf-caption" style="margin:10px 0 3px">Cuentas pendientes del mismo archivo NPPF; una cuenta <strong>POR CONCILIAR</strong> es visible para gestión, pero no se atribuye a Felipa ni entra a los indicadores hasta certificar su jerarquía.</p>
+  <div class="np-op-links" style="margin:11px 0">
+    <?php foreach(array_merge(['TODOS'],['CANCUN','COATZA-MINA','MERIDA','TUXTLA','VILLAHERMOSA']) as $d):?>
+      <a class="np-op-link <?=$opDistrict===$d?'active':''?>" href="<?=np_h(np_q(['op_distrito'=>$d,'op_csv'=>null]))?>"><?=np_h($d==='TODOS'?'Región SUR':$d)?></a>
+    <?php endforeach;?>
+  </div>
+  <div class="np-op-links" style="margin:8px 0">
+    <span class="nppf-subtle">Clasificación:</span>
+    <?php foreach(['preventivo'=>'M1 Preventivo','m1'=>'NPPF M1','todas'=>'Todas M4–M1'] as $key=>$label):?>
+      <a class="np-op-link <?=$opClass===$key?'active':''?>" href="<?=np_h(np_q(['op_clase'=>$key,'op_csv'=>null]))?>"><?=np_h($label)?></a>
+    <?php endforeach;?>
+  </div>
+  <div class="np-op-grid">
+    <div class="np-op-kpi"><span class="nppf-subtle">DETECTADAS EN NPPF</span><div class="count"><?=np_num($opSummary['detectadas']??0)?></div><div class="np-op-count-text">Todas las cuentas del alcance, sin duplicar por cuenta/cohorte</div></div>
+    <div class="np-op-kpi"><span class="nppf-subtle">CERTIFICADAS · EN RANKING</span><div class="count" style="color:#17693f"><?=np_num($opSummary['certificadas']??0)?></div><div class="np-op-count-text">Motor HC + continuidad validada</div></div>
+    <div class="np-op-kpi"><span class="nppf-subtle">POR CONCILIAR · FUERA DEL KPI</span><div class="count" style="color:#a26711"><?=np_num($opSummary['pendientes']??0)?></div><div class="np-op-count-text">Visibles para investigación operativa</div></div>
+  </div>
+  <section class="np-op-band" style="align-items:center">
+    <div class="np-op-links">
+      <?php foreach(['todos'=>'Todas','pendientes'=>'Solo por conciliar','certificadas'=>'Solo certificadas'] as $key=>$label):?>
+        <a class="np-op-link <?=$opState===$key?'active':''?>" href="<?=np_h(np_q(['op_estado'=>$key,'op_csv'=>null]))?>"><?=np_h($label)?></a>
+      <?php endforeach;?>
+    </div>
+    <input type="search" id="opSearch" class="np-op-search" placeholder="Buscar cuenta, vendedor, coach..." aria-label="Buscar cuentas operativas">
+    <span class="np-op-count-text" id="opVisibleCounter"><?=np_num(count($opSelected))?> cuentas</span>
+  </section>
+  <section class="table-card">
+   <div class="table-head"><strong>Detalle operativo · <?=np_h($opDistrict==='TODOS'?'Región SUR':$opDistrict)?></strong><span>Referencia histórica informativa · sin asignar cuentas pendientes por coincidencia de nombres</span></div>
+   <div class="table-wrap">
+    <table class="np-op-table" id="opTable"><thead><tr>
+      <th>Estado</th><th>Cuenta</th><th>Distrito</th><th>Cosecha</th><th>Instalación</th><th>Corte mensual</th><th>Clasificación</th>
+      <th>Vendedor NPPF</th><th>Folio vendedor (instalación)</th><th>Coach histórico (instalación)</th><th>Líder histórico (instalación)</th>
+      <th>Responsable operativo certificado</th><th>Motivo / Fuente</th><th>Factura MXN</th>
+    </tr></thead><tbody>
+      <?php foreach($opSelected as $o):?>
+      <tr class="op-row">
+       <td><span class="np-op-pill <?=$o['certificada']?'np-op-certified':'np-op-pending'?>"><?=np_h($o['estado'])?></span></td>
+       <td style="font-weight:750"><?=np_h($o['cuenta'])?></td>
+       <td><?=np_h($o['distrito'])?></td><td><?=np_h($o['cohorte'])?></td><td><?=np_h($o['fecha'])?></td><td><?=np_h($o['corte'])?></td><td><?=np_h($o['clase'])?></td>
+       <td class="op-vendor"><?=np_h($o['vendedor_nppf']?:'SIN VENDEDOR')?></td>
+       <td><?=np_h($o['vendedor_talento']?:'—')?></td>
+       <td class="op-vendor"><?=np_h($o['coach_historico']?:'—')?></td>
+       <td class="op-vendor"><?=np_h($o['lider_historico']?:'—')?></td>
+       <td class="op-vendor"><?=np_h($o['lider_operativo'])?></td>
+       <td class="op-motivo" title="<?=np_h($o['fuente'])?>"><?=np_h($o['certificada']?$o['fuente']:$o['motivo'])?></td>
+       <td style="white-space:nowrap;text-align:right"><?=is_numeric($o['monto']) && (float)$o['monto']>0?'$'.number_format((float)$o['monto'],2,'.',','):'—'?></td>
+      </tr>
+      <?php endforeach;?>
+      <?php if(!$opSelected):?><tr><td colspan="14" class="center">No hay cuentas para los filtros seleccionados.</td></tr><?php endif;?>
+    </tbody></table>
+   </div>
+  </section>
+  <p class="nppf-caption" style="margin:10px 0 20px">La exportación CSV conserva los filtros de distrito, clasificación y certificación; incluye columnas en blanco para gestión y compromisos. El seguimiento escrito en el CSV no se guarda en TotalXpedient.</p>
+  <?php else:?>
+  <section class="cards nppf-cards" id="nppfCards">
  <div class="card"><div class="label">COSECHA · INSTALACIONES M1</div><div class="value" id="kpiInsM1"><?=np_num($tot['ins_m1'])?></div><div class="hint"><?=np_h($cohortLabels['m1'])?><div class="nppf-card-hint">M4: <span id="kpiInsM4"><?=np_num($tot['ins_m4'])?></span> · M3: <span id="kpiInsM3"><?=np_num($tot['ins_m3'])?></span> · M2: <span id="kpiInsM2"><?=np_num($tot['ins_m2'])?></span></div></div></div>
  <div class="card"><div class="label">NPPF M4</div><div class="value" id="kpiM4"><?=np_num($tot['nppf_m4'])?></div><div class="hint"><span id="kpiM4Pct"><?=np_pct(np_rate($tot['nppf_m4'],$tot['ins_m4']))?></span> de INS M4<div class="nppf-card-hint"><?=np_h($cohortLabels['m4'])?></div></div></div>
  <div class="card"><div class="label">NPPF M3</div><div class="value" id="kpiM3"><?=np_num($tot['nppf_m3'])?></div><div class="hint"><span id="kpiM3Pct"><?=np_pct(np_rate($tot['nppf_m3'],$tot['ins_m3']))?></span> de INS M3<div class="nppf-card-hint"><?=np_h($cohortLabels['m3'])?></div></div></div>
@@ -1523,9 +1755,22 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="card"><div class="label">NPPF M1 PREVENTIVO</div><div class="value" id="kpiPre"><?=np_num($tot['prevent_m1'])?></div><div class="hint"><span id="kpiPrePct"><?=np_pct(np_rate($tot['prevent_m1'],$tot['ins_m1']))?></span> de INS M1<div class="nppf-card-hint">Incluye <span id="kpiReverso"><?=np_num($tot['reverso'])?></span> reversos en todas las cosechas</div></div></div>
  <div class="card nppf-finance-card"><div class="label">ARPU NPPF EN RIESGO · EST.</div><div class="value" id="kpiArpu"><?=np_arpu_mxn($tot['factura_nppf_centavos'],$tot['factura_nppf_validas'])?></div><div class="hint">MXN · ticket promedio MONTO_FACTURA<div class="nppf-card-hint"><span id="kpiArpuCount"><?=np_num($tot['factura_nppf_validas'])?></span> cuentas con factura válida</div></div></div>
  <div class="card nppf-finance-card"><div class="label">FACTURACIÓN NPPF EN RIESGO</div><div class="value" id="kpiRentaRiesgo"><?=np_mxn($tot['factura_nppf_centavos'])?></div><div class="hint">MXN · suma de facturas de M4–M1<div class="nppf-card-hint">Preventivo adicional: <span id="kpiPreventAmount"><?=np_mxn($tot['factura_prevent_centavos'])?></span></div></div></div>
-</section>
+ </section>
+ <?php if($npCanOperate && in_array($view,['lideres','ranking_coach'],true)):?>
+ <section class="np-op-band">
+   <div><strong>Seguimiento operativo · M1 Preventivo</strong>
+     <div class="np-op-count-text">Región SUR: <strong><?=np_num($opGlobalSummary['detectadas']??0)?> detectadas</strong> · <?=np_num($opGlobalSummary['certificadas']??0)?> certificadas · <strong style="color:#a26711"><?=np_num($opGlobalSummary['pendientes']??0)?> por conciliar</strong>. No modifica el Ranking.</div>
+     <div class="np-op-links" style="margin-top:8px">
+      <?php foreach($opByDistrict as $dist=>$summary): if(($summary['detectadas']??0)===0)continue;?>
+       <a class="np-op-link" href="<?=np_h(np_q(['view'=>'cartera_operativa','op_distrito'=>$dist,'op_clase'=>'preventivo','op_estado'=>'todos','diag_hc'=>null,'lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>"><?=np_h($dist)?>: <?=np_num($summary['pendientes'])?> pendientes</a>
+      <?php endforeach;?>
+     </div>
+   </div>
+   <a class="np-op-link active" href="<?=np_h(np_q(['view'=>'cartera_operativa','op_distrito'=>'TODOS','op_clase'=>'preventivo','op_estado'=>'todos','diag_hc'=>null,'lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Ver cartera y conciliar</a>
+ </section>
+ <?php endif;?>
 
-<?php if($view!=='cuentas'):?>
+ <?php if($view!=='cuentas'):?>
 <section class="filters nppf-filters">
  <?php if(in_array($view,['lideres','ranking_coach'],true)):?>
  <span class="filter-label">Distrito:</span><button class="filter-btn active" data-district="ALL">Todos</button>
@@ -1609,9 +1854,10 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <?php if(!$detailRows):?><tr><td colspan="12" class="center">Sin cuentas pendientes certificadas en M4, M3, M2, M1 ni Preventivo.</td></tr><?php endif;?>
 </tbody></table></div></section>
 <section class="table-card nppf-chart-panel"><div class="table-head"><strong>Cartera NPPF del vendedor · por cosecha</strong><span>Barras violeta = NPPF · Ámbar = Preventivo M1 · Línea = % NPPF / INS</span></div><div class="nppf-chart-wrap"><canvas id="vendorTrendChart"></canvas></div><p class="nppf-caption" style="text-align:center;margin:0 12px 3px">Fotografía del último archivo publicado. La línea es la tasa NPPF de cada cosecha; no representa CHURN real ni evolución histórica por fecha.</p></section>
-<?php endif;?>
-<?php endif;?>
-</main>
+ <?php endif;?>
+ <?php endif;?> <!-- fin cartera operativa / ranking -->
+ <?php endif;?> <!-- fin ausencia de errores -->
+ </main>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script>
 'use strict';
@@ -1641,7 +1887,17 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  function syncDays(){if(!input)return;let sel=[...days].filter(b=>b.classList.contains('selected-start')).map(b=>Number(b.dataset.day));if(!sel.length){days[0]?.classList.add('selected-start','selected-end');sel=[1]}input.value=sel.join(',')}
  days.forEach(b=>b.addEventListener('click',()=>{b.classList.toggle('selected-start');b.classList.toggle('selected-end');syncDays()}));
  document.getElementById('fullWeek')?.addEventListener('click',()=>{days.forEach(b=>b.classList.add('selected-start','selected-end'));syncDays()});
- const table=document.getElementById('nppfTable');
+  const opSearch=document.getElementById('opSearch'),opTable=document.getElementById('opTable');
+  if(opSearch && opTable){
+    const opRows=[...opTable.querySelectorAll('tbody tr.op-row')];
+    const tally=document.getElementById('opVisibleCounter');
+    opSearch.addEventListener('input',()=>{
+      const query=opSearch.value.toLocaleLowerCase('es-MX').trim();let shown=0;
+      for(const r of opRows){const yes=!query || r.textContent.toLocaleLowerCase('es-MX').includes(query);r.hidden=!yes;r.style.display=yes?'':'none';if(yes)shown++;}
+      if(tally)tally.textContent=shown.toLocaleString('es-MX')+' de '+opRows.length.toLocaleString('es-MX')+' cuentas';
+    });
+  }
+  const table=document.getElementById('nppfTable');
  if(table){
    const tbody=table.tBodies[0],total=document.getElementById('totalRow');
    const rows=()=>[...tbody.querySelectorAll('.data-row')];
