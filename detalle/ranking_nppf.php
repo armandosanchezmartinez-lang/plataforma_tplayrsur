@@ -1,12 +1,12 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.5 (2026-11-24)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.6 (2026-11-24)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.2.5 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.6 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
  *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
@@ -40,6 +40,9 @@
  * - Detalle: M1 Preventivo primero; después M1, M2, M3 y M4.
  * - Nombre líder actual: plaza vigente, superior reportado o promoción de coach
  *   a nueva plaza con evidencia unívoca HC. Nunca reescribe cuentas históricas.
+ * - Responsable operativo actual: nombre independiente de líder histórico.
+ *   Se obtiene del HC vigente, con prueba de promoción basada en la plaza
+ *   histórica del coach + puesto de líder del corte; no altera atribuciones.
  * - Cambio de nómina/posición Coach: consolidación VISUAL de asientos de la
  *   misma persona con HC histórico + HIC; sin duplicar cuentas ni líderes.
  *   La atribución histórica por plaza/posición NO se modifica.
@@ -282,6 +285,106 @@ function np_resolve_current_leader_names(array $historic, array $reference, arra
         if(count($uses[$newId]??[])===1)$display[$id]=(string)$candidates[$newId];
     }
     return $display;
+}
+
+/**
+ * Responsable operativo ACTUAL, distinto de la atribución histórica.
+ * Fuente: última fotografía HC disponible al día de consulta, NO cohorte elegida.
+ * Prioridad de evidencia:
+ *  (1) ascenso identificable de coach histórico a líder actual (otra plaza),
+ *      mismo distrito, nombre completo y puesto que reporta a Director Distrital;
+ *  (2) ocupante de la misma plaza histórica en HC vigente;
+ *  (3) reporte de coach al líder actual, solo cuando identifica persona única.
+ * Un empate o la ausencia de respaldo produce "Por confirmar".
+ * No retorna identificadores para agrupar ni reatribuye instalaciones.
+ */
+function np_current_operational_leaders(array $historic, array $hcRows, array $historicCoaches): array {
+    $result=[];
+    $leaders=[];$coachMembers=[];$referredBySeat=[];
+    $bySeat=[];
+    foreach($historicCoaches as $c){
+        $lid=(string)($c['lid']??'');
+        $d=np_district((string)($c['distrito']??''));
+        $name=(string)($c['nombre']??'');
+        if($lid!=='' && $d!=='SIN DISTRITO' && np_person_valid($name)) {
+            $coachMembers[$lid][np_person_name_key($name)]=true;
+        }
+    }
+    foreach($hcRows as $row){
+        $d=RankingAtribucionServiceV06::normalizarDistrito((string)($row['distrito']??''));
+        $seat=trim((string)($row['id_posicion']??''));
+        if($d===null || $seat==='')continue;
+        $id=$d.'|'.$seat;
+        $name=RankingAtribucionServiceV06::norm((string)($row['nombre_colaborador']??''));
+        $role=RankingAtribucionServiceV06::norm((string)($row['puesto_lr']??''));
+        if(np_person_valid($name)){
+            $bySeat[$id][$name]=true;
+            // Evidencia de una plaza de líder: este ocupante reporta a Dirección Distrital.
+            if(str_contains($role,'DIRECTOR DISTRITAL') || str_contains($role,'DIRECTORA DISTRITAL')){
+                $leaders[$d][$id]=$name;
+            }
+        }
+        $super=trim((string)($row['posicion_lr']??''));
+        $supRole=RankingAtribucionServiceV06::norm((string)($row['puesto_lr']??''));
+        $supName=RankingAtribucionServiceV06::norm((string)($row['nombre_linea_reporte']??''));
+        if($super!=='' && str_contains($supRole,'LIDER') && np_person_valid($supName)){
+            $referredBySeat[$d.'|'.$super][$supName]=true;
+        }
+    }
+    // No aceptar la misma promoción como sustitución de dos líderes históricos.
+    $promotions=[];$requestedBy=[];
+    foreach($historic as $lid=>$l){
+        $lid=(string)$lid;$d=np_district((string)($l['distrito']??''));
+        if($d==='SIN DISTRITO')continue;
+        foreach($leaders[$d]??[] as $seat=>$name){
+            // La persona se certificó como coach de ESTA plaza histórica;
+            // la nueva plaza actual no debe ser otra plaza histórica en el ranking.
+            if($seat===$lid || isset($historic[$seat]))continue;
+            if(!isset($coachMembers[$lid][np_person_name_key($name)]))continue;
+            $promotions[$lid][$seat]=$name;
+        }
+        if(count($promotions[$lid]??[])===1){
+            $seat=(string)array_key_first($promotions[$lid]);
+            $requestedBy[$seat][$lid]=true;
+        }
+    }
+    foreach($historic as $lid=>$l){
+        $lid=(string)$lid;$d=np_district((string)($l['distrito']??''));
+        $candidate=null;
+        $promotionAmbiguous=count($promotions[$lid]??[])>1;
+        if(count($promotions[$lid]??[])===1){
+            $seat=(string)array_key_first($promotions[$lid]);
+            if(count($requestedBy[$seat]??[])===1){
+                $candidate=(string)$promotions[$lid][$seat];
+            } else {
+                $promotionAmbiguous=true;
+            }
+        }
+        if($candidate===null && !$promotionAmbiguous){
+            // Misma plaza: requiere un único nombre y que corresponda
+            // a una función de líder vigente, no a un vendedor/coach homónimo.
+            $seated=array_keys($bySeat[$lid]??[]);
+            if(count($seated)===1 && isset($leaders[$d][$lid]) && $leaders[$d][$lid]===$seated[0]){
+                $candidate=$seated[0];
+            }
+        }
+        if($candidate===null && !$promotionAmbiguous){
+            $reported=array_keys($referredBySeat[$lid]??[]);
+            if(count($reported)===1){
+                $name=$reported[0];
+                foreach($leaders[$d]??[] as $official){
+                    if(np_person_name_key($official)===np_person_name_key($name)){
+                        if($candidate!==null && np_person_name_key($candidate)!==np_person_name_key($name)){
+                            $candidate=null;break;
+                        }
+                        $candidate=$name;
+                    }
+                }
+            }
+        }
+        $result[$lid]=$candidate ?? 'Por confirmar';
+    }
+    return $result;
 }
 
 /**
@@ -544,7 +647,7 @@ if(!$activationAll)$errors[]='No hay días de cosecha seleccionados.';
 $activationFrom=$activationAll?min($activationAll):$now;
 $activationTo=$activationAll?max($activationAll):$now;
 
-$catalog=[];$leaderDisplay=[];$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
+$catalog=[];$leaderDisplay=[];$operationalLeader=[];$operationalHcPhoto='';$coaches=[];$vendors=[];$matched=[];$scores=[];$raw=[];
 $audit=['m4'=>[], 'm3'=>[], 'm2'=>[], 'm1'=>[]];
 $photo=null;$accountDetail=[];
 if(!$errors){
@@ -649,6 +752,22 @@ if(!$errors){
     foreach($vendors as $vk=>$v)$scores[$vk]??=np_metrics();
 
     $leaderDisplay=np_resolve_current_leader_names($catalog,$catalogReference,$referenceRows,$coaches);
+    // Foto actual independiente del período histórico (julio/octubre/otro).
+    try {
+        $currentPhoto=$motor->cargarHc($now,$now);
+        $currentRows=[];
+        foreach($currentPhoto['datos']??[] as $foto=>$data){
+            if($data){$currentRows=$data;$operationalHcPhoto=(string)$foto;}
+        }
+        if($currentRows){
+            $operationalLeader=np_current_operational_leaders($catalog,$currentRows,$coaches);
+        }
+    }catch(Throwable $ignored){
+        // Falta HC vigente: no mostrar un responsable de la cohorte como actual.
+    }
+    foreach($catalog as $lid=>$_){
+        $operationalLeader[(string)$lid]??='Por confirmar';
+    }
     $coachAliases=array_fill_keys(array_keys($coaches),null);
     try {
         // HC histórico + HIC para identificar CAMBIOS de plaza/nómina.
@@ -673,11 +792,12 @@ if(!$errors){
 }
 
 $rows=[];$detailRows=[];$viewLabel='Ranking NPPF';
+$showOperationalColumn=($view==='lideres');
 if(!$errors){
     $scopeRows=[];
     if($view==='lideres'){
         $viewLabel='Ranking NPPF · Líder';
-        foreach($catalog as $lid=>$l)$scopeRows[]=['key'=>$lid,'distrito'=>(string)$l['distrito'],'entidad'=>(string)($leaderDisplay[(string)$lid]??$l['nombre']),'lid'=>$lid,'co'=>'','v'=>''];
+        foreach($catalog as $lid=>$l)$scopeRows[]=['key'=>$lid,'distrito'=>(string)$l['distrito'],'entidad'=>(string)($leaderDisplay[(string)$lid]??$l['nombre']),'responsable_actual'=>(string)($operationalLeader[(string)$lid]??'Por confirmar'),'lid'=>$lid,'co'=>'','v'=>''];
     }elseif($view==='ranking_coach'||$view==='coaches'){
         $viewLabel=$view==='ranking_coach'?'Ranking NPPF · Coach':'Coaches del Líder';
         if($view==='coaches'&&!isset($catalog[$liderId]))$errors[]='Líder no identificado en el catálogo HC.';
@@ -802,6 +922,25 @@ body.page-ranking .nppf-cards .card{min-width:0}
 body.page-ranking .nppf-cards .label{font-size:11px}
 body.page-ranking .nppf-cohort-sub{display:block;font-size:10px;font-weight:500;color:#667085;white-space:normal;margin-top:4px}
 body.page-ranking .nppf-table .nppf-group.nppf-stair{background:#f3eaff;color:#572688}
+body.page-ranking .nppf-current-name{display:block;font-weight:800;color:#157f63;line-height:1.3}
+body.page-ranking .nppf-current-name.nppf-oper-unconfirmed{color:#8c96a7;font-weight:600}
+body.page-ranking .nppf-ownership-banner{display:flex;align-items:center;gap:20px;flex-wrap:wrap;background:#fff;border:1px solid #e3e6f1;border-radius:13px;padding:12px 17px;margin:10px 0 14px}
+body.page-ranking .nppf-ownership-banner>div{display:flex;flex-direction:column;gap:4px;min-width:220px}
+body.page-ranking .nppf-ownership-label{color:#737e93;font-size:11px;font-weight:700}
+body.page-ranking .nppf-ownership-banner strong{font-size:13px;color:#232a42}
+body.page-ranking .nppf-ownership-banner strong.nppf-oper-confirmed{color:#157f63}
+body.page-ranking .nppf-ownership-banner strong.nppf-oper-unconfirmed{color:#8c96a7}
+body.page-ranking .nppf-ownership-photo{margin-left:auto;color:#7e8498;font-size:11px}
+body.page-ranking #nppfTable.nppf-has-operational tbody td.nppf-current-person{text-align:left!important;white-space:normal}
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(5){text-align:center!important}
+body.page-ranking #nppfTable.nppf-has-operational thead tr:first-child > th:nth-child(4){text-align:left!important}
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(5),
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(10),
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(20){border-left:0}
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(6){border-left:2px solid #dfe3f0}
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(11){border-left:2px solid #dfe3f0}
+body.page-ranking #nppfTable.nppf-has-operational tbody td:nth-child(21){border-left:2px solid #dfe3f0}
+
 
 /* v1.2.2: 21 columnas = 4 identificación + 5 cosecha + 10 NPPF + 2 preventivo. */
 body.page-ranking #nppfTable{
@@ -813,6 +952,8 @@ body.page-ranking #nppfTable{
 body.page-ranking #nppfTable col.np-rank{width:40px}
 body.page-ranking #nppfTable col.np-district{width:108px}
 body.page-ranking #nppfTable col.np-name{width:225px}
+body.page-ranking #nppfTable.nppf-has-operational{min-width:2240px}
+body.page-ranking #nppfTable col.np-current-leader{width:225px}
 body.page-ranking #nppfTable col.np-age{width:106px}
 body.page-ranking #nppfTable col.np-ins{width:91px}
 body.page-ranking #nppfTable col.np-ins-total{width:115px}
@@ -920,7 +1061,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.5</strong></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.6</strong></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -984,6 +1125,13 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <?php if(in_array($view,['vendedores','cuentas'],true)):?><a class="level-action primary" href="<?=np_h($backLeaders)?>">← Ver coaches</a><?php endif;?>
  <?php if($view==='cuentas'):?><a class="level-action primary" href="<?=np_h($backVendors)?>">← Ver vendedores</a><?php endif;?>
  </div></div></section>
+<?php if(!in_array($view,['lideres','ranking_coach'],true) && isset($catalog[$liderId])):?>
+<section class="nppf-ownership-banner" aria-label="Responsabilidad histórica y operativa">
+ <div><span class="nppf-ownership-label">Responsable histórico · cosechas</span><strong><?=np_h($leaderDisplay[$liderId]??($catalog[$liderId]['nombre']??'—'))?></strong></div>
+ <div><span class="nppf-ownership-label">Responsable operativo actual · HC</span><strong class="<?=($operationalLeader[$liderId]??'Por confirmar')==='Por confirmar'?'nppf-oper-unconfirmed':'nppf-oper-confirmed'?>"><?=np_h($operationalLeader[$liderId]??'Por confirmar')?></strong></div>
+ <?php if($operationalHcPhoto!==''):?><span class="nppf-ownership-photo">HC <?=np_h($operationalHcPhoto)?></span><?php endif;?>
+</section>
+<?php endif;?>
 <?php foreach($errors as $error):?><div class="nppf-panel nppf-alert" role="alert">⚠ <?=np_h($error)?></div><?php endforeach;?>
 <?php if(!$errors):?>
 <section class="cards nppf-cards" id="nppfCards">
@@ -1006,15 +1154,15 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <span class="counter" id="visibleCounter">Mostrando <?=count($rows)?> registros</span>
 </section>
 <section class="table-card"><div class="table-head"><strong><?=np_h($viewLabel)?></strong><span><?= $view==='lideres'?'Click en líder para ver coaches':($view==='ranking_coach'||$view==='coaches'?'Click en coach para ver vendedores':'Click en vendedor para consultar cuentas NPPF')?></span></div>
-<div class="table-wrap"><table class="nppf-table" id="nppfTable">
+<div class="table-wrap"><table class="nppf-table <?=$showOperationalColumn?'nppf-has-operational':''?>" id="nppfTable">
 <colgroup>
- <col class="np-rank"><col class="np-district"><col class="np-name"><col class="np-age">
+ <col class="np-rank"><col class="np-district"><col class="np-name"><?php if($showOperationalColumn):?><col class="np-current-leader"><?php endif;?><col class="np-age">
  <col class="np-ins"><col class="np-ins"><col class="np-ins"><col class="np-ins"><col class="np-ins-total">
  <col class="np-quantity"><col class="np-quantity"><col class="np-quantity"><col class="np-quantity"><col class="np-quantity-total">
  <col class="np-percent"><col class="np-percent"><col class="np-percent"><col class="np-percent"><col class="np-percent-total">
  <col class="np-prevent-quantity"><col class="np-prevent-percent">
 </colgroup><thead>
-<tr><th rowspan="2" class="center">#</th><th rowspan="2">Distrito</th><th rowspan="2"><?=($view==='lideres')?'Líder':($view==='vendedores'?'Vendedor':'Coach')?></th><th rowspan="2" class="center nppf-sort" data-key="antiguedad_meses">Antigüedad<br>prom. equipo ↕</th>
+<tr><th rowspan="2" class="center">#</th><th rowspan="2">Distrito</th><th rowspan="2"><?=($view==='lideres')?'Líder histórico':($view==='vendedores'?'Vendedor':'Coach')?></th><?php if($showOperationalColumn):?><th rowspan="2" title="HC vigente, sin alterar la responsabilidad histórica">Responsable operativo actual</th><?php endif;?><th rowspan="2" class="center nppf-sort" data-key="antiguedad_meses">Antigüedad<br>prom. equipo ↕</th>
  <th colspan="5" class="nppf-group ins">COSECHA · INSTALACIONES</th>
  <th colspan="10" class="nppf-group nppf-stair">NPPF</th>
  <th colspan="2" class="nppf-group prevent">NPPF M1 PREVENTIVO</th></tr>
@@ -1049,7 +1197,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
    'factura_nppf_centavos'=>$r['factura_nppf_centavos'],'factura_nppf_validas'=>$r['factura_nppf_validas'],
    'factura_prevent_centavos'=>$r['factura_prevent_centavos']];
 ?><tr class="nppf-row data-row" tabindex="0" data-district="<?=np_h($r['distrito'])?>" data-href="<?=np_h($href)?>" <?php foreach($dataset as $k=>$v)echo ' data-'.str_replace('_','-', $k).'="'.np_h($v).'"';?> >
-<td class="center rank"><?=$i+1?></td><td><?=np_h($r['distrito'])?></td><td class="nppf-entity"><?=np_h($r['entidad'])?></td><td class="center"><?=np_h($r['antiguedad'])?></td>
+<td class="center rank"><?=$i+1?></td><td><?=np_h($r['distrito'])?></td><td class="nppf-entity"><?=np_h($r['entidad'])?></td><?php if($showOperationalColumn):?><td class="nppf-current-person"><span class="nppf-current-name <?=($r['responsable_actual']??'Por confirmar')==='Por confirmar'?'nppf-oper-unconfirmed':''?>" title="Responsable vigente según fotografía HC <?=np_h($operationalHcPhoto?:'no disponible')?>"><?=np_h($r['responsable_actual']??'Por confirmar')?></span></td><?php endif;?><td class="center"><?=np_h($r['antiguedad'])?></td>
 <td class="num"><?=np_num($r['ins_m4'])?></td><td class="num"><?=np_num($r['ins_m3'])?></td><td class="num"><?=np_num($r['ins_m2'])?></td><td class="num"><?=np_num($r['ins_m1'])?></td>
 <td class="num nppf-consolidated"><?=np_num($r['ins_m4_m1'])?></td>
 <td class="num"><?=np_num($r['nppf_m4'])?></td><td class="num"><?=np_num($r['nppf_m3'])?></td><td class="num"><?=np_num($r['nppf_m2'])?></td><td class="num"><?=np_num($r['nppf_m1'])?></td>
@@ -1061,7 +1209,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <td class="center nppf-consolidated"><span class="nppf-total-emphasis <?=np_pct_class($r['pct_m4_m1'])?>" title="NPPF M4–M1 ÷ INS M4–M1 × 100"><?=np_pct($r['pct_m4_m1'])?></span></td>
 <td class="num"><?=np_num($r['prevent_m1'])?></td><td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_prevent_m1'])?>"><?=np_pct($r['pct_prevent_m1'])?></span></td></tr>
 <?php endforeach;?>
-<tr class="total-row" id="totalRow"><td colspan="3"><strong>TOTAL CERTIFICADO</strong></td><td class="center">—</td>
+<tr class="total-row" id="totalRow"><td colspan="<?=$showOperationalColumn?4:3?>"><strong>TOTAL CERTIFICADO</strong></td><td class="center">—</td>
 <td class="num" id="tInsM4"><?=np_num($tot['ins_m4'])?></td><td class="num" id="tInsM3"><?=np_num($tot['ins_m3'])?></td><td class="num" id="tInsM2"><?=np_num($tot['ins_m2'])?></td><td class="num" id="tInsM1"><?=np_num($tot['ins_m1'])?></td>
 <td class="num nppf-consolidated" id="tInsM4M1"><?=np_num($tot['ins_m4']+$tot['ins_m3']+$tot['ins_m2']+$tot['ins_m1'])?></td>
 <td class="num" id="tM4"><?=np_num($tot['nppf_m4'])?></td><td class="num" id="tM3"><?=np_num($tot['nppf_m3'])?></td><td class="num" id="tM2"><?=np_num($tot['nppf_m2'])?></td><td class="num" id="tM1"><?=np_num($tot['nppf_m1'])?></td>
