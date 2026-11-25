@@ -1,12 +1,12 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.3 (2026-11-24)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.4 (2026-11-24)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.2.3 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.4 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
  *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
@@ -34,12 +34,13 @@
  * - Gráfica: barras por cosecha y tasa NPPF de esa misma cosecha, NO CHURN real.
  * - Consolidado M4–M1: total de instalaciones y total de cuentas pendientes
  *   NO incluye M1 Preventivo en numerador.
- *   % M4–M1 = suma ARITMÉTICA de % M4, % M3, % M2, % M1,
- *   no tasa ponderada. Sin base en una cosecha, se omite su porcentaje.
- * - Ranking: menor a mayor SUMA % M4–M1; sin denominadores al final.
+ *   % M4–M1 = 100 × (# NPPF M4–M1 / INS M4–M1).
+ *   Tasa consolidada ponderada por instalaciones, NO suma de porcentajes.
+ * - Ranking: menor a mayor % NPPF M4–M1; sin instalaciones al final.
  * - Detalle: M1 Preventivo primero; después M1, M2, M3 y M4.
- * - Nombres visibles de líderes: HC del período de referencia, con fecha máxima HOY;
- *   la atribución histórica por plaza/posición NO se modifica.
+ * - Nombres visibles de líderes: HC de referencia, con verificación adicional
+ *   de la posición ocupada en la última fotografía HC hasta HOY.
+ *   La atribución histórica por plaza/posición NO se modifica.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -69,16 +70,15 @@ function np_days_from_cut(string $cut, string $eval): int {
 }
 function np_pct(?float $v): string { return $v===null ? '—' : number_format($v, 1, '.', ',').'%'; }
 function np_rate(int $num, int $den): ?float { return $den > 0 ? 100.0*$num/$den : null; }
-/** Suma literal de los cuatro porcentajes de cosecha. NO es tasa global ponderada. */
-function np_sum_cohort_rates(array $m): ?float {
-    $sum = 0.0; $valid = false;
+/** Tasa NPPF consolidada de cuatro cosechas. Preventivo M1 excluido. */
+function np_consolidated_rate(array $m): ?float {
+    $ins = 0;
+    $nppf = 0;
     foreach ([4,3,2,1] as $month) {
-        $den = (int)($m['ins_m'.$month] ?? 0);
-        if ($den <= 0) continue;
-        $sum += 100.0 * (int)($m['nppf_m'.$month] ?? 0) / $den;
-        $valid = true;
+        $ins += (int)($m['ins_m'.$month] ?? 0);
+        $nppf += (int)($m['nppf_m'.$month] ?? 0);
     }
-    return $valid ? $sum : null;
+    return np_rate($nppf, $ins);
 }
 function np_date(string $s): DateTimeImmutable { return new DateTimeImmutable($s); }
 function np_q(array $override=[]): string {
@@ -170,6 +170,52 @@ function np_pct_class(?float $pct): string {
     if ($pct < 4.0) return 'nppf-good';
     if ($pct <= 5.0) return 'nppf-caution';
     return 'nppf-risk';
+}
+
+/**
+ * Recupera nombres visibles desde la fotografía HC actual por PLAZA de líder.
+ * El catálogo del motor puede no exponer una plaza cuando hay referencias de
+ * subordinados faltantes; la fila del ocupante del asiento sigue en HC.
+ * No modifica la estructura ni la atribución histórica de instalaciones.
+ * Solo acepta un ocupante no vacante por posición y distrito; ante conflicto
+ * conserva el nombre ya certificado por catalogoLideres() o su respaldo.
+ */
+function np_resolve_current_leader_names(array $historic, array $reference, array $hcRows): array {
+    $display = [];
+    // 1. Reutilizar la etiqueta validada del catálogo HC actual.
+    foreach ($reference as $id => $leader) {
+        $id = (string)$id;
+        if (!isset($historic[$id])) continue;
+        if ((string)($leader['plaza'] ?? '') !== (string)($historic[$id]['plaza'] ?? '')) continue;
+        if (np_district((string)($leader['distrito'] ?? '')) !== np_district((string)($historic[$id]['distrito'] ?? ''))) continue;
+        $name = RankingAtribucionServiceV06::norm((string)($leader['nombre'] ?? ''));
+        if ($name !== '') $display[$id] = $name;
+    }
+
+    // 2. Revisar las FILAS HC de la última fotografía, aun si no hubo
+    //    referencias suficientes de subordinados para formar catálogo de líderes.
+    $bySeat = [];
+    foreach ($hcRows as $seat) {
+        $district = RankingAtribucionServiceV06::normalizarDistrito((string)($seat['distrito'] ?? ''));
+        $position = trim((string)($seat['id_posicion'] ?? ''));
+        if ($district === null || $position === '') continue;
+        $id = $district.'|'.$position;
+        if (!isset($historic[$id])) continue;
+        $nombre = RankingAtribucionServiceV06::norm((string)($seat['nombre_colaborador'] ?? ''));
+        $bySeat[$id][$nombre] = true;
+    }
+    foreach ($bySeat as $id => $names) {
+        $valid = [];
+        foreach (array_keys($names) as $name) {
+            if ($name === '' || $name === '-' || str_contains($name, 'VACANT')) continue;
+            $valid[] = $name;
+        }
+        // No inferir si se identifican dos ocupantes distintos de una misma plaza.
+        if (count($valid) === 1) {
+            $display[$id] = $valid[0];
+        }
+    }
+    return $display;
 }
 
 $now=date('Y-m-d');
@@ -297,24 +343,19 @@ if(!$errors){
         throw new RuntimeException('Se requiere API 0.6.8 del motor_hc 0.6.9.');
     $catalog=$motor->catalogoLideres($activationFrom,$activationTo);
     if(!$catalog) throw new RuntimeException('No hay plazas de líder certificadas por motor_hc en este período.');
-    // El catálogo de atribución usa las COSECHAS (p. ej. julio–octubre para NOV),
-    // de modo que una plaza VACANTE en octubre puede estar ocupada en HC noviembre.
-    // Resolver SOLO el NOMBRE VISIBLE en la fotografía HC de la fecha de referencia
-    // (hasta hoy), cruzando ID estable de plaza/distrito; jamás mover históricos.
-    $displayAsOf=($actualEnd<$now)?$actualEnd:$now;
+    // La atribución histórica se conserva. El nombre en pantalla debe ser
+    // el ocupante de la plaza de líder en la última fotografía HC de referencia.
+    $displayAsOf = min($actualEnd, $now);
     try {
-        $catalogReference=$motor->catalogoLideres($displayAsOf,$displayAsOf);
-        foreach($catalogReference as $refId=>$refLider){
-            $refId=(string)$refId;
-            if(!isset($catalog[$refId])) continue;
-            if((string)($refLider['plaza']??'') !== (string)($catalog[$refId]['plaza']??'')) continue;
-            if(np_district((string)($refLider['distrito']??'')) !== np_district((string)($catalog[$refId]['distrito']??''))) continue;
-            $nombreReferencia=RankingAtribucionServiceV06::norm((string)($refLider['nombre']??''));
-            if($nombreReferencia!=='')$leaderDisplay[$refId]=$nombreReferencia;
-        }
-    } catch(Throwable $ignored) {
-        // Si no hay foto HC del período visible, usar etiqueta del catálogo histórico.
-        // Las instalaciones y el vínculo entre plaza y cuenta siguen certificados.
+        $catalogReference = $motor->catalogoLideres($displayAsOf, $displayAsOf);
+        $hcReference = $motor->cargarHc($displayAsOf, $displayAsOf);
+        $referenceRows = [];
+        // Solo se usa la última fotografía recuperada por el Motor HC.
+        foreach ($hcReference['datos'] ?? [] as $hcRows) $referenceRows = $hcRows;
+        $leaderDisplay = np_resolve_current_leader_names($catalog, $catalogReference, $referenceRows);
+    } catch (Throwable $ignored) {
+        // Se conserva el nombre histórico si la foto HC actual no está disponible.
+        // No debe afectar cálculos, jerarquías ni navegación.
     }
 
     $hic=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic());
@@ -447,10 +488,10 @@ if(!$errors){
         $row['pct_prevent_m1']=np_rate($row['prevent_m1'],$row['ins_m1']);
         $row['ins_m4_m1']=array_sum(array_map(static fn($m)=>(int)$row['ins_m'.$m], [4,3,2,1]));
         $row['nppf_m4_m1']=array_sum(array_map(static fn($m)=>(int)$row['nppf_m'.$m], [4,3,2,1]));
-        $row['pct_m4_m1']=np_sum_cohort_rates($row);
+        $row['pct_m4_m1']=np_consolidated_rate($row);
         $rows[]=$row;
     }
-    // Ranking default: menor a mayor suma de % NPPF M4–M1.
+    // Ranking default: menor a mayor TASA NPPF M4–M1.
     // Los casos sin ninguna cohorte con instalaciones quedan al final.
     usort($rows,static function($a,$b){
         $pa=$a['pct_m4_m1']; $pb=$b['pct_m4_m1'];
@@ -622,6 +663,11 @@ body.page-ranking #nppfTable .nppf-total-emphasis{
   white-space:nowrap;
   font-variant-numeric:tabular-nums;
 }
+/* El consolidado tiene el MISMO semáforo que las columnas individuales. */
+body.page-ranking #nppfTable .nppf-total-emphasis.nppf-good{background:#e7f8ed;color:#13623a;border-color:#b5eacb}
+body.page-ranking #nppfTable .nppf-total-emphasis.nppf-caution{background:#fff3d3;color:#9a5a10;border-color:#f2dfaf}
+body.page-ranking #nppfTable .nppf-total-emphasis.nppf-risk{background:#fee8ed;color:#a22b3a;border-color:#f6c5d1}
+body.page-ranking #nppfTable .nppf-total-emphasis.nppf-muted{background:#eff1f7;color:#667085;border-color:#dce0e9}
 body.page-ranking #nppfTable .nppf-pill{
   max-width:100%;
   padding:4px 6px;
@@ -645,7 +691,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.3</strong></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.4</strong></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -758,7 +804,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <th class="center nppf-sort" data-key="pct_m3">% M3 ↕</th>
  <th class="center nppf-sort" data-key="pct_m2">% M2 ↕</th>
  <th class="center nppf-sort" data-key="pct_m1">% M1 ↕</th>
- <th class="center nppf-sort nppf-consolidated" data-key="pct_m4_m1" title="Suma aritmética de % M4 + % M3 + % M2 + % M1 (no tasa ponderada)">Σ % NPPF M4–M1 ↑</th>
+ <th class="center nppf-sort nppf-consolidated" data-key="pct_m4_m1" title="NPPF M4–M1 ÷ INS M4–M1 × 100">% NPPF M4–M1 ↑</th>
  <th class="num nppf-sort" data-key="prevent_m1"># M1 Prev. ↕</th>
  <th class="center nppf-sort" data-key="pct_prevent_m1">% M1 Prev. ↕</th>
 </tr></thead><tbody>
@@ -783,7 +829,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m3'])?>"><?=np_pct($r['pct_m3'])?></span></td>
 <td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m2'])?>"><?=np_pct($r['pct_m2'])?></span></td>
 <td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_m1'])?>"><?=np_pct($r['pct_m1'])?></span></td>
-<td class="center nppf-consolidated"><span class="nppf-total-emphasis" title="Suma de % de las cuatro cosechas, no tasa ponderada"><?=np_pct($r['pct_m4_m1'])?></span></td>
+<td class="center nppf-consolidated"><span class="nppf-total-emphasis <?=np_pct_class($r['pct_m4_m1'])?>" title="NPPF M4–M1 ÷ INS M4–M1 × 100"><?=np_pct($r['pct_m4_m1'])?></span></td>
 <td class="num"><?=np_num($r['prevent_m1'])?></td><td class="center"><span class="nppf-pill <?=np_pct_class($r['pct_prevent_m1'])?>"><?=np_pct($r['pct_prevent_m1'])?></span></td></tr>
 <?php endforeach;?>
 <tr class="total-row" id="totalRow"><td colspan="3"><strong>TOTAL CERTIFICADO</strong></td><td class="center">—</td>
@@ -795,7 +841,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 <td class="center"><span class="nppf-pill <?=np_pct_class(np_rate($tot['nppf_m3'],$tot['ins_m3']))?>" id="tPctM3"><?=np_pct(np_rate($tot['nppf_m3'],$tot['ins_m3']))?></span></td>
 <td class="center"><span class="nppf-pill <?=np_pct_class(np_rate($tot['nppf_m2'],$tot['ins_m2']))?>" id="tPctM2"><?=np_pct(np_rate($tot['nppf_m2'],$tot['ins_m2']))?></span></td>
 <td class="center"><span class="nppf-pill <?=np_pct_class(np_rate($tot['nppf_m1'],$tot['ins_m1']))?>" id="tPctM1"><?=np_pct(np_rate($tot['nppf_m1'],$tot['ins_m1']))?></span></td>
-<td class="center nppf-consolidated"><span class="nppf-total-emphasis" id="tPctM4M1" title="Suma de porcentajes de M4, M3, M2 y M1"><?=np_pct(np_sum_cohort_rates($tot))?></span></td>
+<td class="center nppf-consolidated"><span class="nppf-total-emphasis <?=np_pct_class(np_consolidated_rate($tot))?>" id="tPctM4M1" title="NPPF M4–M1 ÷ INS M4–M1 × 100"><?=np_pct(np_consolidated_rate($tot))?></span></td>
 <td class="num" id="tPre"><?=np_num($tot['prevent_m1'])?></td>
 <td class="center"><span class="nppf-pill <?=np_pct_class(np_rate($tot['prevent_m1'],$tot['ins_m1']))?>" id="tPctPre"><?=np_pct(np_rate($tot['prevent_m1'],$tot['ins_m1']))?></span></td></tr>
 </tbody></table></div></section>
@@ -864,9 +910,13 @@ body.page-ranking .table-wrap:has(>#nppfTable){
        set('tInsM'+m,num(s['ins_m'+m]));set('tM'+m,num(s['nppf_m'+m]));setPctBadge('tPctM'+m,s['nppf_m'+m],s['ins_m'+m]);}
      const insM4M1=[4,3,2,1].reduce((sum,m)=>sum+s['ins_m'+m],0);
      const nppfM4M1=[4,3,2,1].reduce((sum,m)=>sum+s['nppf_m'+m],0);
-     const sumRates=[4,3,2,1].filter(m=>s['ins_m'+m]>0).map(m=>100*s['nppf_m'+m]/s['ins_m'+m]);
+      const combinedPct=insM4M1>0?100*nppfM4M1/insM4M1:null;
      set('tInsM4M1',num(insM4M1));set('tM4M1',num(nppfM4M1));
-     set('tPctM4M1',sumRates.length?sumRates.reduce((a,b)=>a+b,0).toFixed(1)+'%':'—');
+      const combinedBadge=document.getElementById('tPctM4M1');
+      if(combinedBadge){
+        combinedBadge.textContent=combinedPct===null?'—':combinedPct.toFixed(1)+'%';
+        combinedBadge.className='nppf-total-emphasis '+status(combinedPct);
+      }
      set('kpiPre',num(s.prevent_m1));set('kpiPrePct',pct(s.prevent_m1,s.ins_m1));set('kpiReverso',num(s.reverso));
      set('tPre',num(s.prevent_m1));setPctBadge('tPctPre',s.prevent_m1,s.ins_m1);
      set('kpiArpu',s.factura_nppf_validas>0?money(Math.round(s.factura_nppf_centavos/s.factura_nppf_validas)):'—');
