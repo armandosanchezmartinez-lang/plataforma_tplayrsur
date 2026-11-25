@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.13 (2026-11-25)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.14 (2026-11-25)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
@@ -72,6 +72,10 @@
  *   Director en HC S, sin contradicción de nombres.
  *   Esa excepción queda auditada como HC_CONTINUIDAD_TRANSITORIA_DIRECTOR.
  * - v1.2.13: cartera masiva y CSV deshabilitados; sólo sumarios preventivos agregados.
+ * - v1.2.14: gráfico de vendedor con INS índigo, NPPF magenta y
+ *   Preventivo M1 amarillo APILADO sobre NPPF M1, en el mismo eje de cuentas.
+ *   Línea cian = NPPF confirmado / INS × 100; excluye Preventivo.
+ *   Tooltip presenta cantidades y tasa con UN decimal sin alterar KPIs.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -1330,7 +1334,7 @@ if(!$errors){
 }
 $tot=np_total($rows);
 if($view==='cuentas'&&$rows)$tot=$scores[$rows[0]['key']]??np_metrics();
-$vendorTrendLabels=[];$vendorTrendIns=[];$vendorTrendCounts=[];$vendorTrendRates=[];
+$vendorTrendLabels=[];$vendorTrendIns=[];$vendorTrendCounts=[];$vendorTrendPrevent=[];$vendorTrendRates=[];
 if($view==='cuentas'&&$rows){
     foreach([4,3,2,1] as $m){
         $vendorTrendLabels[]='M'.$m;
@@ -1338,7 +1342,10 @@ if($view==='cuentas'&&$rows){
         $nppf=(int)($tot['nppf_m'.$m]??0);
         $vendorTrendIns[]=$ins;
         $vendorTrendCounts[]=$nppf;
-        $vendorTrendRates[]=np_rate($nppf,$ins); // Tooltips muestran un decimal; precisión matemática intacta.
+        // Sólo M1 tiene riesgo preventivo: se visualiza encima de NPPF,
+        // pero NO se adiciona al numerador de la línea ni al Ranking.
+        $vendorTrendPrevent[]=$m===1?(int)($tot['prevent_m1']??0):0;
+        $vendorTrendRates[]=np_rate($nppf,$ins);
     }
 }
 $rootLink=np_q(['view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]);
@@ -1532,7 +1539,7 @@ body.page-ranking .np-op-search{padding:9px 12px;font-size:12px;border:1px solid
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.13</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.14</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -1728,7 +1735,7 @@ body.page-ranking .np-op-search{padding:9px 12px;font-size:12px;border:1px solid
 <?php foreach($detailRows as $d):?><tr class="<?=$d['_class']==='PREVENTIVO M1'?'nppf-prevent-row':''?>"><td><?=np_h($d['cuenta'])?></td><td><strong><?=np_h(strtoupper($d['_cohort']))?></strong></td><td><?=np_h($d['fecha_activacion'])?></td><td><?=np_h($d['_monthly_cut'])?></td><td><?=np_h($d['_due'])?></td><td><span class="nppf-pill <?=$d['_class']==='PREVENTIVO M1'?'nppf-prevent-label':'nppf-risk'?>"><?=np_h($d['_class'])?></span></td><td><?php if($d['_reverso']):?><span class="nppf-pill nppf-caution" title="El banco revirtió el pago. La cuenta permanece como NPPF.">REVERSO</span><?php else:?><?=np_h($d['tipo'])?><?php endif;?></td><td><?=np_h($d['_atraso_corte'])?></td><td><?=np_h($d['distrito'])?></td><td><?=np_h($d['canal_venta'])?></td><td><?=np_h($d['desc_plan'])?></td><td class="num"><?=number_format((float)$d['monto_factura'],2,'.',',')?></td></tr><?php endforeach;?>
 <?php if(!$detailRows):?><tr><td colspan="12" class="center">Sin cuentas pendientes certificadas en M4, M3, M2, M1 ni Preventivo.</td></tr><?php endif;?>
 </tbody></table></div></section>
-<section class="table-card nppf-chart-panel"><div class="table-head"><strong>Instalaciones y NPPF del vendedor · por cosecha</strong><span>Barra azul = INS instaladas · Barra violeta = cuentas NPPF · Línea = % NPPF / INS</span></div><div class="nppf-chart-wrap"><canvas id="vendorTrendChart"></canvas></div><p class="nppf-caption" style="text-align:center;margin:0 12px 3px">Cada cohorte muestra sus instalaciones certificadas y cuentas NPPF. El Preventivo M1 se informa por separado, sin incluirlo en esta tasa. La línea no representa CHURN ni evolución histórica por fecha.</p></section>
+<section class="table-card nppf-chart-panel"><div class="table-head"><strong>Instalaciones y NPPF del vendedor · por cosecha</strong><span>Índigo = INS · Magenta = NPPF · Amarillo sobre M1 = Posible NPPF (Preventivo) · Cian = % NPPF</span></div><div class="nppf-chart-wrap"><canvas id="vendorTrendChart"></canvas></div><p class="nppf-caption" style="text-align:center;margin:0 12px 3px">El segmento amarillo se apila sobre el NPPF confirmado de M1 únicamente para mostrar el posible riesgo adicional. La línea y el Ranking consideran sólo NPPF confirmado / instalaciones (sin Preventivo). No representa CHURN ni evolución histórica por fecha.</p></section>
  <?php endif;?>
  <?php endif;?> <!-- fin ausencia de errores -->
  </main>
@@ -1817,21 +1824,29 @@ body.page-ranking .np-op-search{padding:9px 12px;font-size:12px;border:1px solid
  }
  const trendCanvas=document.getElementById('vendorTrendChart');
  if(trendCanvas && window.Chart){
+   // Paleta TotalXpedient: índigo / magenta / amarillo / cian del logotipo.
+   const tx={ins:'#6752D9',nppf:'#C026D3',prevent:'#F5B631',rate:'#08AFCB',ink:'#26143F'};
+   const fmtCount=value=>Number(value).toLocaleString('es-MX',{maximumFractionDigits:0});
+   const fmtRate=value=>value===null || !Number.isFinite(Number(value))?'—':Number(value).toFixed(1)+'%';
    new Chart(trendCanvas,{
      data:{
        labels:<?=json_encode($vendorTrendLabels, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?>,
        datasets:[
-         {type:'bar',label:'INS instaladas',yAxisID:'y',order:2,
+         {type:'bar',label:'INS instaladas',yAxisID:'y',order:2,stack:'instaladas',
           data:<?=json_encode($vendorTrendIns)?>,
-          backgroundColor:'rgba(64,139,205,0.78)',borderColor:'#3275b4',borderWidth:1,
-          borderRadius:6,borderSkipped:false,maxBarThickness:42,categoryPercentage:0.70,barPercentage:0.82},
-         {type:'bar',label:'# cuentas NPPF',yAxisID:'y',order:2,
+          backgroundColor:tx.ins,borderColor:'#4E36BB',borderWidth:1,
+          borderRadius:6,borderSkipped:false,maxBarThickness:46,categoryPercentage:0.70,barPercentage:0.82},
+         {type:'bar',label:'# cuentas NPPF',yAxisID:'y',order:2,stack:'nppf',
           data:<?=json_encode($vendorTrendCounts)?>,
-          backgroundColor:'rgba(130,38,214,0.78)',borderColor:'#7725ca',borderWidth:1,
-          borderRadius:6,borderSkipped:false,maxBarThickness:42,categoryPercentage:0.70,barPercentage:0.82},
-         {type:'line',label:'% NPPF',yAxisID:'y1',order:1,
-          data:<?=json_encode($vendorTrendRates)?>,borderColor:'#0e9bb1',backgroundColor:'#0e9bb1',
-          borderWidth:2.5,tension:0.28,pointRadius:4,pointHoverRadius:6,fill:false,spanGaps:false}
+          backgroundColor:tx.nppf,borderColor:'#9916A9',borderWidth:1,
+          borderRadius:5,borderSkipped:false,maxBarThickness:46,categoryPercentage:0.70,barPercentage:0.82},
+         {type:'bar',label:'Posible NPPF · M1 Preventivo',yAxisID:'y',order:2,stack:'nppf',
+          data:<?=json_encode($vendorTrendPrevent)?>,
+          backgroundColor:tx.prevent,borderColor:'#CF8915',borderWidth:1,
+          borderRadius:5,borderSkipped:false,maxBarThickness:46,categoryPercentage:0.70,barPercentage:0.82},
+         {type:'line',label:'% NPPF confirmado',yAxisID:'y1',order:1,
+          data:<?=json_encode($vendorTrendRates)?>,borderColor:tx.rate,backgroundColor:tx.rate,
+          borderWidth:3,tension:0.28,pointRadius:4,pointHoverRadius:6,fill:false,spanGaps:false}
        ]
      },
      options:{
@@ -1839,26 +1854,31 @@ body.page-ranking .np-op-search{padding:9px 12px;font-size:12px;border:1px solid
        animation:{duration:420},interaction:{mode:'index',intersect:false},
        layout:{padding:{top:8,bottom:4,left:6,right:6}},
        plugins:{
-         legend:{position:'top',labels:{boxWidth:11,usePointStyle:true,pointStyle:'circle',padding:16,font:{size:11}}},
+         legend:{position:'top',labels:{boxWidth:11,usePointStyle:true,pointStyle:'circle',padding:16,
+           font:{size:11},sort:(a,b)=>a.datasetIndex-b.datasetIndex}},
          tooltip:{
-           backgroundColor:'#241441',padding:12,cornerRadius:10,
+           backgroundColor:tx.ink,padding:12,cornerRadius:10,
+           itemSort:(a,b)=>a.datasetIndex-b.datasetIndex,
+           filter:ctx=>ctx.datasetIndex!==2 || Number(ctx.parsed.y)>0,
            callbacks:{
              title:items=>items.length?'Cosecha '+items[0].label:'',
              label:ctx=>{
                const value=ctx.parsed.y;
-               if(ctx.datasetIndex===0)return 'INS instaladas: '+Number(value).toLocaleString('es-MX');
-               if(ctx.datasetIndex===1)return '# cuentas NPPF: '+Number(value).toLocaleString('es-MX');
-               return '% NPPF: '+(value===null||!Number.isFinite(value)?'—':Number(value).toFixed(1)+'%');
+               if(ctx.datasetIndex===0)return 'INS instaladas: '+fmtCount(value);
+               if(ctx.datasetIndex===1)return '# cuentas NPPF: '+fmtCount(value);
+               if(ctx.datasetIndex===2)return 'Posible NPPF (M1 Prev.): '+fmtCount(value);
+               return '% NPPF confirmado: '+fmtRate(value);
              }
            }
          }
        },
        scales:{
-         x:{stacked:false,grid:{display:false},ticks:{color:'#526079',font:{weight:'600'}}},
-         y:{stacked:false,beginAtZero:true,grace:'12%',ticks:{precision:0,color:'#65708a'},
-            grid:{color:'rgba(128,128,160,0.10)'},title:{display:true,text:'Cuentas instaladas / NPPF',color:'#65708a'}},
+         // Dos barras agrupadas por cosecha: INS sola y NPPF + Preventivo apilados.
+         x:{stacked:true,grid:{display:false},ticks:{color:'#514366',font:{weight:'600'}}},
+         y:{stacked:true,beginAtZero:true,grace:'12%',ticks:{precision:0,color:'#65708a'},
+            grid:{color:'rgba(108,82,174,0.12)'},title:{display:true,text:'Cuentas instaladas / NPPF',color:'#514366'}},
          y1:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},
-             title:{display:true,text:'NPPF / INS (%)',color:'#65708a'},
+             title:{display:true,text:'NPPF / INS (%)',color:'#514366'},
              ticks:{color:'#65708a',callback:v=>Number(v).toFixed(1)+'%'}}
        }
      }
