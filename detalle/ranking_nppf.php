@@ -1,12 +1,12 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.4 (2026-11-24)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.5 (2026-11-24)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
  * Lectura pura. No modifica las seis tablas NPPF ni el Motor HC.
  *
- * REGLAS v1.2.4 — ESCALERA DE COSECHAS:
+ * REGLAS v1.2.5 — ESCALERA DE COSECHAS:
  * - Semana/mes visible es PERIODO DE REFERENCIA; instalación M1 = exactamente
  *   los mismos días calendario del mes previo, M2 = dos meses, M3 = tres y M4 = cuatro.
  *   Ej.: semana 47, 16-22 NOV -> M1 16-22 OCT, M2 16-22 SEP, M3 16-22 AGO.
@@ -38,8 +38,10 @@
  *   Tasa consolidada ponderada por instalaciones, NO suma de porcentajes.
  * - Ranking: menor a mayor % NPPF M4–M1; sin instalaciones al final.
  * - Detalle: M1 Preventivo primero; después M1, M2, M3 y M4.
- * - Nombres visibles de líderes: HC de referencia, con verificación adicional
- *   de la posición ocupada en la última fotografía HC hasta HOY.
+ * - Nombre líder actual: plaza vigente, superior reportado o promoción de coach
+ *   a nueva plaza con evidencia unívoca HC. Nunca reescribe cuentas históricas.
+ * - Cambio de nómina/posición Coach: consolidación VISUAL de asientos de la
+ *   misma persona con HC histórico + HIC; sin duplicar cuentas ni líderes.
  *   La atribución histórica por plaza/posición NO se modifica.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
@@ -173,49 +175,259 @@ function np_pct_class(?float $pct): string {
 }
 
 /**
- * Recupera nombres visibles desde la fotografía HC actual por PLAZA de líder.
- * El catálogo del motor puede no exponer una plaza cuando hay referencias de
- * subordinados faltantes; la fila del ocupante del asiento sigue en HC.
- * No modifica la estructura ni la atribución histórica de instalaciones.
- * Solo acepta un ocupante no vacante por posición y distrito; ante conflicto
- * conserva el nombre ya certificado por catalogoLideres() o su respaldo.
+ * Identificación de una persona por nombre COMPLETO sólo para presentación.
+ * NO se usa para atribución de cuentas: ésa permanece en motor_hc + HIC.
  */
-function np_resolve_current_leader_names(array $historic, array $reference, array $hcRows): array {
-    $display = [];
-    // 1. Reutilizar la etiqueta validada del catálogo HC actual.
-    foreach ($reference as $id => $leader) {
-        $id = (string)$id;
-        if (!isset($historic[$id])) continue;
-        if ((string)($leader['plaza'] ?? '') !== (string)($historic[$id]['plaza'] ?? '')) continue;
-        if (np_district((string)($leader['distrito'] ?? '')) !== np_district((string)($historic[$id]['distrito'] ?? ''))) continue;
-        $name = RankingAtribucionServiceV06::norm((string)($leader['nombre'] ?? ''));
-        if ($name !== '') $display[$id] = $name;
+function np_person_name_key(?string $name): string {
+    $name=RankingAtribucionServiceV06::norm($name??'');
+    $name=strtr($name,['Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ü'=>'U']);
+    $parts=array_values(array_filter(explode(' ',$name),static fn($p)=>$p!==''));
+    sort($parts,SORT_STRING);
+    return implode(' ',$parts);
+}
+function np_person_valid(?string $name): bool {
+    $s=RankingAtribucionServiceV06::norm($name??'');
+    return $s!=='' && $s!=='-' && !str_contains($s,'VACANT')
+        && !in_array($s,['NO IDENTIFICADO','COACH HISTORICO','COACH HISTÓRICO','SIN COACH'],true);
+}
+
+/**
+ * Resuelve el nombre actual con tres pruebas estructurales:
+ * 1) plaza actual idéntica; 2) superior declarado por coaches actuales,
+ * 3) promoción a una nueva plaza de líder de alguien que era coach de la
+ *    plaza histórica vacante. Para la 3 se exige correspondencia unívoca de
+ *    distrito, nombre histórico y nueva posición de líder en HC.
+ * IMPORTANTE: solamente reemplaza la ETIQUETA de la plaza histórica.
+ */
+function np_resolve_current_leader_names(array $historic, array $reference, array $hcRows, array $coaches): array {
+    $display=[];
+    $occupiedCurrent=[];
+    $currentSeatNames=[];
+    $superiorNames=[];
+    $currentLeaders=[];
+    $historicCoachNames=[];
+    foreach($coaches as $c){
+        $lid=(string)($c['lid']??'');
+        $name=(string)($c['nombre']??'');
+        if($lid!=='' && np_person_valid($name)) $historicCoachNames[$lid][np_person_name_key($name)]=true;
+    }
+    foreach($hcRows as $r){
+        $d=RankingAtribucionServiceV06::normalizarDistrito((string)($r['distrito']??''));
+        $pos=trim((string)($r['id_posicion']??''));
+        if($d===null || $pos==='')continue;
+        $id=$d.'|'.$pos;
+        $name=RankingAtribucionServiceV06::norm((string)($r['nombre_colaborador']??''));
+        if(np_person_valid($name)) {
+            $currentSeatNames[$id][$name]=true;
+            // La fila de líder reporta a Dirección Distrital según el contrato del motor.
+            $super=RankingAtribucionServiceV06::norm((string)($r['puesto_lr']??''));
+            if(str_contains($super,'DIRECTOR DISTRITAL') || str_contains($super,'DIRECTORA DISTRITAL')) {
+                $currentLeaders[$d][$id]=$name;
+            }
+        }
+        $supRole=RankingAtribucionServiceV06::norm((string)($r['puesto_lr']??''));
+        $supPos=trim((string)($r['posicion_lr']??''));
+        $supName=RankingAtribucionServiceV06::norm((string)($r['nombre_linea_reporte']??''));
+        if($supPos!=='' && str_contains($supRole,'LIDER') && np_person_valid($supName)) {
+            $superiorNames[$d.'|'.$supPos][$supName]=true;
+        }
     }
 
-    // 2. Revisar las FILAS HC de la última fotografía, aun si no hubo
-    //    referencias suficientes de subordinados para formar catálogo de líderes.
-    $bySeat = [];
-    foreach ($hcRows as $seat) {
-        $district = RankingAtribucionServiceV06::normalizarDistrito((string)($seat['distrito'] ?? ''));
-        $position = trim((string)($seat['id_posicion'] ?? ''));
-        if ($district === null || $position === '') continue;
-        $id = $district.'|'.$position;
-        if (!isset($historic[$id])) continue;
-        $nombre = RankingAtribucionServiceV06::norm((string)($seat['nombre_colaborador'] ?? ''));
-        $bySeat[$id][$nombre] = true;
+    // Primera opción: plaza certificada en el catálogo de referencia.
+    foreach($reference as $id=>$leader){
+        $id=(string)$id;
+        if(!isset($historic[$id]))continue;
+        if((string)($leader['plaza']??'')!==(string)($historic[$id]['plaza']??''))continue;
+        if(np_district((string)($leader['distrito']??''))!==np_district((string)($historic[$id]['distrito']??'')))continue;
+        $name=RankingAtribucionServiceV06::norm((string)($leader['nombre']??''));
+        if(np_person_valid($name))$display[$id]=$name;
     }
-    foreach ($bySeat as $id => $names) {
-        $valid = [];
-        foreach (array_keys($names) as $name) {
-            if ($name === '' || $name === '-' || str_contains($name, 'VACANT')) continue;
-            $valid[] = $name;
+    // Segunda opción: la fila HC de la misma plaza, si tiene ocupante único.
+    foreach($historic as $id=>$leader){
+        if(isset($display[$id]))continue;
+        $names=array_keys($currentSeatNames[(string)$id]??[]);
+        if(count($names)===1)$display[(string)$id]=$names[0];
+    }
+    // Tercera: la referencia DIRECTA al nombre del líder que hacen sus coaches.
+    // Evita aceptar nombres contradictorios en una misma posición.
+    foreach($historic as $id=>$leader){
+        if(isset($display[$id]))continue;
+        $names=array_keys($superiorNames[(string)$id]??[]);
+        if(count($names)===1)$display[(string)$id]=$names[0];
+    }
+
+    // Promoción + cambio de posición. La plaza histórica debe estar VACANTE y
+    // la nueva persona líder debió ser coach histórico de ESA MISMA plaza.
+    // No basta con compartir distrito o apellido.
+    $possible=[];
+    foreach($historic as $id=>$leader){
+        $id=(string)$id;
+        if(isset($display[$id]) || !str_contains(RankingAtribucionServiceV06::norm((string)($leader['nombre']??'')),'VACANT'))continue;
+        $d=np_district((string)($leader['distrito']??''));
+        foreach($currentLeaders[$d]??[] as $newId=>$newName){
+            if($newId===$id || isset($historic[$newId]))continue;
+            if(isset($historicCoachNames[$id][np_person_name_key($newName)])) {
+                $possible[$id][$newId]=$newName;
+            }
         }
-        // No inferir si se identifican dos ocupantes distintos de una misma plaza.
-        if (count($valid) === 1) {
-            $display[$id] = $valid[0];
-        }
+    }
+    // Un candidato único para la plaza y ninguna otra plaza solicita ese candidato.
+    $uses=[];
+    foreach($possible as $id=>$candidates)if(count($candidates)===1){
+        $newId=(string)array_key_first($candidates);$uses[$newId][]=$id;
+    }
+    foreach($possible as $id=>$candidates){
+        if(count($candidates)!==1)continue;
+        $newId=(string)array_key_first($candidates);
+        if(count($uses[$newId]??[])===1)$display[$id]=(string)$candidates[$newId];
     }
     return $display;
+}
+
+/**
+ * Verifica aliases de posiciones de Coach contra identidad HIC y las
+ * fotografías HC del rango. Si no hay HIC, el nombre COMPLETO puede unir
+ * dos plazas SOLO cuando no hay otro ocupante identificado en ninguna de
+ * ellas, el nombre coincide y no existen personas simultáneas conflictivas.
+ * Retorna [clave histórica => clave visible canónica] dentro del mismo líder.
+ */
+function np_coach_presentation_aliases(array $coaches, array $hcFotos, array $canonicos, array $hicEstados, array $scores): array {
+    $aliases=[];$groups=[];$inspect=[];
+    foreach($coaches as $key=>$c){
+        $lid=(string)($c['lid']??'');$id=(string)($c['id']??'');
+        $name=np_person_name_key((string)($c['nombre']??''));
+        $aliases[$key]=$key;
+        if($lid===''||$id===''||!np_person_valid((string)($c['nombre']??'')))continue;
+        $groups[$lid.'|'.$name][$key]=true;
+        $d=np_district((string)($c['distrito']??''));
+        $inspect[$d.'|'.$id]=true;
+    }
+    // Una sola pasada: índice de ocupantes por plaza, semana y talento canónico.
+    $seatNames=[];$seatTalents=[];$seatWeeks=[];$ambiguousSeats=[];
+    foreach($hcFotos as $week=>$rows){
+        foreach($rows as $r){
+            $d=RankingAtribucionServiceV06::normalizarDistrito((string)($r['distrito']??''));
+            $pos=trim((string)($r['id_posicion']??''));
+            if($d===null||$pos===''||!isset($inspect[$d.'|'.$pos]))continue;
+            $name=(string)($r['nombre_colaborador']??'');
+            if(!np_person_valid($name))continue;
+            $seat=$d.'|'.$pos;
+            $nk=np_person_name_key($name);
+            $seatNames[$seat][$nk]=true;
+            $tal=trim((string)($r['numero_talento_gs']??''));
+            if($tal!=='' && $tal!=='VACANTE'){
+                if(($hicEstados[$tal]??'')==='HIC_AMBIGUA') $ambiguousSeats[$seat]=true;
+                $canon=(string)($canonicos[$tal]??$tal);
+                $seatTalents[$seat][$nk][$canon]=true;
+                $seatWeeks[$seat][$nk][(string)$week][$canon]=true;
+            }
+        }
+    }
+    foreach($groups as $group=>$members){
+        if(count($members)<2)continue;
+        $keys=array_keys($members);
+        $target=np_person_name_key((string)($coaches[$keys[0]]['nombre']??''));
+        $seats=[];$allTalents=[];$concurrent=[];$verified=true;
+        foreach($keys as $k){
+            $c=$coaches[$k];
+            $seat=np_district((string)($c['distrito']??'')).'|'.$c['id'];
+            $seats[$seat]=true;
+            // No agrupar plazas con un nombre distinto certificado en HC.
+            if(isset($ambiguousSeats[$seat]) || count($seatNames[$seat]??[])!==1 || !isset($seatNames[$seat][$target])){$verified=false;break;}
+            foreach($seatTalents[$seat][$target]??[] as $id=>$_)$allTalents[(string)$id]=true;
+            foreach($seatWeeks[$seat][$target]??[] as $week=>$ids)
+                foreach($ids as $id=>$_)$concurrent[$week][(string)$id]=true;
+        }
+        if(!$verified || count($seats)!==count($keys))continue;
+        // Si HIC no los vincula, rechazar dos talentos distintos simultáneos.
+        if(count($allTalents)>1){
+            foreach($concurrent as $ids)if(count($ids)>1){$verified=false;break;}
+        }
+        if(!$verified)continue;
+        // Asiento representativo: el que tenga instalaciones más recientes,
+        // para conservar el enlace natural de drill-down tras la migración.
+        usort($keys,static function($a,$b)use($scores){
+            foreach([1,2,3,4] as $m){
+                $ca=(int)($scores[$a]['ins_m'.$m]??0);
+                $cb=(int)($scores[$b]['ins_m'.$m]??0);
+                if($ca!==$cb)return $cb<=>$ca;
+            }
+            return strcmp($a,$b);
+        });
+        $representative=$keys[0];
+        foreach($keys as $member)$aliases[$member]=$representative;
+    }
+    return $aliases;
+}
+
+/**
+ * Una sola consulta HC de SOLO LECTURA, limitada a las posiciones de coach
+ * duplicadas por nombre completo bajo el mismo líder. Evita recuperar 20+
+ * fotografías completas en cada carga del Ranking.
+ */
+function np_load_coach_alias_hc(mysqli $db, array $coaches, string $start, string $end): array {
+    $byPerson=[];$positions=[];
+    foreach($coaches as $key=>$c){
+        if(!np_person_valid((string)($c['nombre']??'')))continue;
+        $byPerson[(string)($c['lid']??'').'|'.np_person_name_key((string)$c['nombre'])][$key]=$c;
+    }
+    foreach($byPerson as $members){
+        if(count($members)<2)continue;
+        foreach($members as $c){
+            $position=trim((string)($c['id']??''));
+            if($position!=='')$positions[$position]=true;
+        }
+    }
+    if(!$positions)return [];
+    $ids=array_keys($positions);
+    $from=np_date($start);$to=np_date($end);
+    $year1=(int)$from->format('o');$week1=(int)$from->format('W');
+    $year2=(int)$to->format('o');$week2=(int)$to->format('W');
+    $placeholders=implode(',',array_fill(0,count($ids),'?'));
+    $sql="SELECT anio,semana,distrito,numero_talento_gs,nombre_colaborador,id_posicion
+          FROM hc WHERE anio BETWEEN ? AND ? AND id_posicion IN ($placeholders)
+          ORDER BY anio,semana";
+    $stmt=$db->prepare($sql);
+    if(!$stmt)throw new RuntimeException('HC alias: '.$db->error);
+    $params=array_merge([$year1,$year2],$ids);
+    $stmt->bind_param('ii'.str_repeat('s',count($ids)),...$params);
+    $stmt->execute();
+    $rows=$stmt->get_result();$photos=[];
+    while($row=$rows->fetch_assoc()){
+        $yy=(int)$row['anio'];$ww=(int)$row['semana'];
+        if(($yy===$year1 && $ww<$week1) || ($yy===$year2 && $ww>$week2))continue;
+        $photos[$yy.'-'.$ww][]=$row;
+    }
+    $stmt->close();
+    return $photos;
+}
+
+/** Combina métricas para el DRILL DOWN sin alterar puntuaciones de líderes. */
+function np_merge_score(array &$target, array $extra): void {
+    foreach(np_metrics() as $metric=>$_)$target[$metric]=(int)($target[$metric]??0)+(int)($extra[$metric]??0);
+}
+function np_apply_presentation_coach_aliases(
+    array $aliases, array &$coaches, array &$vendors,
+    array &$scores, array &$detail
+): void {
+    foreach($aliases as $old=>$canonical){
+        if($old===$canonical)continue;
+        if(!isset($coaches[$old],$coaches[$canonical]))continue;
+        if(!isset($scores[$canonical]))$scores[$canonical]=np_metrics();
+        np_merge_score($scores[$canonical],$scores[$old]??np_metrics());
+        $prefix=$old.'|';
+        foreach(array_keys($vendors) as $vk){
+            if(!str_starts_with($vk,$prefix))continue;
+            $v=$vendors[$vk];$newKey=$canonical.'|'.(string)$v['id'];
+            // Cada instalación/cuenta ya se deduplicó por su clave al importarla.
+            if(!isset($vendors[$newKey]))$vendors[$newKey]=$v;
+            if(!isset($scores[$newKey]))$scores[$newKey]=np_metrics();
+            np_merge_score($scores[$newKey],$scores[$vk]??np_metrics());
+            foreach($detail[$vk]??[] as $account=>$record){
+                if(!isset($detail[$newKey][$account]))$detail[$newKey][$account]=$record;
+            }
+        }
+    }
 }
 
 $now=date('Y-m-d');
@@ -343,19 +555,16 @@ if(!$errors){
         throw new RuntimeException('Se requiere API 0.6.8 del motor_hc 0.6.9.');
     $catalog=$motor->catalogoLideres($activationFrom,$activationTo);
     if(!$catalog) throw new RuntimeException('No hay plazas de líder certificadas por motor_hc en este período.');
-    // La atribución histórica se conserva. El nombre en pantalla debe ser
-    // el ocupante de la plaza de líder en la última fotografía HC de referencia.
-    $displayAsOf = min($actualEnd, $now);
+    // La atribución histórica se conserva por plaza. La presentación visual
+    // puede usar el ocupante actual (promoción o cambio de nómina) si HC lo prueba.
+    $displayAsOf=min($actualEnd,$now);
+    $referenceRows=[];$catalogReference=[];
     try {
-        $catalogReference = $motor->catalogoLideres($displayAsOf, $displayAsOf);
-        $hcReference = $motor->cargarHc($displayAsOf, $displayAsOf);
-        $referenceRows = [];
-        // Solo se usa la última fotografía recuperada por el Motor HC.
-        foreach ($hcReference['datos'] ?? [] as $hcRows) $referenceRows = $hcRows;
-        $leaderDisplay = np_resolve_current_leader_names($catalog, $catalogReference, $referenceRows);
-    } catch (Throwable $ignored) {
-        // Se conserva el nombre histórico si la foto HC actual no está disponible.
-        // No debe afectar cálculos, jerarquías ni navegación.
+        $catalogReference=$motor->catalogoLideres($displayAsOf,$displayAsOf);
+        $hcReference=$motor->cargarHc($displayAsOf,$displayAsOf);
+        foreach($hcReference['datos']??[] as $hcRows)$referenceRows=$hcRows;
+    } catch(Throwable $ignored) {
+        // Falta HC de referencia: se mantiene el nombre histórico.
     }
 
     $hic=RankingAtribucionServiceV06::resolverEquivalenciasHic($motor->cargarHic());
@@ -438,6 +647,25 @@ if(!$errors){
     foreach($catalog as $lid=>$l)$scores[$lid]??=np_metrics();
     foreach($coaches as $ck=>$c)$scores[$ck]??=np_metrics();
     foreach($vendors as $vk=>$v)$scores[$vk]??=np_metrics();
+
+    $leaderDisplay=np_resolve_current_leader_names($catalog,$catalogReference,$referenceRows,$coaches);
+    $coachAliases=array_fill_keys(array_keys($coaches),null);
+    try {
+        // HC histórico + HIC para identificar CAMBIOS de plaza/nómina.
+        $historyForLabels=np_load_coach_alias_hc($conexion,$coaches,$activationFrom,$displayAsOf);
+        $coachAliases=np_coach_presentation_aliases($coaches,$historyForLabels,$hic['canonicos'],$hic['estados'],$scores);
+        np_apply_presentation_coach_aliases($coachAliases,$coaches,$vendors,$scores,$accountDetail);
+    } catch(Throwable $ignored){
+        // Nunca comprometer el cálculo de NPPF por una vista de alias incompleta.
+        $coachAliases=[];
+    }
+    // Enlaces viejos: redirigir internamente a la plaza visible agrupada.
+    if($coachId!=='' && isset($coachAliases[np_team_key($liderId,$coachId)])){
+        $canonical=$coachAliases[np_team_key($liderId,$coachId)];
+        if(is_string($canonical) && $canonical!=='' && str_starts_with($canonical,$liderId.'|')){
+            $coachId=substr($canonical,strlen($liderId)+1);
+        }
+    }
     $notCertified=count($audit['m4'])+count($audit['m3'])+count($audit['m2'])+count($audit['m1']);
     if($notCertified)$warnings['pendientes']="{$notCertified} cuentas NPPF en M4/M3/M2/M1 no pudieron asignarse de forma certificada a un líder; se muestran en auditoría, fuera de porcentajes.";
     if($corte<$eval)$warnings['frescura']='Pendientes según archivo del '.$corte.'; M1/Preventivo evaluado al '.$eval.'. Algunos clientes pudieron pagar después del corte.';
@@ -455,6 +683,7 @@ if(!$errors){
         if($view==='coaches'&&!isset($catalog[$liderId]))$errors[]='Líder no identificado en el catálogo HC.';
         foreach($coaches as $k=>$c){
             if($view==='coaches'&&$c['lid']!==$liderId)continue;
+            if(($coachAliases[$k]??$k)!==$k)continue; // plaza de coach histórica ya consolidada visualmente
             $scopeRows[]=['key'=>$k,'distrito'=>$c['distrito'],'entidad'=>$c['nombre'],'lid'=>$c['lid'],'co'=>$c['id'],'v'=>''];
         }
     }elseif($view==='vendedores'||$view==='cuentas'){
@@ -691,7 +920,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.4</strong></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.5</strong></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
