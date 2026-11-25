@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.15 (2026-11-25)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.16 (2026-11-25)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
@@ -76,6 +76,8 @@
  *   y sus sumarios auxiliares (incluían otros canales ajenos al Ranking).
  *   Se mantienen intactos el KPI certificado, la conciliación HC, el gráfico
  *   y los bloqueos de cartera masiva / CSV.
+ * - v1.2.16: por defecto, al entrar sin parametro periodo, cargar vista MENSUAL.
+ *   Los botones Semanal/Mensual conservan la seleccion explicita.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -950,8 +952,8 @@ $npDiagReport=null;
 $now=date('Y-m-d');
 $view=(string)($_GET['view']??'lideres');
 if (!in_array($view,['lideres','ranking_coach','coaches','vendedores','cuentas'],true)) $view='lideres';
-$periodo=(string)($_GET['periodo']??'semanal');
-if (!in_array($periodo,['semanal','mensual'],true)) $periodo='semanal';
+$periodo=(string)($_GET['periodo']??'mensual');
+if (!in_array($periodo,['semanal','mensual'],true)) $periodo='mensual';
 $distritoParam=np_district((string)($_GET['distrito']??''));
 $liderId=trim((string)($_GET['lider_id']??''));
 $coachId=trim((string)($_GET['coach_pos']??''));
@@ -1485,7 +1487,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.15</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.16</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
