@@ -15,13 +15,20 @@ $current_page = $current_page ?? '';
 // El nivel principal permanece 'ranking' en ambos módulos. Identificamos el
 // archivo ejecutado para marcar SOLO el submenú activo, sin cambiar sus PHP.
 $txp_script_actual = basename((string)($_SERVER['SCRIPT_NAME'] ?? ''));
-$txp_ranking_paginas = ['ranking_productividad.php', 'ranking_comercial.php', 'mix_comercial.php'];
+$txp_ranking_paginas = ['ranking_productividad.php', 'ranking_comercial.php', 'mix_comercial.php', 'ranking_nppf.php'];
 $txp_ranking_activo = $current_page === 'ranking'
     || in_array($txp_script_actual, $txp_ranking_paginas, true);
 $txp_ranking_productividad_activo = $txp_script_actual === 'ranking_productividad.php';
 $txp_ranking_comercial_activo = $txp_script_actual === 'ranking_comercial.php';
 $txp_mix_velocidad_activo = $txp_script_actual === 'mix_comercial.php';
+$txp_nppf_activo = $txp_script_actual === 'ranking_nppf.php';
 $txp_pulso_activo = $txp_script_actual === 'pulso.php' || $current_page === 'pulso';
+
+// Reto Buen Mes: acceso alineado con los seis perfiles autorizados del tablero.
+$txp_reto_buen_mes_activo = $txp_script_actual === 'reto_buen_mes.php' || $current_page === 'reto_buen_mes';
+$txp_reto_buen_mes_rol = strtolower(trim((string)($_SESSION['rol'] ?? '')));
+$txp_reto_buen_mes_visible = !empty($_SESSION['usuario'])
+    && in_array($txp_reto_buen_mes_rol, ['admin', 'director_regional', 'director_distrital', 'lider', 'coach', 'vendedor'], true);
 
 // Promociones: visibilidad alineada con los roles que autoriza buenplan.php.
 $txp_buenplan_activo = $txp_script_actual === 'buenplan.php'
@@ -51,7 +58,7 @@ $txp_addnetas_fcst_activo = $txp_script_actual === 'fcst_add_netas.php';
 $txp_addnetas_activo = $txp_addnetas_dashboard_activo || $txp_addnetas_fcst_activo
     || in_array($current_page, ['add_netas','fcst_add_netas'], true);
 
-$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || $txp_penetracion_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
+$is_detalle = $txp_ranking_activo || $txp_addnetas_activo || $txp_pulso_activo || $txp_promociones_activo || $txp_penetracion_activo || $txp_reto_buen_mes_activo || in_array($current_page, ['hc', 'reai', 'fcst_captura', 'fcst_dashboard', 'ejecucion_operativa_captura', 'ejecucion_operativa_consulta', 'ejecucion_operativa_acompanamientos'], true);
 $root_path  = $is_detalle ? '../' : '';
 $det_path   = $is_detalle ? '' : 'detalle/';
 
@@ -144,12 +151,23 @@ function txp_nav_active($page, $current_page) {
                <?= $txp_mix_velocidad_activo ? 'aria-current="page"' : '' ?>>
                 ▸ Mix por Velocidad
             </a>
+            <a href="<?= $det_path ?>ranking_nppf.php?periodo=mensual"
+               class="txp-ranking-subitem<?= $txp_nppf_activo ? ' active' : '' ?>"
+               <?= $txp_nppf_activo ? 'aria-current="page"' : '' ?>>
+                <span class="txp-ranking-subicon" aria-hidden="true">▸</span> NPPF
+            </a>
         </nav>
     </details>
     <a href="<?= $det_path ?>pulso.php" class="nav-item<?= $txp_pulso_activo ? ' active' : '' ?>"
        <?= $txp_pulso_activo ? 'aria-current="page"' : '' ?>>
         <span class="nav-icon">🕰️</span> Pulso
     </a>
+    <?php if ($txp_reto_buen_mes_visible): ?>
+    <a href="<?= $det_path ?>reto_buen_mes.php" class="nav-item<?= $txp_reto_buen_mes_activo ? ' active' : '' ?>"
+       <?= $txp_reto_buen_mes_activo ? 'aria-current="page"' : '' ?>>
+        <span class="nav-icon">🏅</span> Reto Buen Mes
+    </a>
+    <?php endif; ?>
     <?php if ($txp_addnetas_visible): ?>
     <!-- Adiciones Netas | acceso controlado también dentro de sus archivos PHP. -->
     <details class="txp-ranking-group" <?= $txp_addnetas_activo ? 'open' : '' ?>>
