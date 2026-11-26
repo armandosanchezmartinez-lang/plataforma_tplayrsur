@@ -6450,6 +6450,31 @@ require_once __DIR__.'/includes/motor_nppf.php';
 @media(max-width:1300px){.tx360-speedbody{grid-template-columns:1fr}.tx360-speedcanvas{height:250px}}
 @media(max-width:780px){.tx360-toprow{grid-template-columns:1fr!important}.tx360-threebars{gap:4px}.tx360-three-count{font-size:9px}.tx360-speedbody{grid-template-columns:1fr}}
 
+
+/* NPPF 360 v6: renglones 3 columnas y correspondencia visual con metas */
+.dashboard-analytics-grid.with-channel{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:13px!important;overflow:visible!important}
+.dashboard-analytics-grid.with-channel>.cumplimiento-panel:not(.cumplimiento-panel-canal){order:1}
+.dashboard-analytics-grid.with-channel>.tx-compare-distrito{order:2}
+.dashboard-analytics-grid.with-channel>.tx360-aligned-district{order:3}
+.dashboard-analytics-grid.with-channel>.cumplimiento-panel-canal{order:4}
+.dashboard-analytics-grid.with-channel>.tx-compare-canal{order:5}
+.dashboard-analytics-grid.with-channel>.tx360-aligned-channel{order:6}
+.dashboard-analytics-grid.with-channel>.tx360-aligned-card{margin:0;min-width:0;height:100%}
+.tx360-aligned-card{padding:15px 13px;display:flex;flex-direction:column}
+.tx360-compact-filters{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 12px}
+.tx360-compact-filters label{display:flex;gap:2px;align-items:center;font-size:10px;font-weight:850;background:#f2f5fc;border:1px solid #e2e7f5;border-radius:6px;padding:5px 4px;cursor:pointer;white-space:nowrap;color:#24405f}
+.tx360-compact-filters input{accent-color:#ed3f86;margin:0;width:12px;height:12px}
+.tx360-aligned-rows{display:flex;flex-direction:column;gap:10px}
+.tx360-aligned-row{min-width:0}.tx360-aligned-head{display:flex;justify-content:space-between;gap:5px;font-weight:900;font-size:11px;color:#172c4a;margin-bottom:4px}
+.tx360-aligned-head strong{font-size:11px}.tx360-aligned-count{font-size:10px;color:#5c6e89;font-weight:750;margin-top:3px}
+.tx360-aligned-foot{margin-top:auto;padding-top:12px;font-size:10px;color:#536783;font-weight:750}
+.tx360-aligned-track{background:#e9edf7;border-radius:999px;overflow:hidden;height:13px}.tx360-aligned-fill{height:100%;border-radius:999px;background:#f0448b}
+.tx360-aligned-fill.prevent{background:#efa51b}.tx360-speedentry{display:grid;grid-template-columns:10px minmax(64px,82px) minmax(60px,1fr) auto;gap:7px;align-items:center;padding:7px 0}
+.tx360-speedentry span:nth-child(2){flex:none}.tx360-speedentry small{font-size:10px}.tx360-speed-rate-track{height:12px;background:#e8edf7;border-radius:999px;overflow:hidden;min-width:55px}
+.tx360-speed-rate-fill{height:100%;background:#f0448b;border-radius:999px}
+.tx360-speedlegend{max-height:none;overflow-y:visible}
+@media(max-width:1180px){.dashboard-analytics-grid.with-channel{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(max-width:720px){.dashboard-analytics-grid.with-channel{grid-template-columns:1fr!important}}
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -6959,7 +6984,7 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
     <?php if ($mostrar_cumplimiento_canal): ?>
     <?php foreach (['distrito'=>[($tx_comp_es_director && !$tx_comp_fallback_distrito_anual) ? 'nivel inferior' : 'por distrito',$tx_comp_distritos],
                    'canal'=>['por canal de venta',$tx_comp_canales]] as $cmpTipo=>$cmpConfig): ?>
-    <div class="evo-card tx-compare-card" aria-label="Comparativo de instalaciones <?= htmlspecialchars($cmpConfig[0]) ?>">
+    <div class="evo-card tx-compare-card tx-compare-<?= $cmpTipo ?>" aria-label="Comparativo de instalaciones <?= htmlspecialchars($cmpConfig[0]) ?>">
         <div class="chart-title">Comparativo <?= htmlspecialchars($cmpConfig[0]) ?></div>
         <div class="tx-compare-subtitle">
             <?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?>
@@ -7000,6 +7025,30 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
         <?php endif; ?>
     </div>
     <?php endforeach; ?>
+    <?php if (!empty($tx360['ok'])): ?>
+    <div class="tx360-card tx360-aligned-card tx360-aligned-district" data-dimension="district">
+      <div class="tx360-card-title">NPPF por distrito</div>
+      <div class="tx360-subtitle">Calidad de venta · cosechas seleccionadas</div>
+      <div class="tx360-compact-filters" role="group" aria-label="Cosechas NPPF distrito">
+        <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 Preventivo'] as $k=>$l): ?>
+        <label><input type="checkbox" class="tx360-dimcheck" data-dim="district" value="<?= $k ?>" <?= in_array($k,['m4','m3','m2'],true)?'checked':'' ?>><?= $l ?></label>
+        <?php endforeach; ?>
+      </div>
+      <div class="tx360-aligned-rows" id="tx360RowsDistrict"></div>
+      <div class="tx360-aligned-foot">Orden fijo: alcance de meta · M1 preventivo separado</div>
+    </div>
+    <div class="tx360-card tx360-aligned-card tx360-aligned-channel" data-dimension="channel">
+      <div class="tx360-card-title">NPPF por canal de venta</div>
+      <div class="tx360-subtitle">Calidad de venta · cosechas seleccionadas</div>
+      <div class="tx360-compact-filters" role="group" aria-label="Cosechas NPPF canal">
+        <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 Preventivo'] as $k=>$l): ?>
+        <label><input type="checkbox" class="tx360-dimcheck" data-dim="channel" value="<?= $k ?>" <?= in_array($k,['m4','m3','m2'],true)?'checked':'' ?>><?= $l ?></label>
+        <?php endforeach; ?>
+      </div>
+      <div class="tx360-aligned-rows" id="tx360RowsChannel"></div>
+      <div class="tx360-aligned-foot">Orden fijo: alcance de meta · M1 preventivo separado</div>
+    </div>
+    <?php endif; ?>
     </div><!-- dashboard-analytics-grid: cumplimiento + comparativos -->
 <?php
 if (!function_exists('tx360_class_rate')) {
@@ -7057,10 +7106,6 @@ if (!function_exists('tx360_render_comparison_card')) {
         <?php if (!$tx360['ok']): ?>
             <div class="tx360-message">NPPF no disponible: <?= htmlspecialchars((string)$tx360['error'],ENT_QUOTES,'UTF-8') ?>. No se muestran cifras estimadas.</div>
         <?php else: ?>
-        <div class="tx360-toprow">
-            <?php tx360_render_comparison_card($tx360,'district','NPPF por distrito'); ?>
-            <?php tx360_render_comparison_card($tx360,'channel','NPPF por canal de venta'); ?>
-        </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
                 <div class="tx360-card-title">NPPF · Tendencia por mes de instalación (2026)</div>
@@ -7097,10 +7142,6 @@ if (!function_exists('tx360_render_comparison_card')) {
         <?php if (!$tx360['ok']): ?>
             <div class="tx360-message">NPPF no disponible: <?= htmlspecialchars((string)$tx360['error'],ENT_QUOTES,'UTF-8') ?>. No se muestran cifras estimadas.</div>
         <?php else: ?>
-        <div class="tx360-toprow">
-            <?php tx360_render_comparison_card($tx360,'district','NPPF por distrito'); ?>
-            <?php tx360_render_comparison_card($tx360,'channel','NPPF por canal de venta'); ?>
-        </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
                 <div class="tx360-card-title">NPPF · Tendencia por mes de instalación (2026)</div>
@@ -8684,6 +8725,41 @@ async function submitChangePassword() {
  const data=<?= json_encode($tx360, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?: 'null' ?>;
  if(!data || !data.ok)return;
  const fmt=(v)=>Number(v).toLocaleString('es-MX');
+
+ // NPPF v6: un solo indicador por dimensión. El orden se hereda de cumplimiento vs meta.
+ const dimOrders={
+  district:<?= json_encode(array_values(array_map(static fn($r)=>(string)($r['nombre']??''),$cumplimiento_inferior_items)),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG) ?: '[]' ?>,
+  channel:<?= json_encode(array_values(array_map(static fn($r)=>(string)($r['nombre']??''),$cumplimiento_canal_items)),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG) ?: '[]' ?>
+ };
+ const normalize=(x)=>String(x).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
+ function renderAligned(dim){
+   const target=document.getElementById(dim==='district'?'tx360RowsDistrict':'tx360RowsChannel');if(!target)return;
+   const selected=[...document.querySelectorAll('.tx360-dimcheck[data-dim="'+dim+'"]:checked')].map(e=>e.value);
+   const cohorts=data.cohortGroups||{};const acc={};
+   const periods=[...new Set(selected.map(v=>v==='prevent'?'m1':v))];
+   for(const period of periods)for(const [name,row] of Object.entries(cohorts[period]?.[dim]||{})){
+     const key=normalize(name);const r=acc[key]??={name,ins:0,cases:0,prevent:0};r.ins+=Number(row.ins||0);
+   }
+   for(const period of selected){const key=period==='prevent'?'m1':period;
+     for(const [name,row] of Object.entries(cohorts[key]?.[dim]||{})){
+       const r=acc[normalize(name)]??={name,ins:0,cases:0,prevent:0};
+       if(period==='prevent')r.prevent+=Number(row.prevent||0);else r.cases+=Number(row.nppf||0);
+     }
+   }
+   const ordered=[],seen=new Set();
+   // Exactamente el orden visual de las tarjetas de cumplimiento; no recalcular rankings.
+   for(const name of dimOrders[dim]||[]){const key=normalize(name);if(acc[key]){ordered.push(acc[key]);seen.add(key);}else{ordered.push({name,ins:0,cases:0,prevent:0,missing:true});seen.add(key);}}
+   for(const [key,row] of Object.entries(acc))if(!seen.has(key))ordered.push(row);
+   const usingPrevent=selected.includes('prevent');const max=Math.max(5,...ordered.map(r=>r.ins?100*(r.cases+r.prevent)/r.ins:0));
+   target.innerHTML=ordered.map(r=>{const cases=r.cases+r.prevent,pct=r.ins?100*cases/r.ins:null;
+     const label=pct===null?'N/D':pct.toFixed(2)+'%';const w=pct===null?0:Math.min(100,100*pct/max);
+     const safe=String(r.name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+     return '<div class="tx360-aligned-row"><div class="tx360-aligned-head"><span title="'+safe+'">'+safe+'</span><strong>'+label+'</strong></div><div class="tx360-aligned-track"><div class="tx360-aligned-fill '+(usingPrevent&&!selected.includes('m1')&&!selected.includes('m2')&&!selected.includes('m3')&&!selected.includes('m4')?'prevent':'')+'" style="width:'+w+'%"></div></div><div class="tx360-aligned-count">'+(r.missing?'Sin correspondencia en NPPF para este alcance':fmt(cases)+' casos / '+fmt(r.ins)+' INS'+(r.prevent?' · Prev. '+fmt(r.prevent):''))+'</div></div>';
+   }).join('')||'<div class="tx360-message">Sin datos para este alcance.</div>';
+ }
+ document.querySelectorAll('.tx360-dimcheck').forEach(el=>el.addEventListener('change',()=>renderAligned(el.dataset.dim)));
+ renderAligned('district');renderAligned('channel');
+
  const speedCanvas=document.getElementById('tx360Speed');
  let speedChart=null;
  const speedPalette=['#16b9db','#f0448b','#923cf0','#f1b532','#00a6ff','#19bda0','#686fd9','#e1784f','#9aa8bc'];
@@ -8706,7 +8782,7 @@ async function submitChangePassword() {
   const ordered=Object.entries(counts).map(([name,v])=>({name,...v,cases:v.nppf+v.prevent})).filter(r=>r.ins||r.cases).sort((a,b)=>b.cases-a.cases||b.ins-a.ins);
   const totalCases=ordered.reduce((n,r)=>n+r.cases,0),totalIns=ordered.reduce((n,r)=>n+r.ins,0);
   const legend=document.getElementById('tx360SpeedLegend');
-  legend.innerHTML=ordered.map((r,i)=>'<div class="tx360-speedentry"><span class="tx360-speeddot" style="background:'+speedPalette[i%speedPalette.length]+'"></span><span>'+r.name+'</span><small>'+fmt(r.cases)+' / '+fmt(r.ins)+' · '+(r.ins?(r.cases*100/r.ins).toFixed(2)+'%':'N/D')+'</small></div>').join('')||'<span>Selecciona al menos una cosecha.</span>';
+  legend.innerHTML=ordered.slice().sort((a,b)=>(a.ins?a.cases/a.ins:-1)-(b.ins?b.cases/b.ins:-1)||b.ins-a.ins).map((r)=>{const pct=r.ins?100*r.cases/r.ins:null;const width=pct===null?0:Math.min(100,pct*5);const color=speedPalette[ordered.indexOf(r)%speedPalette.length];return '<div class="tx360-speedentry"><span class="tx360-speeddot" style="background:'+color+'"></span><span>'+r.name+'</span><div class="tx360-speed-rate-track"><div class="tx360-speed-rate-fill" style="width:'+width+'%"></div></div><small>'+fmt(r.cases)+' / '+fmt(r.ins)+' · '+(pct===null?'N/D':pct.toFixed(2)+'%')+'</small></div>'}).join('')||'<span>Selecciona al menos una cosecha.</span>';
   document.getElementById('tx360SpeedSummary').textContent=totalCases?fmt(totalCases)+' casos · '+fmt(totalIns)+' instalaciones · '+(100*totalCases/totalIns).toFixed(2)+'% (selección). El anillo representa participación de casos, no tasa.':'Sin casos para la selección. No se muestra una participación artificial.';
   if(speedChart)speedChart.destroy();
   speedChart=new Chart(speedCanvas,{type:'doughnut',data:{labels:ordered.filter(r=>r.cases).map(r=>r.name),datasets:[{data:ordered.filter(r=>r.cases).map(r=>r.cases),backgroundColor:ordered.filter(r=>r.cases).map(r=>speedPalette[ordered.indexOf(r)%speedPalette.length]),borderColor:'#fff',borderWidth:2,hoverOffset:5}]},options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx)=>ctx.label+': '+fmt(ctx.raw)+' casos ('+(totalCases?((100*ctx.raw/totalCases).toFixed(1)):0)+'% de casos)'}}}}});
