@@ -15,12 +15,13 @@ $current_page = $current_page ?? '';
 // El nivel principal permanece 'ranking' en ambos módulos. Identificamos el
 // archivo ejecutado para marcar SOLO el submenú activo, sin cambiar sus PHP.
 $txp_script_actual = basename((string)($_SERVER['SCRIPT_NAME'] ?? ''));
-$txp_ranking_paginas = ['ranking_productividad.php', 'ranking_comercial.php', 'mix_comercial.php'];
+$txp_ranking_paginas = ['ranking_productividad.php', 'ranking_comercial.php', 'mix_comercial.php', 'ranking_nppf.php'];
 $txp_ranking_activo = $current_page === 'ranking'
     || in_array($txp_script_actual, $txp_ranking_paginas, true);
 $txp_ranking_productividad_activo = $txp_script_actual === 'ranking_productividad.php';
 $txp_ranking_comercial_activo = $txp_script_actual === 'ranking_comercial.php';
 $txp_mix_velocidad_activo = $txp_script_actual === 'mix_comercial.php';
+$txp_nppf_activo = $txp_script_actual === 'ranking_nppf.php';
 $txp_pulso_activo = $txp_script_actual === 'pulso.php' || $current_page === 'pulso';
 
 // Reto Buen Mes: acceso alineado con los seis perfiles autorizados del tablero.
@@ -149,6 +150,11 @@ function txp_nav_active($page, $current_page) {
                class="txp-ranking-subitem<?= $txp_mix_velocidad_activo ? ' active' : '' ?>"
                <?= $txp_mix_velocidad_activo ? 'aria-current="page"' : '' ?>>
                 ▸ Mix por Velocidad
+            </a>
+            <a href="<?= $det_path ?>ranking_nppf.php?periodo=mensual"
+               class="txp-ranking-subitem<?= $txp_nppf_activo ? ' active' : '' ?>"
+               <?= $txp_nppf_activo ? 'aria-current="page"' : '' ?>>
+                <span class="txp-ranking-subicon" aria-hidden="true">▸</span> NPPF
             </a>
         </nav>
     </details>
