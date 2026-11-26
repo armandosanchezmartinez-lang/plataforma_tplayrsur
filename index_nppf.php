@@ -6412,6 +6412,23 @@ require_once __DIR__.'/includes/motor_nppf.php';
 @media(min-width:1501px){.tx360-bottomrow{grid-template-columns:minmax(0,1.7fr) repeat(3,minmax(0,1fr))}}
 
 
+/* NPPF 360 v4 · distribución 50/50, tendencia rosa frontal y paquetes homogéneos */
+.tx360-bottomrow{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;align-items:stretch}
+.tx360-trendcard,.tx360-package-comparison{min-width:0;grid-column:auto!important}
+.tx360-trendwrap{height:350px}
+.tx360-package-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.tx360-package-column{min-width:0}
+.tx360-package-colhead{border-bottom:2px solid #dce6f4;padding:7px 0 9px;font-size:12px;font-weight:900;color:#172a47;min-height:42px}
+.tx360-package-item{min-width:0;border-bottom:1px solid #eef2f8;padding:9px 0 7px}
+.tx360-package-name{font-size:10px;font-weight:850;color:#243654;line-height:1.35;min-height:32px;overflow-wrap:anywhere}
+.tx360-package-rate{display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-top:3px}
+.tx360-package-rate strong{font-size:12px;font-weight:900;white-space:nowrap}
+.tx360-package-rate>span{font-size:10px;font-weight:750;color:#536783;white-space:nowrap}
+.tx360-package-item .tx360-track{height:13px;margin:5px 0 0}
+.tx360-package-legend{margin-top:12px;color:#526681;font-size:10.5px;font-weight:650}
+@media(max-width:1100px){.tx360-bottomrow{grid-template-columns:1fr!important}.tx360-package-columns{gap:8px}}
+@media(max-width:580px){.tx360-package-columns{grid-template-columns:1fr}.tx360-package-colhead{min-height:0}.tx360-trendwrap{height:310px}}
+
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -7006,31 +7023,34 @@ if (!function_exists('tx360_render_list_card')) {
         echo '</div></div>';
     }
 }
-if (!function_exists('tx360_render_package_card')) {
-    function tx360_render_package_card(array $tx360, string $pkgKey, string $title, string $field='nppf'): void {
-        $rows = $tx360['packages'][$pkgKey] ?? [];
-        $subtitles = [
-            'older' => 'Mayor % NPPF por paquete · cosechas M4–M2',
-            'm1' => 'Mayor % NPPF por paquete · M1 confirmado',
-            'prevent' => 'Mayor % preventivo por paquete · M1'
-        ];
-        echo '<div class="tx360-card tx360-packagecard">';
-        echo '<div class="tx360-card-title">'.htmlspecialchars($title,ENT_QUOTES,'UTF-8').'</div>';
-        echo '<div class="tx360-subtitle">'.htmlspecialchars($subtitles[$pkgKey] ?? '',ENT_QUOTES,'UTF-8').'</div>';
-        if(!$rows){ echo '<div class="tx360-message">Sin casos para mostrar.</div></div>'; return; }
-        echo '<div class="tx360-items">';
-        foreach($rows as $name=>$row){
-            $num = (float)($row[$field] ?? 0);
-            $pct = ((float)$row['ins'] > 0) ? round(100 * $num / (float)$row['ins'], 2) : null;
-            $class = tx360_class_rate($pct);
-            $bar = $pct===null ? 0 : min(100, $pct * 6);
-            echo '<div class="tx360-item">';
-            echo '<div class="tx360-line"><strong title="'.htmlspecialchars((string)$name,ENT_QUOTES,'UTF-8').'">'.htmlspecialchars((string)$name,ENT_QUOTES,'UTF-8').'</strong><span class="tx360-rate '.$class.'">'.($pct===null?'N/D':number_format((float)$pct,2).'%').'</span></div>';
-            echo '<div class="tx360-track"><div class="tx360-fill '.$class.'" style="width:'.$bar.'%"></div></div>';
-            echo '<div class="tx360-line tx360-mini"><span>'.number_format($num).' / '.number_format((float)$row['ins']).' instalaciones</span><span>'.($field==='prevent'?'Preventivo':'NPPF').'</span></div>';
+if (!function_exists('tx360_render_packages_comparison')) {
+    function tx360_render_packages_comparison(array $tx360): void {
+        $rank = $tx360['package_rank'] ?? array_slice(array_keys($tx360['packages']['older'] ?? []),0,8);
+        $esc = static fn($s) => htmlspecialchars((string)$s, ENT_QUOTES,'UTF-8');
+        echo '<div class="tx360-card tx360-package-comparison">';
+        echo '<div class="tx360-card-title">NPPF · Paquetes de mayor volumen</div>';
+        echo '<div class="tx360-subtitle">Ordenados por instalaciones M4–M2, de mayor a menor. Mismo orden para comparar M1 y Preventivo.</div>';
+        if (!$rank) { echo '<div class="tx360-message">Sin instalaciones por paquete para las cosechas seleccionadas.</div></div>'; return; }
+        echo '<div class="tx360-package-columns">';
+        foreach (['older'=>'M4–M2 confirmado','m1'=>'M1 confirmado','prevent'=>'M1 preventivo'] as $key=>$title) {
+            $field = $key==='prevent'?'prevent':'nppf';
+            echo '<div class="tx360-package-column"><div class="tx360-package-colhead">'.$esc($title).'</div>';
+            foreach($rank as $name) {
+                $row=$tx360['packages'][$key][$name] ?? ['ins'=>0,'nppf'=>0,'prevent'=>0];
+                $ins=(int)($row['ins']??0);$cases=(int)($row[$field]??0);
+                $pct=$ins>0?round(100*$cases/$ins,2):null;
+                $bar=$pct===null?0:min(100,$pct*6);
+                $cls=$key==='prevent'?'tx360-prevent-fill':tx360_class_rate($pct);
+                $rate=$pct===null?'N/D':number_format($pct,2).'%';
+                echo '<div class="tx360-package-item">';
+                echo '<div class="tx360-package-name" title="'.$esc($name).'">'.$esc($name).'</div>';
+                echo '<div class="tx360-package-rate"><strong>'.($key==='prevent'?'<span class="tx360-prevent-label">'.$rate.'</span>':'<span class="tx360-rate '. $cls .'">'.$rate.'</span>').'</strong><span>'.number_format($cases).' / '.number_format($ins).' INS</span></div>';
+                echo '<div class="tx360-track"><div class="tx360-fill '.$cls.'" style="width:'.$bar.'%"></div></div>';
+                echo '</div>';
+            }
             echo '</div>';
         }
-        echo '</div></div>';
+        echo '</div><div class="tx360-package-legend">Porcentaje = casos de la cosecha / instalaciones del mismo paquete · Preventivo no se suma a NPPF.</div></div>';
     }
 }
 ?>
@@ -7057,9 +7077,7 @@ if (!function_exists('tx360_render_package_card')) {
                 <?php if(!empty($tx360['m1_month'])): ?><div class="tx360-kicker">M1: <?= htmlspecialchars((new DateTimeImmutable($tx360['m1_month'].'-01'))->format('m/Y'),ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
                 <div class="tx360-note">El preventivo se señala solo con un punto porque no tiene serie histórica comparable. El resaltado identifica la cosecha M1.</div>
             </div>
-            <?php tx360_render_package_card($tx360,'older','NPPF · Paquetes · M4–M2','nppf'); ?>
-            <?php tx360_render_package_card($tx360,'m1','NPPF · Paquetes · M1','nppf'); ?>
-            <?php tx360_render_package_card($tx360,'prevent','NPPF · Paquetes · M1 preventivo','prevent'); ?>
+            <?php tx360_render_packages_comparison($tx360); ?>
         </div>
         <div class="tx360-foot">M4–M2: NPPF de primera factura aún pendiente, sin M1 · M1 preventivo se informa por separado y nunca se suma a la tasa NPPF. Reversos incluidos. Los datos pendientes reflejan el último snapshot NPPF, no pagos posteriores.</div>
         <?php endif; ?>
@@ -7091,9 +7109,7 @@ if (!function_exists('tx360_render_package_card')) {
                 <?php if(!empty($tx360['m1_month'])): ?><div class="tx360-kicker">M1: <?= htmlspecialchars((new DateTimeImmutable($tx360['m1_month'].'-01'))->format('m/Y'),ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
                 <div class="tx360-note">El preventivo se señala solo con un punto porque no tiene serie histórica comparable. El resaltado identifica la cosecha M1.</div>
             </div>
-            <?php tx360_render_package_card($tx360,'older','NPPF · Paquetes · M4–M2','nppf'); ?>
-            <?php tx360_render_package_card($tx360,'m1','NPPF · Paquetes · M1','nppf'); ?>
-            <?php tx360_render_package_card($tx360,'prevent','NPPF · Paquetes · M1 preventivo','prevent'); ?>
+            <?php tx360_render_packages_comparison($tx360); ?>
         </div>
         <div class="tx360-foot">M4–M2: NPPF de primera factura aún pendiente, sin M1 · M1 preventivo se informa por separado y nunca se suma a la tasa NPPF. Reversos incluidos. Los datos pendientes reflejan el último snapshot NPPF, no pagos posteriores.</div>
         <?php endif; ?>
@@ -8668,9 +8684,9 @@ async function submitChangePassword() {
   const preventPts=values.map((v,i)=> i===m1Index && v.ins && v.prevent ? +(100*v.prevent/v.ins).toFixed(2) : null);
   const highlightPlugin={id:'tx360M1Highlight',beforeDatasetsDraw(chart,args,opts){if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const meta=x.getPixelForValue(m1Index);const prev=x.getPixelForValue(Math.max(0,m1Index-0.5));const next=x.getPixelForValue(Math.min(months.length-1,m1Index+0.5));ctx.save();ctx.fillStyle='rgba(246,218,118,0.16)';ctx.fillRect(prev,chartArea.top,next-prev,chartArea.bottom-chartArea.top);ctx.restore();},afterDraw(chart,args,opts){if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const xPos=x.getPixelForValue(m1Index);ctx.save();ctx.fillStyle='#8a6a00';ctx.font='700 10px Arial';ctx.textAlign='center';ctx.fillText('M1',xPos,chartArea.top+12);ctx.restore();}};
   new Chart(trend,{type:'bar',data:{labels:monthLabels,datasets:[
-   {type:'bar',label:'Instalaciones',data:installData,backgroundColor:'#0ba5ef',borderColor:'#0289d5',borderWidth:0,yAxisID:'yIns',borderRadius:4,maxBarThickness:54,categoryPercentage:.82,barPercentage:.88},
-   {type:'line',label:'NPPF confirmado (%)',data:confirmedPct,borderColor:'#e83483',backgroundColor:'rgba(243,41,127,.14)',tension:.25,fill:'origin',borderWidth:3,pointRadius:4,pointHoverRadius:6,yAxisID:'yPct'},
-   {type:'line',label:'M1 preventivo (%)',data:preventPts,borderColor:'#f3af25',backgroundColor:'#f3af25',showLine:false,pointRadius:5,pointHoverRadius:6,yAxisID:'yPct'}
+   {type:'bar',label:'Instalaciones',order:10,data:installData,backgroundColor:'rgba(11,165,239,.68)',borderColor:'#0289d5',borderWidth:0,yAxisID:'yIns',borderRadius:4,maxBarThickness:54,categoryPercentage:.82,barPercentage:.88},
+   {type:'line',label:'NPPF confirmado (%)',order:1,data:confirmedPct,borderColor:'#f01879',backgroundColor:'rgba(243,41,127,.25)',tension:.3,fill:'origin',borderWidth:4,pointRadius:4,pointHoverRadius:7,yAxisID:'yPct'},
+   {type:'line',label:'M1 preventivo (%)',order:0,data:preventPts,borderColor:'#f3af25',backgroundColor:'#f3af25',showLine:false,pointRadius:5,pointHoverRadius:6,yAxisID:'yPct'}
   ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:13,color:'#233756',font:{size:12,weight:'bold'}}},tooltip:{callbacks:{afterBody:(items)=>{const idx=items[0].dataIndex;const v=values[idx]||{};return 'NPPF: '+fmt(v.nppf||0)+' · Prev.: '+fmt(v.prevent||0)+' · INS: '+fmt(v.ins||0);}}}},scales:{yIns:{beginAtZero:true,position:'left',grid:{drawBorder:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>fmt(v)}},yPct:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>v+'%'}},x:{ticks:{color:'#344963',font:{size:11,weight:'bold'},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},plugins:[highlightPlugin]});
  }
 })();
