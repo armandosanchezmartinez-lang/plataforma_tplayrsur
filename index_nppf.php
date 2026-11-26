@@ -6378,6 +6378,40 @@ require_once __DIR__.'/includes/motor_nppf.php';
 @media(max-width:1320px){.tx360-toprow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.tx360-toprow,.tx360-bottomrow{grid-template-columns:1fr}.tx360-heading{align-items:flex-start;flex-direction:column}}
 
+/* NPPF 360 v3: paridad visual con cards de Cumplimiento y barras M1 + Preventivo */
+.tx360-heading strong{font-size:16px;font-weight:900}
+.tx360-heading span,.tx360-heading small{font-size:11px;color:#50627e;font-weight:650}
+.tx360-card{padding:18px 16px 16px;border-radius:18px}
+.tx360-card-title{font-size:13px;font-weight:900;color:#142541}
+.tx360-subtitle{font-size:10.5px;color:#536783;line-height:1.45;min-height:0}
+.tx360-total{font-size:12px;font-weight:750;color:#344662;line-height:1.5;margin:9px 0 13px}
+.tx360-total strong{font-size:13px;font-weight:900;color:#152945}
+.tx360-total em{font-size:11px;font-weight:850}
+.tx360-items{gap:12px}
+.tx360-line{font-size:12px;color:#172a47;font-weight:750}
+.tx360-line strong{font-size:11px;font-weight:900;max-width:77%;white-space:normal;line-height:1.3;overflow-wrap:anywhere}
+.tx360-rate{font-size:12px;font-weight:900}
+.tx360-track{height:17px;margin:6px 0 5px;background:#e8edf7}
+.tx360-fill{min-height:100%}
+.tx360-mini{font-size:10.5px;color:#526681;font-weight:700}
+.tx360-mini span{line-height:1.35}
+.tx360-packagecard .tx360-items{gap:11px}
+.tx360-packagecard .tx360-track{height:15px}
+.tx360-packagecard .tx360-line strong{font-size:11px}
+.tx360-trendwrap{height:305px}
+.tx360-trendcard .tx360-card-title{font-size:13px}
+.tx360-kicker,.tx360-note,.tx360-foot{font-size:10.5px;font-weight:650}
+.tx360-m1-bars{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:7px 0 5px}
+.tx360-m1-col{min-width:0}
+.tx360-m1-label{display:flex;justify-content:space-between;align-items:center;gap:3px;font-size:10px;font-weight:850;color:#31445f;margin-bottom:4px}
+.tx360-m1-label b{font-size:11px;font-weight:900;white-space:nowrap}
+.tx360-m1-col .tx360-track{margin:0;height:11px}
+.tx360-prevent-fill{background:linear-gradient(90deg,#f8ca45,#efa51b)!important}
+.tx360-prevent-label{color:#a56d00}
+.tx360-message{font-size:11px;font-weight:700}
+@media(min-width:1501px){.tx360-bottomrow{grid-template-columns:minmax(0,1.7fr) repeat(3,minmax(0,1fr))}}
+
+
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -6942,25 +6976,31 @@ if (!function_exists('tx360_render_list_card')) {
     function tx360_render_list_card(array $tx360, string $group, string $dimension, string $title): void {
         $rows = $tx360['groups'][$group][$dimension] ?? [];
         $groupTotal = $tx360['totals'][$group] ?? ['nppf'=>0,'ins'=>0,'prevent'=>0];
+        $esc=static fn($v)=>htmlspecialchars((string)$v,ENT_QUOTES,'UTF-8');
         echo '<div class="tx360-card">';
-        echo '<div class="tx360-card-title">'.htmlspecialchars($title,ENT_QUOTES,'UTF-8').'</div>';
-        $subtitle = $group==='older'
-            ? 'Cosechas '.$tx360['cohortLabels']['m4'].' / '.$tx360['cohortLabels']['m3'].' / '.$tx360['cohortLabels']['m2']
-            : 'Cosecha '.$tx360['cohortLabels']['m1'];
-        echo '<div class="tx360-subtitle">'.htmlspecialchars($subtitle,ENT_QUOTES,'UTF-8').'</div>';
+        echo '<div class="tx360-card-title">'.$esc($title).'</div>';
+        $subtitle = $group==='older' ? 'Cosechas '.implode(' / ',array_map(static fn($m)=>$tx360['cohortLabels'][$m]??'N/D',['m4','m3','m2'])) : 'Cosecha '.($tx360['cohortLabels']['m1']??'N/D');
+        echo '<div class="tx360-subtitle">'.$esc($subtitle).'</div>';
         echo '<div class="tx360-total">NPPF <strong>'.number_format((float)$groupTotal['nppf']).' / '.number_format((float)$groupTotal['ins']).'</strong> · '.(tx360_rate($groupTotal)===null?'N/D':number_format((float)tx360_rate($groupTotal),2).'%');
-        if($group==='m1') echo ' · <em>Preventivo '.number_format((float)$groupTotal['prevent']).'</em>';
-        echo '</div>';
-        echo '<div class="tx360-items">';
+        if($group==='m1')echo ' · <em>Preventivo '.number_format((float)$groupTotal['prevent']).'</em>';
+        echo '</div><div class="tx360-items">';
         foreach($rows as $name=>$row){
-            $pct = tx360_rate($row);
-            $class = tx360_class_rate($pct);
-            $bar = $pct===null ? 0 : min(100, $pct * 6);
+            $pct=tx360_rate($row);$class=tx360_class_rate($pct);
+            $bar=$pct===null?0:min(100,$pct*6);
             echo '<div class="tx360-item">';
-            echo '<div class="tx360-line"><strong title="'.htmlspecialchars((string)$name,ENT_QUOTES,'UTF-8').'">'.htmlspecialchars((string)$name,ENT_QUOTES,'UTF-8').'</strong><span class="tx360-rate '.$class.'">'.($pct===null?'N/D':number_format((float)$pct,2).'%').'</span></div>';
-            echo '<div class="tx360-track"><div class="tx360-fill '.$class.'" style="width:'.$bar.'%"></div></div>';
+            echo '<div class="tx360-line"><strong title="'.$esc($name).'">'.$esc($name).'</strong>';
+            if($group==='older')echo '<span class="tx360-rate '.$class.'">'.($pct===null?'N/D':number_format($pct,2).'%').'</span>';
+            echo '</div>';
+            if($group==='m1'){
+                $prevPct=($row['ins']??0)>0?100*(float)($row['prevent']??0)/(float)$row['ins']:null;
+                $prevBar=$prevPct===null?0:min(100,$prevPct*6);
+                echo '<div class="tx360-m1-bars">';
+                echo '<div class="tx360-m1-col"><div class="tx360-m1-label"><span>M1</span><b class="tx360-rate '.$class.'">'.($pct===null?'N/D':number_format($pct,2).'%').'</b></div><div class="tx360-track"><div class="tx360-fill '.$class.'" style="width:'.$bar.'%"></div></div></div>';
+                echo '<div class="tx360-m1-col"><div class="tx360-m1-label"><span>Preventivo</span><b class="tx360-prevent-label">'.($prevPct===null?'N/D':number_format($prevPct,2).'%').'</b></div><div class="tx360-track"><div class="tx360-fill tx360-prevent-fill" style="width:'.$prevBar.'%"></div></div></div>';
+                echo '</div>';
+            }else echo '<div class="tx360-track"><div class="tx360-fill '.$class.'" style="width:'.$bar.'%"></div></div>';
             echo '<div class="tx360-line tx360-mini"><span>'.number_format((float)$row['nppf']).' / '.number_format((float)$row['ins']).' instalaciones</span>';
-            if($group==='m1') echo '<span>Prev. '.number_format((float)$row['prevent']).'</span>';
+            if($group==='m1')echo '<span>Prev. '.number_format((float)$row['prevent']).'</span>';
             echo '</div></div>';
         }
         echo '</div></div>';
@@ -7006,8 +7046,8 @@ if (!function_exists('tx360_render_package_card')) {
         <div class="tx360-toprow">
             <?php tx360_render_list_card($tx360,'older','district','NPPF por distrito · M4–M2'); ?>
             <?php tx360_render_list_card($tx360,'older','channel','NPPF por canal · M4–M2'); ?>
-            <?php tx360_render_list_card($tx360,'m1','district','NPPF por distrito · M1'); ?>
-            <?php tx360_render_list_card($tx360,'m1','channel','NPPF por canal · M1'); ?>
+            <?php tx360_render_list_card($tx360,'m1','district','NPPF por distrito · M1 + Preventivo'); ?>
+            <?php tx360_render_list_card($tx360,'m1','channel','NPPF por canal · M1 + Preventivo'); ?>
         </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
@@ -7040,8 +7080,8 @@ if (!function_exists('tx360_render_package_card')) {
         <div class="tx360-toprow">
             <?php tx360_render_list_card($tx360,'older','district','NPPF por distrito · M4–M2'); ?>
             <?php tx360_render_list_card($tx360,'older','channel','NPPF por canal · M4–M2'); ?>
-            <?php tx360_render_list_card($tx360,'m1','district','NPPF por distrito · M1'); ?>
-            <?php tx360_render_list_card($tx360,'m1','channel','NPPF por canal · M1'); ?>
+            <?php tx360_render_list_card($tx360,'m1','district','NPPF por distrito · M1 + Preventivo'); ?>
+            <?php tx360_render_list_card($tx360,'m1','channel','NPPF por canal · M1 + Preventivo'); ?>
         </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
@@ -8628,10 +8668,10 @@ async function submitChangePassword() {
   const preventPts=values.map((v,i)=> i===m1Index && v.ins && v.prevent ? +(100*v.prevent/v.ins).toFixed(2) : null);
   const highlightPlugin={id:'tx360M1Highlight',beforeDatasetsDraw(chart,args,opts){if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const meta=x.getPixelForValue(m1Index);const prev=x.getPixelForValue(Math.max(0,m1Index-0.5));const next=x.getPixelForValue(Math.min(months.length-1,m1Index+0.5));ctx.save();ctx.fillStyle='rgba(246,218,118,0.16)';ctx.fillRect(prev,chartArea.top,next-prev,chartArea.bottom-chartArea.top);ctx.restore();},afterDraw(chart,args,opts){if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const xPos=x.getPixelForValue(m1Index);ctx.save();ctx.fillStyle='#8a6a00';ctx.font='700 10px Arial';ctx.textAlign='center';ctx.fillText('M1',xPos,chartArea.top+12);ctx.restore();}};
   new Chart(trend,{type:'bar',data:{labels:monthLabels,datasets:[
-   {type:'bar',label:'Instalaciones',data:installData,backgroundColor:'rgba(9,167,237,.20)',borderColor:'rgba(9,167,237,.55)',borderWidth:1,yAxisID:'yIns',borderRadius:6,maxBarThickness:34},
-   {type:'line',label:'NPPF confirmado (%)',data:confirmedPct,borderColor:'#e83483',backgroundColor:'rgba(232,52,131,.08)',tension:.25,fill:false,pointRadius:3,pointHoverRadius:4,yAxisID:'yPct'},
+   {type:'bar',label:'Instalaciones',data:installData,backgroundColor:'#0ba5ef',borderColor:'#0289d5',borderWidth:0,yAxisID:'yIns',borderRadius:4,maxBarThickness:54,categoryPercentage:.82,barPercentage:.88},
+   {type:'line',label:'NPPF confirmado (%)',data:confirmedPct,borderColor:'#e83483',backgroundColor:'rgba(243,41,127,.14)',tension:.25,fill:'origin',borderWidth:3,pointRadius:4,pointHoverRadius:6,yAxisID:'yPct'},
    {type:'line',label:'M1 preventivo (%)',data:preventPts,borderColor:'#f3af25',backgroundColor:'#f3af25',showLine:false,pointRadius:5,pointHoverRadius:6,yAxisID:'yPct'}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10}}},tooltip:{callbacks:{afterBody:(items)=>{const idx=items[0].dataIndex;const v=values[idx]||{};return 'NPPF: '+fmt(v.nppf||0)+' · Prev.: '+fmt(v.prevent||0)+' · INS: '+fmt(v.ins||0);}}}},scales:{yIns:{beginAtZero:true,position:'left',grid:{drawBorder:false},ticks:{callback:v=>fmt(v)}},yPct:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},ticks:{callback:v=>v+'%'}},x:{ticks:{maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},plugins:[highlightPlugin]});
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:13,color:'#233756',font:{size:12,weight:'bold'}}},tooltip:{callbacks:{afterBody:(items)=>{const idx=items[0].dataIndex;const v=values[idx]||{};return 'NPPF: '+fmt(v.nppf||0)+' · Prev.: '+fmt(v.prevent||0)+' · INS: '+fmt(v.ins||0);}}}},scales:{yIns:{beginAtZero:true,position:'left',grid:{drawBorder:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>fmt(v)}},yPct:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>v+'%'}},x:{ticks:{color:'#344963',font:{size:11,weight:'bold'},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},plugins:[highlightPlugin]});
  }
 })();
 </script>
