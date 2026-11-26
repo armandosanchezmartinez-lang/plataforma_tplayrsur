@@ -148,8 +148,10 @@ try {
         if($class==='prevent')$tx360['totals'][$group]['prevent']++;
         tx360_bucket($tx360['groups'][$group]['district'],$district,$class);
         tx360_bucket($tx360['groups'][$group]['channel'],$channel,$class);
-        if($class==='nppf')$tx360['pies'][$group][$plan]=($tx360['pies'][$group][$plan]??0)+1;
-        if($class==='prevent')$tx360['pies']['prevent'][$plan]=($tx360['pies']['prevent'][$plan]??0)+1;
+        tx360_bucket($tx360['packages'][$group],$plan,$class);
+        if($group==='m1') tx360_bucket($tx360['packages']['prevent'],$plan,$class);
+        if($class==='nppf')$tx360['caseCounts'][$group][$plan]=($tx360['caseCounts'][$group][$plan]??0)+1;
+        if($class==='prevent')$tx360['caseCounts']['prevent'][$plan]=($tx360['caseCounts']['prevent'][$plan]??0)+1;
     };
     if($hcMode){
         // La pertenencia al equipo proviene ÚNICAMENTE de Motor HC (ya filtrado en INDEX).
@@ -185,7 +187,13 @@ try {
     $tx360['groups']['older']['channel']  = tx360_sort_asc_rate($tx360['groups']['older']['channel'], 'nppf');
     $tx360['groups']['m1']['district']    = tx360_reorder_by_keys($tx360['groups']['m1']['district'], array_keys($tx360['groups']['older']['district']), 'nppf');
     $tx360['groups']['m1']['channel']     = tx360_reorder_by_keys($tx360['groups']['m1']['channel'], array_keys($tx360['groups']['older']['channel']), 'nppf');
-    foreach(['older','m1'] as $pkgGroup) $tx360['packages'][$pkgGroup] = tx360_sort_asc_rate($tx360['packages'][$pkgGroup], 'nppf');
+    foreach(['older','m1'] as $pkgGroup) {
+        $tx360['packages'][$pkgGroup] = array_filter($tx360['packages'][$pkgGroup],static fn($r) => ($r['nppf']??0)>0);
+        $tx360['packages'][$pkgGroup] = tx360_sort_asc_rate($tx360['packages'][$pkgGroup], 'nppf');
+        $tx360['packages'][$pkgGroup] = array_slice($tx360['packages'][$pkgGroup],-7,null,true);
+    }
+    $tx360['packages']['prevent'] = array_filter($tx360['packages']['prevent'],static fn($r) => ($r['prevent']??0)>0);
     $tx360['packages']['prevent'] = tx360_sort_asc_rate($tx360['packages']['prevent'], 'prevent');
+    $tx360['packages']['prevent'] = array_slice($tx360['packages']['prevent'],-7,null,true);
     $tx360['ok']=true;
 } catch(Throwable $ex){$tx360['error']=$ex->getMessage();error_log('INDEX NPPF 360: '.$tx360['error']);}
