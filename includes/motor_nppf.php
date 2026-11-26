@@ -5,8 +5,8 @@
  * NO modifica motor_hc ni tablas NPPF. El universo se rotula según su fuente.
  */
 $tx360 = ['ok'=>false,'error'=>null,'cut'=>null,'eval'=>date('Y-m-d'),
-    'groups'=>['older'=>[],'m1'=>[]],'trend'=>[],'pies'=>[],'cohortLabels'=>[],
-    'universe'=>'','totals'=>[]];
+    'groups'=>['older'=>[],'m1'=>[]],'trend'=>[],'packages'=>['older'=>[],'m1'=>[],'prevent'=>[]],'cohortLabels'=>[],
+    'universe'=>'','totals'=>[],'m1_month'=>null];
 if (!function_exists('tx360_norm_account')) {
 function tx360_norm_account($raw): string {
     $v = preg_replace('/\D/u','',(string)$raw) ?? '';
@@ -39,11 +39,24 @@ function tx360_bucket(array &$items,string $key,string $class): void {
     if($class==='nppf')$items[$key]['nppf']++;
     if($class==='prevent')$items[$key]['prevent']++;
 }
-function tx360_top(array $data,int $limit=7): array {
-    uasort($data,static fn($a,$b)=>($b['nppf']+$b['prevent'])<=>($a['nppf']+$a['prevent']));
-    $first=array_slice($data,0,$limit,true); $remaining=array_slice($data,$limit,null,true);
-    if($remaining){$other=tx360_metric();foreach($remaining as $v)foreach($other as $k=>$_)$other[$k]+=$v[$k];$first['OTROS']=$other;}
-    return $first;
+function tx360_sort_asc_rate(array $data, string $field='nppf'): array {
+    uasort($data, static function($a,$b) use($field){
+        $ra = (($a['ins']??0) > 0) ? (($a[$field]??0) / $a['ins']) : INF;
+        $rb = (($b['ins']??0) > 0) ? (($b[$field]??0) / $b['ins']) : INF;
+        if ($ra == $rb) return ($a['ins']??0) <=> ($b['ins']??0);
+        return $ra <=> $rb;
+    });
+    return $data;
+}
+function tx360_reorder_by_keys(array $data, array $keys, string $field='nppf'): array {
+    $ordered = [];
+    foreach ($keys as $k) if (isset($data[$k])) $ordered[$k] = $data[$k];
+    $remaining = array_diff_key($data, $ordered);
+    if ($remaining) {
+        $remaining = tx360_sort_asc_rate($remaining, $field);
+        foreach ($remaining as $k=>$v) $ordered[$k] = $v;
+    }
+    return $ordered;
 }
 }
 try {
@@ -77,6 +90,7 @@ try {
     $tx360['cohortLabels']=$labels;
     $m1First=$cohorts['m1']?min(array_keys($cohorts['m1'])):$refStart;
     $m1Last=$cohorts['m1']?max(array_keys($cohorts['m1'])):$refEnd;
+    $tx360['m1_month']=substr($m1First,0,7);
     $start='2026-01-01';
     $end=max(array_keys($byDate));
     $raw=[];
@@ -89,7 +103,7 @@ try {
         $raw[$account][$act]=$r; // duplicados de snapshot: una cuenta por fecha
     }$s->close();
     $tx360['groups']=['older'=>['district'=>[],'channel'=>[]],'m1'=>['district'=>[],'channel'=>[]]];
-    $tx360['pies']=['older'=>[],'m1'=>[],'prevent'=>[]];
+    $tx360['packages']=['older'=>[],'m1'=>[],'prevent'=>[]];
     $tx360['trend']=tx360_months($start,$m1Last);
     $tx360['totals']=['older'=>tx360_metric(),'m1'=>tx360_metric()];
     // Director/Admin: todos los canales, como KPI superior por distrito.
@@ -166,9 +180,12 @@ try {
         while($e=$rr->fetch_assoc())$consume($e['cuenta'],$e['fecha'],$e['distrito'],$e['origen_prospecto'],$e['plan']);
         $q->close();
     }
-    foreach(['older','m1'] as $group){
-        foreach(['district','channel'] as $dimension)$tx360['groups'][$group][$dimension]=tx360_top($tx360['groups'][$group][$dimension],$dimension==='district'?10:7);
-    }
-    foreach($tx360['pies'] as &$pie){arsort($pie);$first=array_slice($pie,0,6,true);$others=array_sum(array_slice($pie,6));if($others>0)$first['OTROS']=$others;$pie=$first;}unset($pie);
+    // Orden ejecutivo: M4–M2 de menor a mayor NPPF; M1 hereda el orden de M4–M2.
+    $tx360['groups']['older']['district'] = tx360_sort_asc_rate($tx360['groups']['older']['district'], 'nppf');
+    $tx360['groups']['older']['channel']  = tx360_sort_asc_rate($tx360['groups']['older']['channel'], 'nppf');
+    $tx360['groups']['m1']['district']    = tx360_reorder_by_keys($tx360['groups']['m1']['district'], array_keys($tx360['groups']['older']['district']), 'nppf');
+    $tx360['groups']['m1']['channel']     = tx360_reorder_by_keys($tx360['groups']['m1']['channel'], array_keys($tx360['groups']['older']['channel']), 'nppf');
+    foreach(['older','m1'] as $pkgGroup) $tx360['packages'][$pkgGroup] = tx360_sort_asc_rate($tx360['packages'][$pkgGroup], 'nppf');
+    $tx360['packages']['prevent'] = tx360_sort_asc_rate($tx360['packages']['prevent'], 'prevent');
     $tx360['ok']=true;
 } catch(Throwable $ex){$tx360['error']=$ex->getMessage();error_log('INDEX NPPF 360: '.$tx360['error']);}
