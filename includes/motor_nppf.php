@@ -187,13 +187,13 @@ try {
     $tx360['groups']['older']['channel']  = tx360_sort_asc_rate($tx360['groups']['older']['channel'], 'nppf');
     $tx360['groups']['m1']['district']    = tx360_reorder_by_keys($tx360['groups']['m1']['district'], array_keys($tx360['groups']['older']['district']), 'nppf');
     $tx360['groups']['m1']['channel']     = tx360_reorder_by_keys($tx360['groups']['m1']['channel'], array_keys($tx360['groups']['older']['channel']), 'nppf');
-    foreach(['older','m1'] as $pkgGroup) {
-        $tx360['packages'][$pkgGroup] = array_filter($tx360['packages'][$pkgGroup],static fn($r) => ($r['nppf']??0)>0);
-        $tx360['packages'][$pkgGroup] = tx360_sort_asc_rate($tx360['packages'][$pkgGroup], 'nppf');
-        $tx360['packages'][$pkgGroup] = array_slice($tx360['packages'][$pkgGroup],-7,null,true);
-    }
-    $tx360['packages']['prevent'] = array_filter($tx360['packages']['prevent'],static fn($r) => ($r['prevent']??0)>0);
-    $tx360['packages']['prevent'] = tx360_sort_asc_rate($tx360['packages']['prevent'], 'prevent');
-    $tx360['packages']['prevent'] = array_slice($tx360['packages']['prevent'],-7,null,true);
+    // Ranking de paquetes por volumen REAL de instalaciones en cosechas M4-M2.
+    // Conserva el mismo catálogo y orden en los tres comparativos.
+    // Los paquetes sin NPPF también aparecen (0 casos) para evitar sesgo.
+    uasort($tx360['packages']['older'], static function(array $a,array $b): int {
+        return (($b['ins'] ?? 0) <=> ($a['ins'] ?? 0));
+    });
+    $tx360['package_rank'] = array_slice(array_keys($tx360['packages']['older']), 0, 8);
+    // NO filtrar paquetes sin casos: el denominador muestra la exposición real.
     $tx360['ok']=true;
 } catch(Throwable $ex){$tx360['error']=$ex->getMessage();error_log('INDEX NPPF 360: '.$tx360['error']);}
