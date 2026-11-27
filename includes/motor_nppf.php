@@ -6,7 +6,7 @@
  */
 $tx360 = ['ok'=>false,'error'=>null,'cut'=>null,'eval'=>date('Y-m-d'),
     'groups'=>['older'=>[],'m1'=>[]],'trend'=>[],'packages'=>['older'=>[],'m1'=>[],'prevent'=>[]],'cohortLabels'=>[],
-    'universe'=>'','totals'=>[],'m1_month'=>null,'speeds'=>[]];
+    'universe'=>'','totals'=>[],'m1_month'=>null];
 if (!function_exists('tx360_norm_account')) {
 function tx360_norm_account($raw): string {
     $v = preg_replace('/\D/u','',(string)$raw) ?? '';
@@ -65,25 +65,6 @@ try {
     $snapshot=$cutRes ? mysqli_fetch_assoc($cutRes):null;
     if (!$snapshot) throw new RuntimeException('No existe corte NPPF publicado (estado OK)');
     $tx360['cut']=(string)$snapshot['fecha_corte'];
-    // Taxonomía OFICIAL de velocidades, sin modificar Motor Comercial de producción.
-    require_once __DIR__.'/motor_comercial.php';
-    $speedAllowed = MotorComercial::velocidadesMix();
-    $speedCanon = [];
-    foreach ($speedAllowed as $v) $speedCanon[mb_strtoupper(trim($v),'UTF-8')] = $v;
-    $speedMap = []; $speedConflict = [];
-    $cr = mysqli_query($conexion, 'SELECT nombre_plan, velocidad_agrupada FROM catalogo_paquetes');
-    if (!$cr) throw new RuntimeException('Catálogo de velocidades no disponible');
-    while ($p = mysqli_fetch_assoc($cr)) {
-        $k=mb_strtoupper(preg_replace('/\s+/u',' ',trim((string)$p['nombre_plan'])),'UTF-8');
-        if($k==='')continue;
-        $v=mb_strtoupper(preg_replace('/\s+/u',' ',trim((string)($p['velocidad_agrupada']??''))),'UTF-8');
-        $label=$speedCanon[$v]??'No clasificada';
-        if(isset($speedMap[$k]) && $speedMap[$k]!==$label) $speedConflict[$k]=true;
-        $speedMap[$k]=$label;
-    }
-    foreach($speedConflict as $k=>$_)$speedMap[$k]='No clasificada';
-    foreach(['m4','m3','m2','m1'] as $m)$tx360['speeds'][$m]=[];
-
     // El período visible selecciona el MES/SEMANA de referencia. NPPF usa las cosechas previas.
     $refStart=$periodo==='semanal' ? $tx_semana_lunes->format('Y-m-d') : sprintf('%04d-%02d-01',$anio_query,$mes_actual);
     $refEnd=$periodo==='semanal' ? $tx_semana_lunes->modify('+6 days')->format('Y-m-d') : date('Y-m-t',strtotime($refStart));
@@ -135,7 +116,7 @@ try {
     if($hcMode && !$tx_stg_hc_ok) throw new RuntimeException('Motor HC no disponible para certificar las cosechas de esta línea');
     $tx360['universe']=$isRegion?'Todos los canales · Región SUR':($isDistrict?'Todos los canales · Distrito':'Instalaciones certificadas por Motor HC · Línea autorizada');
     $seen=[];
-    $consume=function($account,$date,$district,$channel,$plan) use (&$tx360,&$raw,&$seen,&$byDate,$districtTarget,$isRegion,$isDistrict,$end,$speedMap){
+    $consume=function($account,$date,$district,$channel,$plan) use (&$tx360,&$raw,&$seen,&$byDate,$districtTarget,$isRegion,$isDistrict,$end){
         $date=substr((string)$date,0,10);$account=tx360_norm_account($account);
         if($account===''||$date===''||$date>$end)return;
         $unique=$account.'|'.$date;
@@ -167,9 +148,6 @@ try {
         if($class==='prevent')$tx360['totals'][$group]['prevent']++;
         tx360_bucket($tx360['groups'][$group]['district'],$district,$class);
         tx360_bucket($tx360['groups'][$group]['channel'],$channel,$class);
-        $planKey=mb_strtoupper(preg_replace('/\s+/u',' ',trim($plan)),'UTF-8');
-        $speed=$speedMap[$planKey]??'No clasificada';
-        tx360_bucket($tx360['speeds'][$cohort],$speed,$class);
         tx360_bucket($tx360['packages'][$group],$plan,$class);
         if($group==='m1') tx360_bucket($tx360['packages']['prevent'],$plan,$class);
         if($class==='nppf')$tx360['caseCounts'][$group][$plan]=($tx360['caseCounts'][$group][$plan]??0)+1;
