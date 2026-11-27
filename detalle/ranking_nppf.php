@@ -1,6 +1,6 @@
 <?php
 /**
- * TotalXpedient / TalIA - Ranking NPPF v1.2.16 (2026-11-25)
+ * TotalXpedient / TalIA - Ranking NPPF v1.2.17 (2026-11-27)
  * Ruta prevista: /plataforma/detalle/ranking_nppf.php
  * Dependencias: /plataforma/conexion.php, /plataforma/includes/motor_hc.php,
  *               /plataforma/includes/sidebar.php, /plataforma/assets/css/xpedient-v2.css
@@ -16,8 +16,10 @@
  *   el mes siguiente (sin los 5 días de precio de lista). Si fecha de
  *   evaluación >= corte mensual, M1; de lo contrario, PREVENTIVO M1.
  *   Semana 47 al 20-NOV: 16-20 OCT -> M1, 21-22 OCT -> PREVENTIVO.
- * - Fecha límite de precio de lista (+5 días después del corte mensual)
- *   se conserva separadamente en detalle, sin determinar esta clasificación.
+ * - Fecha fin de precio de lista: regla ordinaria corte mensual + 5 dias;
+ *   CICLO 28 (fecha de instalacion dia >= 28): dia 03 del SEGUNDO mes
+ *   posterior a la instalacion (ej. 28/29/30-oct -> 03-dic).
+ *   Se conserva separadamente en detalle; NO cambia la clasificacion M1.
  * - NOTA: es un criterio operativo de la escalera distinto del NPPF
  *   vencido por precio de lista; NO confundir ambos indicadores.
  * - Todas las cosechas se observan contra el mismo ÚLTIMO snapshot NPPF OK;
@@ -78,6 +80,9 @@
  *   y los bloqueos de cartera masiva / CSV.
  * - v1.2.16: por defecto, al entrar sin parametro periodo, cargar vista MENSUAL.
  *   Los botones Semanal/Mensual conservan la seleccion explicita.
+ * - v1.2.17: Ciclo 28 inclusivo desde el dia 28 de instalacion: fin de
+ *   precio de lista el dia 03 del segundo mes siguiente. El resto conserva
+ *   el corte mensual + 5 dias; M1/Preventivo y HC no se modifican.
  * - No modifica Motor HC, tablas NPPF ni fuente oficial del indicador mensual.
  */
 declare(strict_types=1);
@@ -137,9 +142,18 @@ function np_account($value): string {
     $digits=preg_replace('/\D/u','',(string)$value)??'';
     return $digits==='' ? '' : (ltrim($digits,'0') ?: '0');
 }
+/** Fin de precio de lista para la primera factura.
+ *  Ciclo 28: toda instalacion desde el dia 28 (inclusive) termina
+ *  el dia 03 del segundo mes siguiente; ej. 2026-10-28/29/30 -> 2026-12-03.
+ *  Resto: aniversario de instalacion el mes siguiente + 5 dias.
+ *  Esta fecha NO determina la clasificacion operativa M1 / Preventivo.
+ */
 function np_invoice_due(string $activation): string {
     $d=np_date($activation);
     $next=$d->modify('first day of next month');
+    if ((int)$d->format('j') >= 28) {
+        return $next->modify('first day of next month')->format('Y-m-03');
+    }
     $day=min((int)$d->format('j'),(int)$next->format('t'));
     return $next->setDate((int)$next->format('Y'),(int)$next->format('m'),$day)->modify('+5 days')->format('Y-m-d');
 }
@@ -1487,7 +1501,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
  <div class="page-title">
   <h1>Ranking NPPF <span class="week-pill"><?=np_h($periodTitle)?></span></h1>
   <p>Escalera de cosechas M4 / M3 / M2 / M1 · <?=np_h($subtitleRange)?> · <?=np_h($roleNames[$rol]??$rol)?></p>
-  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.16</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
+  <p class="nppf-caption">Pendientes según archivo del <strong><?=np_h($corte)?></strong> · Clasificación evaluada al <strong><?=np_h($eval)?></strong> · M1 de escalera desde el corte mensual · <strong>v1.2.17</strong><?php if(($continuityCount??0)>0):?> · <span title="Recuperación excepcional NPPF: HC/HIC + foto anterior y posterior, sin cambiar Motor HC">Continuidad HC: <?=np_num($continuityCount)?> instalaciones</span><?php endif;?></p>
  </div>
  <div class="week-nav">
   <a class="week-btn <?=$periodo==='semanal'?'week-current':''?>" href="<?=np_h(np_q(['periodo'=>'semanal','view'=>'lideres','lider_id'=>null,'coach_pos'=>null,'folio'=>null]))?>">Semanal</a>
@@ -1666,7 +1680,7 @@ body.page-ranking .table-wrap:has(>#nppfTable){
 </tbody></table></div></section>
 <?php else: ?>
 <section class="table-card"><div class="table-head"><strong>Detalle por cuenta · <?=np_h($vendors[np_team_key($liderId,$coachId,$vendorId)]['nombre']??'VENDEDOR')?></strong><span>Cuentas pendientes M4, M3, M2, M1 y M1 Preventivo · REVERSO incluido</span></div>
-<div class="table-wrap"><table class="nppf-table nppf-detail-table"><thead><tr><th>Cuenta</th><th>Cosecha</th><th>Instalación</th><th>Corte mensual M1</th><th>Fin precio lista</th><th>Clasificación</th><th>TIPO</th><th>Atraso vs corte (días)</th><th>Distrito</th><th>Canal</th><th>Plan</th><th class="num">Factura</th></tr></thead><tbody>
+<div class="table-wrap"><table class="nppf-table nppf-detail-table"><thead><tr><th>Cuenta</th><th>Cosecha</th><th>Instalación</th><th>Corte mensual M1</th><th title="Ciclo 28: instaladas desde el día 28, fin de precio de lista el 03 del segundo mes siguiente; resto, aniversario mensual + 5 días">Fin precio lista</th><th>Clasificación</th><th>TIPO</th><th>Atraso vs corte (días)</th><th>Distrito</th><th>Canal</th><th>Plan</th><th class="num">Factura</th></tr></thead><tbody>
 <?php foreach($detailRows as $d):?><tr class="<?=$d['_class']==='PREVENTIVO M1'?'nppf-prevent-row':''?>"><td><?=np_h($d['cuenta'])?></td><td><strong><?=np_h(strtoupper($d['_cohort']))?></strong></td><td><?=np_h($d['fecha_activacion'])?></td><td><?=np_h($d['_monthly_cut'])?></td><td><?=np_h($d['_due'])?></td><td><span class="nppf-pill <?=$d['_class']==='PREVENTIVO M1'?'nppf-prevent-label':'nppf-risk'?>"><?=np_h($d['_class'])?></span></td><td><?php if($d['_reverso']):?><span class="nppf-pill nppf-caution" title="El banco revirtió el pago. La cuenta permanece como NPPF.">REVERSO</span><?php else:?><?=np_h($d['tipo'])?><?php endif;?></td><td><?=np_h($d['_atraso_corte'])?></td><td><?=np_h($d['distrito'])?></td><td><?=np_h($d['canal_venta'])?></td><td><?=np_h($d['desc_plan'])?></td><td class="num"><?=number_format((float)$d['monto_factura'],2,'.',',')?></td></tr><?php endforeach;?>
 <?php if(!$detailRows):?><tr><td colspan="12" class="center">Sin cuentas pendientes certificadas en M4, M3, M2, M1 ni Preventivo.</td></tr><?php endif;?>
 </tbody></table></div></section>
