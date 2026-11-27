@@ -6429,6 +6429,24 @@ require_once __DIR__.'/includes/motor_nppf.php';
 @media(max-width:1100px){.tx360-bottomrow{grid-template-columns:1fr!important}.tx360-package-columns{gap:8px}}
 @media(max-width:580px){.tx360-package-columns{grid-template-columns:1fr}.tx360-package-colhead{min-height:0}.tx360-trendwrap{height:310px}}
 
+
+/* NPPF 360 · Velocidades ordenadas y participación de casos */
+.tx360-speedfilters{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0 14px}
+.tx360-speedfilters label{font-size:11px;font-weight:800;color:#203755;border:1px solid #dce6f2;background:#f4f7fd;padding:6px 8px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.tx360-speedfilters input{accent-color:#ee3986;vertical-align:middle}
+.tx360-speedbody{display:grid;grid-template-columns:minmax(0,1.28fr) minmax(180px,.85fr);gap:16px;align-items:center;min-width:0}
+.tx360-speedcanvas{height:250px;min-width:0;position:relative}
+.tx360-speedlegend{display:flex;flex-direction:column;gap:7px;min-width:0}
+.tx360-speedentry{display:grid;grid-template-columns:92px minmax(30px,1fr) 113px;gap:8px;align-items:center;padding:3px 0;border-bottom:1px solid #edf1f7;min-width:0}
+.tx360-speedname{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:850;color:#213752;white-space:nowrap}
+.tx360-speeddot{height:9px;width:9px;flex-shrink:0;border-radius:2px}
+.tx360-speedtrack{height:11px;border-radius:99px;background:#e8edf6;overflow:hidden;min-width:0}
+.tx360-speedfill{height:100%;border-radius:99px;background:#f0448b}
+.tx360-speedvalues{font-size:10px;white-space:nowrap;color:#536985;text-align:right;font-weight:800;font-variant-numeric:tabular-nums}
+.tx360-speedvalues strong{color:#1e3653}
+@media(max-width:1400px){.tx360-speedbody{grid-template-columns:1fr}.tx360-speedcanvas{height:230px;max-width:360px;width:100%;margin:auto}.tx360-speedentry{grid-template-columns:90px minmax(30px,1fr) 112px}}
+@media(max-width:600px){.tx360-speedentry{grid-template-columns:78px minmax(30px,1fr) 104px;gap:5px}.tx360-speedvalues,.tx360-speedname{font-size:9px}}
+
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -7071,13 +7089,26 @@ if (!function_exists('tx360_render_packages_comparison')) {
         </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
-                <div class="tx360-card-title">NPPF · Tendencia por mes de instalación (2026)</div>
+                <div class="tx360-card-title">Tendencia NPPF por mes IN (2026)</div>
                 <div class="tx360-subtitle">Barras = instalaciones · línea = % NPPF confirmado · punto amarillo = M1 preventivo</div>
                 <div class="tx360-trendwrap"><canvas id="tx360Trend" aria-label="Tendencia mensual de NPPF"></canvas></div>
                 <?php if(!empty($tx360['m1_month'])): ?><div class="tx360-kicker">M1: <?= htmlspecialchars((new DateTimeImmutable($tx360['m1_month'].'-01'))->format('m/Y'),ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
                 <div class="tx360-note">El preventivo se señala solo con un punto porque no tiene serie histórica comparable. El resaltado identifica la cosecha M1.</div>
             </div>
-            <?php tx360_render_packages_comparison($tx360); ?>
+            <div class="tx360-card tx360-speedcard">
+                <div class="tx360-card-title">NPPF · Calidad de venta por velocidad</div>
+                <div class="tx360-subtitle">Tasa NPPF de menor a mayor velocidad. El anillo muestra participación de casos, no tasa.</div>
+                <div class="tx360-speedfilters" role="group" aria-label="Seleccionar cosechas NPPF">
+                    <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 preventivo'] as $key=>$label): ?>
+                    <label><input type="checkbox" class="tx360-speedcheck" value="<?= $key ?>" checked> <?= htmlspecialchars($label,ENT_QUOTES,'UTF-8') ?></label>
+                    <?php endforeach; ?>
+                </div>
+                <div class="tx360-speedbody">
+                    <div class="tx360-speedlegend" id="tx360SpeedLegend" aria-live="polite"></div>
+                    <div class="tx360-speedcanvas"><canvas id="tx360Speed" aria-label="Participación de los casos NPPF por velocidad"></canvas></div>
+                </div>
+                <div class="tx360-package-legend" id="tx360SpeedSummary"></div>
+            </div>
         </div>
         <div class="tx360-foot">M4–M2: NPPF de primera factura aún pendiente, sin M1 · M1 preventivo se informa por separado y nunca se suma a la tasa NPPF. Reversos incluidos. Los datos pendientes reflejan el último snapshot NPPF, no pagos posteriores.</div>
         <?php endif; ?>
@@ -7103,13 +7134,26 @@ if (!function_exists('tx360_render_packages_comparison')) {
         </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
-                <div class="tx360-card-title">NPPF · Tendencia por mes de instalación (2026)</div>
+                <div class="tx360-card-title">Tendencia NPPF por mes IN (2026)</div>
                 <div class="tx360-subtitle">Barras = instalaciones · línea = % NPPF confirmado · punto amarillo = M1 preventivo</div>
                 <div class="tx360-trendwrap"><canvas id="tx360Trend" aria-label="Tendencia mensual de NPPF"></canvas></div>
                 <?php if(!empty($tx360['m1_month'])): ?><div class="tx360-kicker">M1: <?= htmlspecialchars((new DateTimeImmutable($tx360['m1_month'].'-01'))->format('m/Y'),ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
                 <div class="tx360-note">El preventivo se señala solo con un punto porque no tiene serie histórica comparable. El resaltado identifica la cosecha M1.</div>
             </div>
-            <?php tx360_render_packages_comparison($tx360); ?>
+            <div class="tx360-card tx360-speedcard">
+                <div class="tx360-card-title">NPPF · Calidad de venta por velocidad</div>
+                <div class="tx360-subtitle">Tasa NPPF de menor a mayor velocidad. El anillo muestra participación de casos, no tasa.</div>
+                <div class="tx360-speedfilters" role="group" aria-label="Seleccionar cosechas NPPF">
+                    <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 preventivo'] as $key=>$label): ?>
+                    <label><input type="checkbox" class="tx360-speedcheck" value="<?= $key ?>" checked> <?= htmlspecialchars($label,ENT_QUOTES,'UTF-8') ?></label>
+                    <?php endforeach; ?>
+                </div>
+                <div class="tx360-speedbody">
+                    <div class="tx360-speedlegend" id="tx360SpeedLegend" aria-live="polite"></div>
+                    <div class="tx360-speedcanvas"><canvas id="tx360Speed" aria-label="Participación de los casos NPPF por velocidad"></canvas></div>
+                </div>
+                <div class="tx360-package-legend" id="tx360SpeedSummary"></div>
+            </div>
         </div>
         <div class="tx360-foot">M4–M2: NPPF de primera factura aún pendiente, sin M1 · M1 preventivo se informa por separado y nunca se suma a la tasa NPPF. Reversos incluidos. Los datos pendientes reflejan el último snapshot NPPF, no pagos posteriores.</div>
         <?php endif; ?>
@@ -8674,6 +8718,54 @@ async function submitChangePassword() {
  const data=<?= json_encode($tx360, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?: 'null' ?>;
  if(!data || !data.ok)return;
  const fmt=(v)=>Number(v).toLocaleString('es-MX');
+ const speedCanvas=document.getElementById('tx360Speed');
+ let speedChart=null;
+ const speedPalette=['#16b9db','#f0448b','#923cf0','#f1b532','#00a6ff','#19bda0','#686fd9','#e1784f','#9aa8bc','#746fc0'];
+ const canonicalSpeed=['100 MB','150 MB','250 MB','350 MB','500 MB','1,000 MB','5,000 MB','10,000 MB'];
+ const speedNumber=s=>{const m=String(s).match(/[\d,.]+/);return m?Number(m[0].replace(/,/g,'')):Number.POSITIVE_INFINITY;};
+ const fmtPct=v=>Number(v).toFixed(2)+'%';
+ function renderSpeed(){
+  if(!speedCanvas)return;
+  const chosen=[...document.querySelectorAll('.tx360-speedcheck:checked')].map(e=>e.value);
+  const records=data.speeds||{},counts={};
+  // Cada cohorte contribuye una sola vez al denominador, incluso si M1 y Preventivo están seleccionados.
+  const periods=[...new Set(chosen.map(k=>k==='prevent'?'m1':k))];
+  for(const period of periods)for(const [name,row] of Object.entries(records[period]||{})){
+   (counts[name]??={ins:0,nppf:0,prevent:0}).ins+=Number(row.ins||0);
+  }
+  for(const period of chosen){const key=period==='prevent'?'m1':period;
+   for(const [name,row] of Object.entries(records[key]||{})){
+    const r=counts[name]??={ins:0,nppf:0,prevent:0};
+    if(period==='prevent')r.prevent+=Number(row.prevent||0);
+    else r.nppf+=Number(row.nppf||0);
+   }
+  }
+  const ordered=Object.entries(counts).map(([name,v])=>({name,...v,cases:v.nppf+v.prevent})).filter(r=>r.ins||r.cases)
+    .sort((a,b)=>speedNumber(a.name)-speedNumber(b.name) || a.name.localeCompare(b.name,'es'));
+  const totalCases=ordered.reduce((n,r)=>n+r.cases,0),totalIns=ordered.reduce((n,r)=>n+r.ins,0);
+  const maxRate=Math.max(5,...ordered.map(r=>r.ins?100*r.cases/r.ins:0));
+  const legend=document.getElementById('tx360SpeedLegend');
+  const safe=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  legend.innerHTML=ordered.map((r,i)=>{
+   const rate=r.ins?100*r.cases/r.ins:null;
+   const w=rate===null?0:Math.min(100,rate/maxRate*100);
+   const clr=speedPalette[i%speedPalette.length];
+   return '<div class="tx360-speedentry"><div class="tx360-speedname"><span class="tx360-speeddot" style="background:'+clr+'"></span>'+safe(r.name)+'</div><div class="tx360-speedtrack" title="'+(rate===null?'Sin instalaciones':fmtPct(rate))+'"><div class="tx360-speedfill" style="width:'+w+'%"></div></div><div class="tx360-speedvalues">'+fmt(r.cases)+' / '+fmt(r.ins)+' · <strong>'+(rate===null?'N/D':fmtPct(rate))+'</strong></div></div>';
+  }).join('')||'<span>Selecciona al menos una cosecha.</span>';
+  document.getElementById('tx360SpeedSummary').textContent=totalIns
+   ?fmt(totalCases)+' casos · '+fmt(totalIns)+' instalaciones · '+fmtPct(100*totalCases/totalIns)+' (selección). Barras = tasa por velocidad; anillo = participación de casos.'
+   :'Sin instalaciones para la selección.';
+  if(speedChart){speedChart.destroy();speedChart=null;}
+  const included=ordered.filter(r=>r.cases>0);
+  if(included.length){
+   speedChart=new Chart(speedCanvas,{type:'doughnut',data:{labels:included.map(r=>r.name),datasets:[{
+    data:included.map(r=>r.cases),backgroundColor:included.map(r=>speedPalette[ordered.indexOf(r)%speedPalette.length]),borderColor:'#fff',borderWidth:2,hoverOffset:5
+   }]},options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.label+': '+fmt(ctx.raw)+' casos ('+fmtPct(100*ctx.raw/totalCases)+' de los casos)'}}}}});
+  }
+ }
+ document.querySelectorAll('.tx360-speedcheck').forEach(el=>el.addEventListener('change',renderSpeed));
+ renderSpeed();
+
  const trend=document.getElementById('tx360Trend');
  if(trend){
   const months=Object.keys(data.trend||{}), values=months.map(m=>data.trend[m]);
@@ -8683,11 +8775,25 @@ async function submitChangePassword() {
   const confirmedPct=values.map(v=>v.ins?+(100*v.nppf/v.ins).toFixed(2):null);
   const preventPts=values.map((v,i)=> i===m1Index && v.ins && v.prevent ? +(100*v.prevent/v.ins).toFixed(2) : null);
   const highlightPlugin={id:'tx360M1Highlight',beforeDatasetsDraw(chart,args,opts){if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const meta=x.getPixelForValue(m1Index);const prev=x.getPixelForValue(Math.max(0,m1Index-0.5));const next=x.getPixelForValue(Math.min(months.length-1,m1Index+0.5));ctx.save();ctx.fillStyle='rgba(246,218,118,0.16)';ctx.fillRect(prev,chartArea.top,next-prev,chartArea.bottom-chartArea.top);ctx.restore();},afterDraw(chart,args,opts){if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const xPos=x.getPixelForValue(m1Index);ctx.save();ctx.fillStyle='#8a6a00';ctx.font='700 10px Arial';ctx.textAlign='center';ctx.fillText('M1',xPos,chartArea.top+12);ctx.restore();}};
+  const nppfPointLabels={id:'tx360NppfPointLabels',afterDatasetsDraw(chart){
+   const datasetIndex=chart.data.datasets.findIndex(d=>d.label==='NPPF confirmado (%)');
+   if(datasetIndex<0)return;
+   const meta=chart.getDatasetMeta(datasetIndex);
+   const ctx=chart.ctx;ctx.save();ctx.font='bold 11px Arial, sans-serif';ctx.textAlign='center';ctx.textBaseline='bottom';
+   const top=chart.chartArea.top;
+   meta.data.forEach((point,i)=>{
+    const value=confirmedPct[i];if(value===null || !Number.isFinite(value) || !point)return;
+    const label=value.toFixed(2)+'%';const x=point.x;const y=Math.max(top+15,point.y-9);
+    const width=ctx.measureText(label).width+8;
+    ctx.fillStyle='rgba(255,255,255,.93)';ctx.fillRect(x-width/2,y-12,width,14);
+    ctx.fillStyle='#d71569';ctx.fillText(label,x,y);
+   });ctx.restore();
+  }};
   new Chart(trend,{type:'bar',data:{labels:monthLabels,datasets:[
    {type:'bar',label:'Instalaciones',order:10,data:installData,backgroundColor:'rgba(11,165,239,.68)',borderColor:'#0289d5',borderWidth:0,yAxisID:'yIns',borderRadius:4,maxBarThickness:54,categoryPercentage:.82,barPercentage:.88},
    {type:'line',label:'NPPF confirmado (%)',order:1,data:confirmedPct,borderColor:'#f01879',backgroundColor:'rgba(243,41,127,.25)',tension:.3,fill:'origin',borderWidth:4,pointRadius:4,pointHoverRadius:7,yAxisID:'yPct'},
    {type:'line',label:'M1 preventivo (%)',order:0,data:preventPts,borderColor:'#f3af25',backgroundColor:'#f3af25',showLine:false,pointRadius:5,pointHoverRadius:6,yAxisID:'yPct'}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:13,color:'#233756',font:{size:12,weight:'bold'}}},tooltip:{callbacks:{afterBody:(items)=>{const idx=items[0].dataIndex;const v=values[idx]||{};return 'NPPF: '+fmt(v.nppf||0)+' · Prev.: '+fmt(v.prevent||0)+' · INS: '+fmt(v.ins||0);}}}},scales:{yIns:{beginAtZero:true,position:'left',grid:{drawBorder:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>fmt(v)}},yPct:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>v+'%'}},x:{ticks:{color:'#344963',font:{size:11,weight:'bold'},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},plugins:[highlightPlugin]});
+  ]},options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:20}},plugins:{legend:{position:'bottom',labels:{boxWidth:13,color:'#233756',font:{size:12,weight:'bold'}}},tooltip:{callbacks:{afterBody:(items)=>{const idx=items[0].dataIndex;const v=values[idx]||{};return 'NPPF: '+fmt(v.nppf||0)+' · Prev.: '+fmt(v.prevent||0)+' · INS: '+fmt(v.ins||0);}}}},scales:{yIns:{beginAtZero:true,position:'left',grid:{drawBorder:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>fmt(v)}},yPct:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>v+'%'}},x:{ticks:{color:'#344963',font:{size:11,weight:'bold'},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},plugins:[highlightPlugin,nppfPointLabels]});
  }
 })();
 </script>
