@@ -6475,6 +6475,32 @@ require_once __DIR__.'/includes/motor_nppf.php';
 .tx360-speedlegend{max-height:none;overflow-y:visible}
 @media(max-width:1180px){.dashboard-analytics-grid.with-channel{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media(max-width:720px){.dashboard-analytics-grid.with-channel{grid-template-columns:1fr!important}}
+
+/* ===== Rediseño ejecutivo NPPF: 2 megatarjetas horizontales ===== */
+.dashboard-analytics-grid.with-channel{grid-template-columns:1fr!important;gap:14px!important;overflow:visible!important}
+.tx360-megarow{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1.05fr) minmax(0,1.12fr);gap:0;background:rgba(255,255,255,.94);border:1px solid #e5eaf6;border-radius:20px;box-shadow:0 7px 18px rgba(21,42,83,.05);overflow:hidden}
+.tx360-megasection{min-width:0;padding:16px 16px 14px;background:transparent}
+.tx360-megasection+.tx360-megasection{border-left:1px solid #e8eef8}
+.tx360-megasection.cumplimiento-panel,.tx360-megasection.tx-compare-card,.tx360-megasection.tx360-mega-nppf{box-shadow:none;border:none;border-radius:0;margin:0;background:transparent;padding:16px 16px 14px}
+.tx360-megasection .chart-title,.tx360-mega-nppf .tx360-card-title{font-size:.90rem;font-weight:900;line-height:1.18;color:#172c4a}
+.tx360-mega-nppf .tx360-subtitle,.tx360-megasection .tx-compare-subtitle{font-size:.67rem;line-height:1.2;color:#667a95;font-weight:700}
+.tx360-mega-nppf .tx360-compact-filters{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0 12px}
+.tx360-mega-nppf .tx360-compact-filters label{display:flex;gap:4px;align-items:center;font-size:10px;font-weight:850;background:#f4f7fd;border:1px solid #e2e7f5;border-radius:7px;padding:5px 7px;cursor:pointer;white-space:nowrap;color:#24405f}
+.tx360-mega-nppf .tx360-compact-filters input{accent-color:#ed3f86;margin:0;width:12px;height:12px}
+.tx360-mega-nppf .tx360-aligned-rows{display:flex;flex-direction:column;gap:12px}
+.tx360-mega-nppf .tx360-aligned-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:end;min-width:0}
+.tx360-mega-nppf .tx360-aligned-head{display:flex;justify-content:space-between;gap:8px;align-items:flex-end;grid-column:1 / -1;margin-bottom:0;font-size:.72rem;font-weight:900;color:#172c4a}
+.tx360-mega-nppf .tx360-aligned-head strong{font-size:.82rem;line-height:1;font-weight:950;white-space:nowrap}
+.tx360-mega-nppf .tx360-aligned-track{grid-column:1 / -1;height:22px;background:#edf2fb;border-radius:999px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(15,23,42,.08)}
+.tx360-mega-nppf .tx360-aligned-fill{height:100%;border-radius:999px;background:#f0448b}
+.tx360-mega-nppf .tx360-aligned-fill.prevent{background:#efa51b}
+.tx360-mega-nppf .tx360-aligned-fill.good{background:#19bda0}
+.tx360-mega-nppf .tx360-aligned-fill.warn{background:#923cf0}
+.tx360-mega-nppf .tx360-aligned-fill.bad{background:#f0448b}
+.tx360-mega-nppf .tx360-aligned-count{grid-column:1 / -1;font-size:.66rem;color:#5c6e89;font-weight:750;margin-top:3px}
+.tx360-mega-nppf .tx360-aligned-foot{margin-top:12px;padding-top:10px;border-top:1px solid #e9eef7;font-size:.64rem;color:#536783;font-weight:750}
+@media(max-width:1320px){.tx360-megarow{grid-template-columns:1fr}.tx360-megasection+.tx360-megasection{border-left:none;border-top:1px solid #e8eef8}}
+
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -6823,233 +6849,194 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
     </div>
 
 
-    <div class="dashboard-analytics-grid <?= $layout_hc_bottom ? 'with-hc-bottom' : 'with-channel' ?>">
-
-    <?php if ($tx_stg_aplicable && !$tx_stg_ok && !(!$scope_activo && in_array($rol, ['admin','director_regional'], true))): ?>
-      <div class="evo-card hierarchy-performance-card cumplimiento-panel">
+    
+<div class="dashboard-analytics-grid <?= $layout_hc_bottom ? 'with-hc-bottom' : 'with-channel' ?>">
+<?php if ($mostrar_cumplimiento_canal): ?>
+  <div class="tx360-megarow tx360-megarow-district">
+    <div class="tx360-megasection cumplimiento-panel">
+      <?php if ($tx_stg_aplicable && !$tx_stg_ok && !(!$scope_activo && in_array($rol, ['admin','director_regional'], true))): ?>
         <div class="chart-title">Cumplimiento del nivel inferior vs meta</div>
         <div style="margin-top:14px;color:#b91c1c;font-size:13px;">Datos HC no disponibles. Consulta de motores fallida; revisa el registro de errores. Se conserva el alcance autorizado.</div>
+      <?php elseif (!empty($cumplimiento_inferior_items)): ?>
+        <div class="hierarchy-performance-head">
+          <div>
+            <div class="chart-title"><?= htmlspecialchars($cumplimiento_inferior_titulo) ?></div>
+            <div class="hierarchy-performance-sub"><?= htmlspecialchars($cumplimiento_inferior_subtitulo) ?></div>
+          </div>
+          <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
+        </div>
+        <div class="cumplimiento-list">
+          <?php foreach ($cumplimiento_inferior_items as $item): ?>
+            <?php
+              $pct_item = (float)($item['pct'] ?? 0);
+              $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
+              $real_item = (int)($item['real'] ?? 0);
+              $meta_item = (int)($item['meta'] ?? 0);
+              $sin_meta_item = (($item['fuente'] ?? '') === 'sin_meta');
+              $bar_width = min($visual_pct_item, 100);
+              $bar_class = $sin_meta_item ? 'neutral' : (($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk'));
+            ?>
+            <div class="cumplimiento-row">
+              <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>"><?= htmlspecialchars($item['nombre'] ?? '') ?></div>
+              <div class="cumplimiento-bar-block">
+                <div class="cumplimiento-track">
+                  <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                  <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
+                    <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                  <?php endif; ?>
+                </div>
+                <div class="cumplimiento-mix">
+                  <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
+                    🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
+                  <?php else: ?>
+                    🏠 Res -- &nbsp;&nbsp; 🏢 Neg --
+                  <?php endif; ?>
+                </div>
+              </div>
+              <div class="cumplimiento-metric">
+                <?php if ($sin_meta_item): ?>
+                  <?= number_format($real_item) ?>
+                  <span class="cumplimiento-sub">Sin meta</span>
+                <?php else: ?>
+                  <?= number_format($pct_item, 0) ?>%
+                  <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?><?= (($item['fuente'] ?? '') === 'operativa') ? ' · EO' : '' ?></span>
+                <?php endif; ?>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </div>
+
+    <div class="tx360-megasection tx-compare-card tx-compare-distrito" aria-label="Comparativo de instalaciones nivel inferior">
+      <div class="chart-title">Comparativo <?= htmlspecialchars(($tx_comp_es_director && !$tx_comp_fallback_distrito_anual) ? 'nivel inferior' : 'por distrito') ?></div>
+      <div class="tx-compare-subtitle">
+        <?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?>
+        <?php if ($tx_comp_fallback_distrito_anual): ?> · Consolidado distrital (sin HC histórico por líder)<?php endif; ?>
       </div>
-    <?php elseif (!empty($cumplimiento_inferior_items)): ?>
-    <div class="evo-card hierarchy-performance-card cumplimiento-panel">
-        <div class="hierarchy-performance-head">
-            <div>
-                <div class="chart-title"><?= htmlspecialchars($cumplimiento_inferior_titulo) ?></div>
-                <div class="hierarchy-performance-sub"><?= htmlspecialchars($cumplimiento_inferior_subtitulo) ?></div>
-            </div>
-            <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
-        </div>
-
-        <div class="cumplimiento-list">
-            <?php foreach ($cumplimiento_inferior_items as $item): ?>
-                <?php
-                    $pct_item = (float)($item['pct'] ?? 0);
-                    $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
-                    $real_item = (int)($item['real'] ?? 0);
-                    $meta_item = (int)($item['meta'] ?? 0);
-                    $sin_meta_item = (($item['fuente'] ?? '') === 'sin_meta');
-                    $bar_width = min($visual_pct_item, 100);
-                    $bar_class = $sin_meta_item ? 'neutral' : (($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk'));
-                ?>
-                <div class="cumplimiento-row">
-                    <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
-                        <?= htmlspecialchars($item['nombre'] ?? '') ?>
-                    </div>
-                    <div class="cumplimiento-bar-block">
-                        <div class="cumplimiento-track">
-                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
-                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
-                            <?php endif; ?>
-                        </div>
-                        <div class="cumplimiento-mix">
-                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
-                                🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
-                            <?php else: ?>
-                                🏠 Res -- &nbsp;&nbsp; 🏢 Neg --
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="cumplimiento-metric">
-                        <?php if ($sin_meta_item): ?>
-                            <?= number_format($real_item) ?>
-                            <span class="cumplimiento-sub">Sin meta</span>
-                        <?php else: ?>
-                            <?= number_format($pct_item, 0) ?>%
-                            <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?><?= (($item['fuente'] ?? '') === 'operativa') ? ' · EO' : '' ?></span>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <?php if ($layout_hc_bottom): ?>
-        <?php 
-            $porcentaje_visual_aguja_hc = min((float)$kpi_hc_pct, 100); 
-            $angulo_aguja_hc = ($porcentaje_visual_aguja_hc / 100 * 180) - 90;
-            $color_porcentaje_hc = ($kpi_hc_pct >= 100) ? 'var(--green)' : (($kpi_hc_pct >= 80) ? '#f59e0b' : 'var(--red)');
-        ?>
-        <div class="kpi-card" style="padding-right: 15px;">
-             <div class="kpi-header" style="margin-bottom: 5px;">
-                <div class="kpi-icon kpi-purple" style="width: 32px; height: 32px;">👥</div>
-                <div class="kpi-label">Headcount — Semana <?= $semana_base ?> · <?= $anio_actual ?></div>
-            </div>
-
-             <div class="kpi-speed-layout">
-                <div class="speedometer-container">
-                    <div class="speedometer-arco-mascara">
-                        <div class="speedometer-gradiente"></div>
-                        <div class="speedometer-centro-blanco"></div>
-                    </div>
-                    <div class="needle-pivote"></div>
-                    <div class="needle" style="transform: rotate(<?= $angulo_aguja_hc ?>deg);"></div>
-                    <div class="porcentaje-sobre-arco" style="color: <?= $color_porcentaje_hc ?>;">
-                        <?= $kpi_hc_pct ?>%
-                    </div>
-                </div>
-
-                <div class="speed-numbers" style="align-items: flex-start; margin-left: 20px;">
-                    <div style="display:flex; gap: 20px;">
-                        <div class="kpi-num">
-                            <span class="kpi-val purple" style="font-size: 1.8rem;"><?= number_format($kpi_hc_act) ?></span>
-                            <span class="kpi-sub">Activo</span>
-                        </div>
-                        <div class="kpi-num">
-                            <span class="kpi-val red" style="font-size: 1.8rem;"><?= number_format($kpi_hc_vac) ?></span>
-                            <span class="kpi-sub">Vacante</span>
-                        </div>
-                    </div>
-                    <div style="margin-top: 10px;">
-                        <span class="kpi-val" style="color:var(--text); font-size: 1.2rem;"><?= number_format($kpi_hc_total) ?></span>
-                        <span class="kpi-sub">Total Plantilla</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-    <?php endif; ?>
-
-    <?php if ($mostrar_cumplimiento_canal && !empty($cumplimiento_canal_items)): ?>
-    <div class="evo-card hierarchy-performance-card cumplimiento-panel cumplimiento-panel-canal">
-        <div class="hierarchy-performance-head">
-            <div>
-                <div class="chart-title">Cumplimiento por canal de venta</div>
-                <div class="hierarchy-performance-sub">Canales · Venta instalada vs Meta</div>
-            </div>
-            <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
-        </div>
-
-        <div class="cumplimiento-list">
-            <?php foreach ($cumplimiento_canal_items as $item): ?>
-                <?php
-                    $pct_item = (float)($item['pct'] ?? 0);
-                    $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
-                    $real_item = (int)($item['real'] ?? 0);
-                    $meta_item = (int)($item['meta'] ?? 0);
-                    $bar_width = min($visual_pct_item, 100);
-                    $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
-                ?>
-                <div class="cumplimiento-row">
-                    <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>">
-                        <?= htmlspecialchars($item['nombre'] ?? '') ?>
-                    </div>
-                    <div class="cumplimiento-bar-block">
-                        <div class="cumplimiento-track">
-                            <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
-                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
-                                <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
-                            <?php endif; ?>
-                        </div>
-                        <div class="cumplimiento-mix">
-                            <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
-                                🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
-                            <?php else: ?>
-                                🏠 Res -- &nbsp;&nbsp; 🏢 Neg --
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="cumplimiento-metric">
-                        <?= number_format($pct_item, 0) ?>%
-                        <span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?></span>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-    <?php endif; ?>
-
-
-    <?php if ($mostrar_cumplimiento_canal): ?>
-    <?php foreach (['distrito'=>[($tx_comp_es_director && !$tx_comp_fallback_distrito_anual) ? 'nivel inferior' : 'por distrito',$tx_comp_distritos],
-                   'canal'=>['por canal de venta',$tx_comp_canales]] as $cmpTipo=>$cmpConfig): ?>
-    <div class="evo-card tx-compare-card tx-compare-<?= $cmpTipo ?>" aria-label="Comparativo de instalaciones <?= htmlspecialchars($cmpConfig[0]) ?>">
-        <div class="chart-title">Comparativo <?= htmlspecialchars($cmpConfig[0]) ?></div>
-        <div class="tx-compare-subtitle">
-            <?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?>
-            <?php if ($cmpTipo === 'distrito' && $tx_comp_fallback_distrito_anual): ?>
-                · Consolidado distrital (sin HC histórico por líder)
-            <?php endif; ?>
-        </div>
-        <?php if ($cmpTipo === 'distrito' && $tx_comp_es_director && $tx_comp_inferior_error !== null): ?>
-            <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_inferior_error,ENT_QUOTES,'UTF-8') ?></div>
-        <?php elseif ($tx_comp_error !== null && !($cmpTipo === 'distrito' && $tx_comp_es_director)): ?>
-            <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_error,ENT_QUOTES,'UTF-8') ?></div>
-        <?php elseif (!$cmpConfig[1]): ?>
-            <div class="tx-compare-empty">Sin instalaciones para mostrar en los períodos seleccionados.</div>
-        <?php else: ?>
+      <?php if ($tx_comp_es_director && $tx_comp_inferior_error !== null): ?>
+        <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_inferior_error,ENT_QUOTES,'UTF-8') ?></div>
+      <?php elseif ($tx_comp_error !== null && !($tx_comp_es_director)): ?>
+        <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_error,ENT_QUOTES,'UTF-8') ?></div>
+      <?php elseif (!$tx_comp_distritos): ?>
+        <div class="tx-compare-empty">Sin instalaciones para mostrar en los períodos seleccionados.</div>
+      <?php else: ?>
         <div class="tx-compare-list">
-        <?php foreach ($cmpConfig[1] as $cmpFila):
-            $cmpDif=$cmpFila['delta'];
-            $cmpClase=$cmpDif===null?'flat':($cmpDif>0?'positive':($cmpDif<0?'negative':'flat'));
-        ?>
+          <?php foreach ($tx_comp_distritos as $cmpFila): $cmpDif=$cmpFila['delta']; $cmpClase=$cmpDif===null?'flat':($cmpDif>0?'positive':($cmpDif<0?'negative':'flat')); ?>
             <div class="tx-compare-item">
-                <div class="tx-compare-line">
-                    <span class="tx-compare-name" title="<?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?></span>
-                    <span class="tx-compare-values"><?= number_format($cmpFila['actual']) ?> / <?= $cmpFila['previo']===null?'N/D':number_format($cmpFila['previo']) ?></span>
-                </div>
-                <div class="tx-compare-graph" aria-hidden="true">
-                    <?php if ($cmpDif!==null): ?>
-                    <div class="tx-compare-bar <?= $cmpClase ?>" style="width:<?= number_format((float)$cmpFila['ancho'],2,'.','') ?>%"></div>
-                    <?php endif; ?>
-                </div>
-                <div class="tx-compare-delta">
-                    <strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':sprintf('%+d',$cmpDif) ?> INS</strong>
-                    <strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':($cmpFila['porcentaje']===null?'N/D':sprintf('%+.1f%%',$cmpFila['porcentaje'])) ?></strong>
-                </div>
+              <div class="tx-compare-line">
+                <span class="tx-compare-name" title="<?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?></span>
+                <span class="tx-compare-values"><?= number_format($cmpFila['actual']) ?> / <?= $cmpFila['previo']===null?'N/D':number_format($cmpFila['previo']) ?></span>
+              </div>
+              <div class="tx-compare-graph" aria-hidden="true"><?php if ($cmpDif!==null): ?><div class="tx-compare-bar <?= $cmpClase ?>" style="width:<?= number_format((float)$cmpFila['ancho'],2,'.','') ?>%"></div><?php endif; ?></div>
+              <div class="tx-compare-delta"><strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':sprintf('%+d',$cmpDif) ?> INS</strong><strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':($cmpFila['porcentaje']===null?'N/D':sprintf('%+.1f%%',$cmpFila['porcentaje'])) ?></strong></div>
             </div>
-        <?php endforeach; ?>
+          <?php endforeach; ?>
         </div>
         <div class="tx-compare-footer">Actual / comparación · Barras: diferencia en instalaciones · % respecto al período comparado.</div>
-        <?php endif; ?>
+      <?php endif; ?>
     </div>
-    <?php endforeach; ?>
+
     <?php if (!empty($tx360['ok'])): ?>
-    <div class="tx360-card tx360-aligned-card tx360-aligned-district" data-dimension="district">
+    <div class="tx360-megasection tx360-mega-nppf" data-dimension="district">
       <div class="tx360-card-title">NPPF por distrito</div>
-      <div class="tx360-subtitle">Calidad de venta · cosechas seleccionadas</div>
+      <div class="tx360-subtitle">Mismo orden visual de alcance vs meta · activa cosechas según el análisis</div>
       <div class="tx360-compact-filters" role="group" aria-label="Cosechas NPPF distrito">
         <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 Preventivo'] as $k=>$l): ?>
         <label><input type="checkbox" class="tx360-dimcheck" data-dim="district" value="<?= $k ?>" <?= in_array($k,['m4','m3','m2'],true)?'checked':'' ?>><?= $l ?></label>
         <?php endforeach; ?>
       </div>
       <div class="tx360-aligned-rows" id="tx360RowsDistrict"></div>
-      <div class="tx360-aligned-foot">Orden fijo: alcance de meta · M1 preventivo separado</div>
+      <div class="tx360-aligned-foot">Lectura ejecutiva: misma secuencia que el cumplimiento. Preventivo se informa por separado y no se suma a la tasa NPPF confirmada.</div>
     </div>
-    <div class="tx360-card tx360-aligned-card tx360-aligned-channel" data-dimension="channel">
+    <?php endif; ?>
+  </div>
+
+  <div class="tx360-megarow tx360-megarow-channel">
+    <div class="tx360-megasection cumplimiento-panel cumplimiento-panel-canal">
+      <?php if (!empty($cumplimiento_canal_items)): ?>
+        <div class="hierarchy-performance-head">
+          <div>
+            <div class="chart-title">Cumplimiento por canal de venta</div>
+            <div class="hierarchy-performance-sub">Canales · Venta instalada vs meta</div>
+          </div>
+          <div class="hierarchy-performance-note">Ordenado por % de cumplimiento</div>
+        </div>
+        <div class="cumplimiento-list">
+          <?php foreach ($cumplimiento_canal_items as $item): ?>
+            <?php
+              $pct_item = (float)($item['pct'] ?? 0);
+              $visual_pct_item = (float)($item['visual_pct'] ?? $pct_item);
+              $real_item = (int)($item['real'] ?? 0);
+              $meta_item = (int)($item['meta'] ?? 0);
+              $bar_width = min($visual_pct_item, 100);
+              $bar_class = ($pct_item >= 100) ? 'ok' : (($pct_item >= 80) ? 'warn' : 'risk');
+            ?>
+            <div class="cumplimiento-row">
+              <div class="cumplimiento-name" title="<?= htmlspecialchars($item['nombre'] ?? '') ?>"><?= htmlspecialchars($item['nombre'] ?? '') ?></div>
+              <div class="cumplimiento-bar-block">
+                <div class="cumplimiento-track">
+                  <div class="cumplimiento-fill <?= $bar_class ?>" style="width:<?= $bar_width ?>%;"></div>
+                  <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null && (int)$item['res_pct'] > 0 && (int)$item['res_pct'] < 100): ?>
+                    <span class="cumplimiento-resneg-divider" style="left:<?= (int)$item['res_pct'] ?>%;"></span>
+                  <?php endif; ?>
+                </div>
+                <div class="cumplimiento-mix">
+                  <?php if (($item['mix_total'] ?? 0) > 0 && ($item['res_pct'] ?? null) !== null): ?>
+                    🏠 Res <?= number_format((int)$item['res_pct']) ?>% &nbsp;&nbsp; 🏢 Neg <?= number_format((int)$item['neg_pct']) ?>%
+                  <?php else: ?>
+                    🏠 Res -- &nbsp;&nbsp; 🏢 Neg --
+                  <?php endif; ?>
+                </div>
+              </div>
+              <div class="cumplimiento-metric"><?= number_format($pct_item, 0) ?>%<span class="cumplimiento-sub"><?= number_format($real_item) ?> / <?= number_format($meta_item) ?></span></div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </div>
+
+    <div class="tx360-megasection tx-compare-card tx-compare-canal" aria-label="Comparativo de instalaciones por canal de venta">
+      <div class="chart-title">Comparativo por canal de venta</div>
+      <div class="tx-compare-subtitle"><?= $tx_yoy_enabled ? 'Vs año anterior' : 'Vs período anterior' ?> · <?= htmlspecialchars($tx_cmp_periodo,ENT_QUOTES,'UTF-8') ?></div>
+      <?php if ($tx_comp_error !== null): ?>
+        <div class="tx-compare-empty"><?= htmlspecialchars($tx_comp_error,ENT_QUOTES,'UTF-8') ?></div>
+      <?php elseif (!$tx_comp_canales): ?>
+        <div class="tx-compare-empty">Sin instalaciones para mostrar en los períodos seleccionados.</div>
+      <?php else: ?>
+        <div class="tx-compare-list">
+          <?php foreach ($tx_comp_canales as $cmpFila): $cmpDif=$cmpFila['delta']; $cmpClase=$cmpDif===null?'flat':($cmpDif>0?'positive':($cmpDif<0?'negative':'flat')); ?>
+            <div class="tx-compare-item">
+              <div class="tx-compare-line">
+                <span class="tx-compare-name" title="<?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars($cmpFila['nombre'],ENT_QUOTES,'UTF-8') ?></span>
+                <span class="tx-compare-values"><?= number_format($cmpFila['actual']) ?> / <?= $cmpFila['previo']===null?'N/D':number_format($cmpFila['previo']) ?></span>
+              </div>
+              <div class="tx-compare-graph" aria-hidden="true"><?php if ($cmpDif!==null): ?><div class="tx-compare-bar <?= $cmpClase ?>" style="width:<?= number_format((float)$cmpFila['ancho'],2,'.','') ?>%"></div><?php endif; ?></div>
+              <div class="tx-compare-delta"><strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':sprintf('%+d',$cmpDif) ?> INS</strong><strong class="<?= $cmpClase ?>"><?= $cmpDif===null?'N/D':($cmpFila['porcentaje']===null?'N/D':sprintf('%+.1f%%',$cmpFila['porcentaje'])) ?></strong></div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+        <div class="tx-compare-footer">Actual / comparación · Barras: diferencia en instalaciones · % respecto al período comparado.</div>
+      <?php endif; ?>
+    </div>
+
+    <?php if (!empty($tx360['ok'])): ?>
+    <div class="tx360-megasection tx360-mega-nppf" data-dimension="channel">
       <div class="tx360-card-title">NPPF por canal de venta</div>
-      <div class="tx360-subtitle">Calidad de venta · cosechas seleccionadas</div>
+      <div class="tx360-subtitle">Mismo orden visual de alcance vs meta · activa cosechas según el análisis</div>
       <div class="tx360-compact-filters" role="group" aria-label="Cosechas NPPF canal">
         <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 Preventivo'] as $k=>$l): ?>
         <label><input type="checkbox" class="tx360-dimcheck" data-dim="channel" value="<?= $k ?>" <?= in_array($k,['m4','m3','m2'],true)?'checked':'' ?>><?= $l ?></label>
         <?php endforeach; ?>
       </div>
       <div class="tx360-aligned-rows" id="tx360RowsChannel"></div>
-      <div class="tx360-aligned-foot">Orden fijo: alcance de meta · M1 preventivo separado</div>
+      <div class="tx360-aligned-foot">Mismo orden ejecutivo que la tarjeta comercial. Cuando una fila no tenga base comparable se mostrará sin forzar tasas artificiales.</div>
     </div>
     <?php endif; ?>
-    </div><!-- dashboard-analytics-grid: cumplimiento + comparativos -->
+  </div>
+<?php endif; ?>
+</div><!-- dashboard-analytics-grid: cumplimiento + comparativos -->
+
 <?php
 if (!function_exists('tx360_class_rate')) {
     function tx360_class_rate(?float $pct): string {
@@ -7131,6 +7118,7 @@ if (!function_exists('tx360_render_comparison_card')) {
     </section>
 
 
+    <?php if ($layout_hc_bottom): ?>
     <div class="dashboard-insight-grid"><!-- ARPU y Mix en segunda fila -->
     <?php else: ?>
     <!-- NPPF 360: dos renglones ejecutivos antes de ARPU. -->
@@ -8732,30 +8720,66 @@ async function submitChangePassword() {
   channel:<?= json_encode(array_values(array_map(static fn($r)=>(string)($r['nombre']??''),$cumplimiento_canal_items)),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG) ?: '[]' ?>
  };
  const normalize=(x)=>String(x).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
+ function candidateKeys(dim,name){
+   const base=normalize(name);const set=new Set([base]);
+   const alias={
+     district:{
+       TUXTLA:['TUXTLA GUTIERREZ'],
+       'COATZAMINA':['COATZA / MINA','COATZA/MINA','COATZA MINA','COATZACOALCOS MINATITLAN','COATZACOALCOS / MINATITLAN'],
+       CANCUN:['CANCUN'],MERIDA:['MERIDA'],VILLAHERMOSA:['VILLAHERMOSA']
+     },
+     channel:{
+       'VENTATECNICO':['VENTA TECNICO','VENTA TECNICA'],
+       'PUNTODEVENTA':['PUNTO DE VENTA'],
+       'AUTOEMPRESARIOSAUTORIZADOS':['AUTOEMPRESARIOS AUTORIZADOS'],
+       'OTROSSINMETA':['OTRO','OTROS','SIN CANAL'],
+       OTRO:['OTRO','OTROS','SIN CANAL']
+     }
+   };
+   (alias[dim]?.[base]||[]).forEach(v=>set.add(normalize(v)));
+   if(dim==='district'){
+     if(base.startsWith('TUXTLA')) set.add(normalize('TUXTLA GUTIERREZ'));
+     if(base.includes('COATZA')) ['COATZA / MINA','COATZA/MINA','COATZA MINA','COATZACOALCOS MINATITLAN','COATZACOALCOS / MINATITLAN'].forEach(v=>set.add(normalize(v)));
+   }else{
+     if(base.includes('VENTATECNIC')) ['VENTA TECNICO','VENTA TECNICA'].forEach(v=>set.add(normalize(v)));
+     if(base.includes('AUTOEMPRESARIOS')) set.add(normalize('AUTOEMPRESARIOS AUTORIZADOS'));
+     if(base.includes('OTROS')||base.includes('SINMETA')) ['OTRO','OTROS','SIN CANAL'].forEach(v=>set.add(normalize(v)));
+   }
+   return [...set];
+ }
  function renderAligned(dim){
    const target=document.getElementById(dim==='district'?'tx360RowsDistrict':'tx360RowsChannel');if(!target)return;
    const selected=[...document.querySelectorAll('.tx360-dimcheck[data-dim="'+dim+'"]:checked')].map(e=>e.value);
-   const cohorts=data.cohortGroups||{};const acc={};
-   const periods=[...new Set(selected.map(v=>v==='prevent'?'m1':v))];
-   for(const period of periods)for(const [name,row] of Object.entries(cohorts[period]?.[dim]||{})){
-     const key=normalize(name);const r=acc[key]??={name,ins:0,cases:0,prevent:0};r.ins+=Number(row.ins||0);
-   }
-   for(const period of selected){const key=period==='prevent'?'m1':period;
-     for(const [name,row] of Object.entries(cohorts[key]?.[dim]||{})){
-       const r=acc[normalize(name)]??={name,ins:0,cases:0,prevent:0};
-       if(period==='prevent')r.prevent+=Number(row.prevent||0);else r.cases+=Number(row.nppf||0);
+   if(!selected.length){target.innerHTML='<div class="tx360-message">Selecciona al menos una cosecha.</div>';return;}
+   const cohorts=data.cohortGroups||{};
+   const source={};
+   const denomPeriods=[...new Set(selected.map(v=>v==='prevent'?'m1':v))];
+   for(const period of denomPeriods){
+     for(const [name,row] of Object.entries(cohorts[period]?.[dim]||{})){
+       const key=normalize(name);const r=source[key]??={sourceName:name,ins:0,cases:0,prevent:0};
+       r.ins+=Number(row.ins||0);
      }
    }
-   const ordered=[],seen=new Set();
-   // Exactamente el orden visual de las tarjetas de cumplimiento; no recalcular rankings.
-   for(const name of dimOrders[dim]||[]){const key=normalize(name);if(acc[key]){ordered.push(acc[key]);seen.add(key);}else{ordered.push({name,ins:0,cases:0,prevent:0,missing:true});seen.add(key);}}
-   for(const [key,row] of Object.entries(acc))if(!seen.has(key))ordered.push(row);
-   const usingPrevent=selected.includes('prevent');const max=Math.max(5,...ordered.map(r=>r.ins?100*(r.cases+r.prevent)/r.ins:0));
-   target.innerHTML=ordered.map(r=>{const cases=r.cases+r.prevent,pct=r.ins?100*cases/r.ins:null;
-     const label=pct===null?'N/D':pct.toFixed(2)+'%';const w=pct===null?0:Math.min(100,100*pct/max);
-     const safe=String(r.name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-     return '<div class="tx360-aligned-row"><div class="tx360-aligned-head"><span title="'+safe+'">'+safe+'</span><strong>'+label+'</strong></div><div class="tx360-aligned-track"><div class="tx360-aligned-fill '+(usingPrevent&&!selected.includes('m1')&&!selected.includes('m2')&&!selected.includes('m3')&&!selected.includes('m4')?'prevent':'')+'" style="width:'+w+'%"></div></div><div class="tx360-aligned-count">'+(r.missing?'Sin correspondencia en NPPF para este alcance':fmt(cases)+' casos / '+fmt(r.ins)+' INS'+(r.prevent?' · Prev. '+fmt(r.prevent):''))+'</div></div>';
-   }).join('')||'<div class="tx360-message">Sin datos para este alcance.</div>';
+   for(const period of selected){
+     const bucket=period==='prevent'?'m1':period;
+     for(const [name,row] of Object.entries(cohorts[bucket]?.[dim]||{})){
+       const key=normalize(name);const r=source[key]??={sourceName:name,ins:0,cases:0,prevent:0};
+       if(period==='prevent') r.prevent+=Number(row.prevent||0); else r.cases+=Number(row.nppf||0);
+     }
+   }
+   const ordered=[];const used=new Set();
+   for(const displayName of dimOrders[dim]||[]){
+     const keys=candidateKeys(dim,displayName); let row={name:displayName,ins:0,cases:0,prevent:0,missing:true};
+     for(const key of keys){
+       if(!source[key]) continue;
+       row.missing=false; row.ins+=Number(source[key].ins||0); row.cases+=Number(source[key].cases||0); row.prevent+=Number(source[key].prevent||0); used.add(key);
+     }
+     ordered.push(row);
+   }
+   for(const [key,row] of Object.entries(source)) if(!used.has(key)) ordered.push({name:row.sourceName,ins:row.ins,cases:row.cases,prevent:row.prevent,missing:false,extra:true});
+   const usingPrevent=selected.includes('prevent') && selected.length===1;
+   const rates=ordered.map(r=>r.ins?100*(r.cases+r.prevent)/r.ins:0); const max=Math.max(5,...rates);
+   target.innerHTML=ordered.map((r,idx)=>{const totalCases=r.cases+r.prevent; const pct=r.ins?100*totalCases/r.ins:null; const label=pct===null?'N/D':pct.toFixed(2)+'%'; const w=pct===null?0:Math.min(100,100*pct/max); const safe=String(r.name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); const colorClass=pct===null?'':(pct<4?'good':(pct<=5?'warn':'bad')); return '<div class="tx360-aligned-row"><div class="tx360-aligned-head"><span title="'+safe+'">'+safe+'</span><strong>'+label+'</strong></div><div class="tx360-aligned-track"><div class="tx360-aligned-fill '+(usingPrevent?'prevent':colorClass)+'" style="width:'+w+'%"></div></div><div class="tx360-aligned-count">'+(r.missing?'Sin información NPPF para esta selección':fmt(totalCases)+' casos / '+fmt(r.ins)+' INS'+(r.prevent?' · Prev. '+fmt(r.prevent):''))+'</div></div>'; }).join('')||'<div class="tx360-message">Sin datos para este alcance.</div>';
  }
  document.querySelectorAll('.tx360-dimcheck').forEach(el=>el.addEventListener('change',()=>renderAligned(el.dataset.dim)));
  renderAligned('district');renderAligned('channel');
