@@ -5,9 +5,9 @@
  * NO modifica motor_hc ni tablas NPPF. El universo se rotula según su fuente.
  */
 $tx360 = ['ok'=>false,'error'=>null,'cut'=>null,'eval'=>date('Y-m-d'),
-    'groups'=>['older'=>[],'m1'=>[]],'trend'=>[],'packages'=>['older'=>[],'m1'=>[],'prevent'=>[]],'cohortLabels'=>[],
+    'groups'=>['older'=>[],'m1'=>[]], 'cohortGroups'=>[], 'cohortTotals'=>[],'trend'=>[],'packages'=>['older'=>[],'m1'=>[],'prevent'=>[]],'cohortLabels'=>[],
     'universe'=>'','totals'=>[],'m1_month'=>null,'speeds'=>[],
-    'clusters'=>['top'=>[],'bottom'=>[],'total'=>0,'source'=>null,'error'=>null,'unclassified_ins'=>0]];
+    'clusters'=>['top'=>[],'bottom'=>[],'all'=>[],'byCohort'=>[],'total'=>0,'source'=>null,'error'=>null,'unclassified_ins'=>0]];
 if (!function_exists('tx360_norm_account')) {
 function tx360_norm_account($raw): string {
     $v = preg_replace('/\D/u','',(string)$raw) ?? '';
@@ -101,6 +101,12 @@ try {
         $tx360['clusters']['error']='No se encontró un campo de clúster en instalaciones; falta identificar la fuente cuenta → clúster.';
     }
     $clusterGroups = [];
+    $clusterCohorts = [];
+    foreach(['m4','m3','m2','m1'] as $c) {
+        $tx360['cohortGroups'][$c]=['district'=>[],'channel'=>[]];
+        $tx360['cohortTotals'][$c]=tx360_metric();
+        $clusterCohorts[$c]=[];
+    }
 
 
     // El período visible selecciona el MES/SEMANA de referencia. NPPF usa las cosechas previas.
@@ -154,7 +160,7 @@ try {
     if($hcMode && !$tx_stg_hc_ok) throw new RuntimeException('Motor HC no disponible para certificar las cosechas de esta línea');
     $tx360['universe']=$isRegion?'Todos los canales · Región SUR':($isDistrict?'Todos los canales · Distrito':'Instalaciones certificadas por Motor HC · Línea autorizada');
     $seen=[];
-    $consume=function($account,$date,$district,$channel,$plan,$cluster) use (&$tx360,&$clusterGroups,&$raw,&$seen,&$byDate,$districtTarget,$isRegion,$isDistrict,$end,$speedMap){
+    $consume=function($account,$date,$district,$channel,$plan,$cluster) use (&$tx360,&$clusterGroups,&$clusterCohorts,&$raw,&$seen,&$byDate,$districtTarget,$isRegion,$isDistrict,$end,$speedMap){
         $date=substr((string)$date,0,10);$account=tx360_norm_account($account);
         if($account===''||$date===''||$date>$end)return;
         $unique=$account.'|'.$date;
@@ -186,7 +192,12 @@ try {
         if($class==='prevent')$tx360['totals'][$group]['prevent']++;
         tx360_bucket($tx360['groups'][$group]['district'],$district,$class);
         tx360_bucket($tx360['groups'][$group]['channel'],$channel,$class);
-        if($group==='older' && $tx360['clusters']['source'] !== null) {
+        tx360_bucket($tx360['cohortGroups'][$cohort]['district'],$district,$class);
+        tx360_bucket($tx360['cohortGroups'][$cohort]['channel'],$channel,$class);
+        $tx360['cohortTotals'][$cohort]['ins']++;
+        if($class==='nppf')$tx360['cohortTotals'][$cohort]['nppf']++;
+        if($class==='prevent')$tx360['cohortTotals'][$cohort]['prevent']++;
+        if($tx360['clusters']['source'] !== null) {
             $cluster=trim((string)$cluster);
             if ($cluster==='' || $cluster==='-' || strtoupper($cluster)==='NULL') {
                 $tx360['clusters']['unclassified_ins']++;
@@ -194,9 +205,15 @@ try {
                 // Clave compuesta: nombres iguales en distritos distintos son entidades separadas.
                 $cluster = mb_strtoupper(preg_replace('/\s+/u',' ', $cluster),'UTF-8');
                 $clusterKey=$district.'|'.$cluster;
-                $clusterGroups[$clusterKey]??=['name'=>$cluster,'district'=>$district,'ins'=>0,'nppf'=>0];
-                $clusterGroups[$clusterKey]['ins']++;
-                if($class==='nppf')$clusterGroups[$clusterKey]['nppf']++;
+                $clusterCohorts[$cohort][$clusterKey]??=['name'=>$cluster,'district'=>$district,'ins'=>0,'nppf'=>0,'prevent'=>0];
+                $clusterCohorts[$cohort][$clusterKey]['ins']++;
+                if($class==='nppf')$clusterCohorts[$cohort][$clusterKey]['nppf']++;
+                if($class==='prevent')$clusterCohorts[$cohort][$clusterKey]['prevent']++;
+                if($group==='older'){
+                    $clusterGroups[$clusterKey]??=['name'=>$cluster,'district'=>$district,'ins'=>0,'nppf'=>0];
+                    $clusterGroups[$clusterKey]['ins']++;
+                    if($class==='nppf')$clusterGroups[$clusterKey]['nppf']++;
+                }
             }
         }
 
@@ -237,25 +254,19 @@ try {
         while($e=$rr->fetch_assoc())$consume($e['cuenta'],$e['fecha'],$e['distrito'],$e['origen_prospecto'],$e['plan'],$e['tx_cluster']??null);
         $q->close();
     }
-    // Top 10: tasa NPPF más alta (mayor atención). Bottom 10: más baja.
-    // Universo M4–M2, sin umbral mínimo arbitrario de instalaciones.
-    // Una tasa de 100% con 1/1 se identifica por su denominador en la tarjeta.
+    // Las mitades son disjuntas; mejor = menor NPPF; peor = mayor NPPF.
+    // Volumen como desempate: priorizar bases mayores sobre 0/1 instalaciones.
     $clusterRows=array_values(array_filter($clusterGroups,static fn($r)=>(int)$r['ins']>0));
-    $clusterRate=static fn($r)=>(float)$r['nppf']/(float)$r['ins'];
-    usort($clusterRows,static function($a,$b) use($clusterRate) {
-        $diff=$clusterRate($b)<=>$clusterRate($a);
-        return $diff ?: (($b['nppf']<=>$a['nppf']) ?: strcmp($a['name'],$b['name']));
+    usort($clusterRows,static function($a,$b){
+        $ra=$a['nppf']/$a['ins']; $rb=$b['nppf']/$b['ins'];
+        return ($ra<=>$rb) ?: (($b['ins']<=>$a['ins']) ?: (strcmp($a['district'].'|'.$a['name'],$b['district'].'|'.$b['name'])));
     });
+    $tx360['clusters']['byCohort']=$clusterCohorts;
+    $tx360['clusters']['all']=$clusterRows;
     $tx360['clusters']['total']=count($clusterRows);
-    $tx360['clusters']['top']=array_slice($clusterRows,0,10);
-    // No repetir un clúster en ambos extremos si el universo es pequeño.
-    $topKeys=array_fill_keys(array_map(static fn($r)=>$r['district'].'|'.$r['name'],$tx360['clusters']['top']),true);
-    $bottomCandidates=array_values(array_filter($clusterRows,static fn($r)=>!isset($topKeys[$r['district'].'|'.$r['name']])));
-    usort($bottomCandidates,static function($a,$b) use($clusterRate) {
-        $diff=$clusterRate($a)<=>$clusterRate($b);
-        return $diff ?: (($b['ins']<=>$a['ins']) ?: strcmp($a['name'],$b['name']));
-    });
-    $tx360['clusters']['bottom']=array_slice($bottomCandidates,0,10);
+    $half=(int)ceil(count($clusterRows)/2);
+    $tx360['clusters']['top']=array_slice($clusterRows,0,$half);
+    $tx360['clusters']['bottom']=array_reverse(array_slice($clusterRows,$half));
     // Orden ejecutivo: M4–M2 de menor a mayor NPPF; M1 hereda el orden de M4–M2.
     $tx360['groups']['older']['district'] = tx360_sort_asc_rate($tx360['groups']['older']['district'], 'nppf');
     $tx360['groups']['older']['channel']  = tx360_sort_asc_rate($tx360['groups']['older']['channel'], 'nppf');
