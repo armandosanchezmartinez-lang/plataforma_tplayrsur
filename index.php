@@ -5118,6 +5118,8 @@ if ($tx_geo_sum_count > 0) {
     ];
     $tx_geo_zoom = ($rol_consulta === 'admin' || $rol === 'director_regional') ? 7 : 10;
 }
+// NPPF 360 (solo lectura): lógica separada para proteger el INDEX existente.
+require_once __DIR__.'/includes/motor_nppf.php';
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -6351,6 +6353,132 @@ if ($tx_geo_sum_count > 0) {
         .tx-nav-info{margin:-10px 0 18px;padding:0 4px;color:#71809d;font-size:.74rem;}
         @media(max-width:900px){.tx-nav-panel{left:auto;right:0;transform:none;}.tx-nav-actions{justify-content:flex-start;}}
 
+/* INDEX NPPF 360 · dos renglones entre cumplimiento y ARPU */
+.tx360-section{grid-column:1/-1;min-width:0;margin:16px 0 4px;color:#172c4a}
+.tx360-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin:0 0 10px;padding:0 4px}
+.tx360-heading strong{display:block;font-weight:800;font-size:15px}
+.tx360-heading span,.tx360-heading small{font-size:10px;color:#697c98}
+.tx360-toprow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.tx360-bottomrow{display:grid;grid-template-columns:minmax(0,1.7fr) repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;align-items:stretch}
+.tx360-card{background:rgba(255,255,255,.93);border:1px solid #e5eaf6;border-radius:16px;padding:14px 14px 12px;box-shadow:0 5px 16px rgba(21,42,83,.045);min-width:0}
+.tx360-card-title{font-size:11px;font-weight:800;color:#172c4a;line-height:1.25}
+.tx360-subtitle{color:#72809b;font-size:9px;line-height:1.45;margin:5px 0 8px;min-height:24px}
+.tx360-total{font-size:10px;color:#64748b;margin:8px 0 11px}.tx360-total strong{color:#1f3658}.tx360-total em{font-style:normal;color:#b48518;font-weight:750}
+.tx360-items{display:flex;flex-direction:column;gap:10px}.tx360-line{display:flex;justify-content:space-between;gap:7px;align-items:baseline;font-size:10px}
+.tx360-line strong{font-size:10px;font-weight:800;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;max-width:80%}.tx360-rate{font-weight:800;white-space:nowrap;font-size:10px}
+.tx360-rate.good{color:#008eaf}.tx360-rate.warn{color:#b37f00}.tx360-rate.bad{color:#e03879}.tx360-rate.na{color:#8993a5}
+.tx360-track{height:10px;background:#e9edf7;border-radius:999px;overflow:hidden;margin:4px 0}.tx360-fill{height:100%;border-radius:999px;background:#21bedf}
+.tx360-fill.good{background:#08b8d9}.tx360-fill.warn{background:#9b32eb}.tx360-fill.bad{background:#f14289}.tx360-fill.na{background:#abb5c4}
+.tx360-mini{font-size:9px;color:#8090a7}.tx360-trendwrap{position:relative;height:290px;max-width:100%}
+.tx360-note{font-size:9px;color:#7b8ba4;line-height:1.45;margin-top:8px}
+.tx360-kicker{display:inline-block;background:#fff6cc;color:#8a6a00;border:1px solid #f6da76;border-radius:999px;padding:2px 8px;font-size:9px;font-weight:800;margin-top:6px}
+.tx360-packagecard .tx360-subtitle{min-height:24px}.tx360-packagecard .tx360-items{gap:9px}
+.tx360-foot{font-size:9px;color:#687a96;padding:8px 4px}.tx360-message{padding:15px;background:#fff;border-radius:12px;color:#a3323b}
+@media(max-width:1500px){.tx360-bottomrow{grid-template-columns:1fr 1fr}.tx360-trendcard{grid-column:1/-1}}
+@media(max-width:1320px){.tx360-toprow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:680px){.tx360-toprow,.tx360-bottomrow{grid-template-columns:1fr}.tx360-heading{align-items:flex-start;flex-direction:column}}
+
+/* NPPF 360 v3: paridad visual con cards de Cumplimiento y barras M1 + Preventivo */
+.tx360-heading strong{font-size:16px;font-weight:900}
+.tx360-heading span,.tx360-heading small{font-size:11px;color:#50627e;font-weight:650}
+.tx360-card{padding:18px 16px 16px;border-radius:18px}
+.tx360-card-title{font-size:13px;font-weight:900;color:#142541}
+.tx360-subtitle{font-size:10.5px;color:#536783;line-height:1.45;min-height:0}
+.tx360-total{font-size:12px;font-weight:750;color:#344662;line-height:1.5;margin:9px 0 13px}
+.tx360-total strong{font-size:13px;font-weight:900;color:#152945}
+.tx360-total em{font-size:11px;font-weight:850}
+.tx360-items{gap:12px}
+.tx360-line{font-size:12px;color:#172a47;font-weight:750}
+.tx360-line strong{font-size:11px;font-weight:900;max-width:77%;white-space:normal;line-height:1.3;overflow-wrap:anywhere}
+.tx360-rate{font-size:12px;font-weight:900}
+.tx360-track{height:17px;margin:6px 0 5px;background:#e8edf7}
+.tx360-fill{min-height:100%}
+.tx360-mini{font-size:10.5px;color:#526681;font-weight:700}
+.tx360-mini span{line-height:1.35}
+.tx360-packagecard .tx360-items{gap:11px}
+.tx360-packagecard .tx360-track{height:15px}
+.tx360-packagecard .tx360-line strong{font-size:11px}
+.tx360-trendwrap{height:305px}
+.tx360-trendcard .tx360-card-title{font-size:13px}
+.tx360-kicker,.tx360-note,.tx360-foot{font-size:10.5px;font-weight:650}
+.tx360-m1-bars{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:7px 0 5px}
+.tx360-m1-col{min-width:0}
+.tx360-m1-label{display:flex;justify-content:space-between;align-items:center;gap:3px;font-size:10px;font-weight:850;color:#31445f;margin-bottom:4px}
+.tx360-m1-label b{font-size:11px;font-weight:900;white-space:nowrap}
+.tx360-m1-col .tx360-track{margin:0;height:11px}
+.tx360-prevent-fill{background:linear-gradient(90deg,#f8ca45,#efa51b)!important}
+.tx360-prevent-label{color:#a56d00}
+.tx360-message{font-size:11px;font-weight:700}
+@media(min-width:1501px){.tx360-bottomrow{grid-template-columns:minmax(0,1.7fr) repeat(3,minmax(0,1fr))}}
+
+
+/* NPPF 360 v4 · distribución 50/50, tendencia rosa frontal y paquetes homogéneos */
+.tx360-bottomrow{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;align-items:stretch}
+.tx360-trendcard,.tx360-package-comparison{min-width:0;grid-column:auto!important}
+.tx360-trendwrap{height:350px}
+.tx360-package-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.tx360-package-column{min-width:0}
+.tx360-package-colhead{border-bottom:2px solid #dce6f4;padding:7px 0 9px;font-size:12px;font-weight:900;color:#172a47;min-height:42px}
+.tx360-package-item{min-width:0;border-bottom:1px solid #eef2f8;padding:9px 0 7px}
+.tx360-package-name{font-size:10px;font-weight:850;color:#243654;line-height:1.35;min-height:32px;overflow-wrap:anywhere}
+.tx360-package-rate{display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-top:3px}
+.tx360-package-rate strong{font-size:12px;font-weight:900;white-space:nowrap}
+.tx360-package-rate>span{font-size:10px;font-weight:750;color:#536783;white-space:nowrap}
+.tx360-package-item .tx360-track{height:13px;margin:5px 0 0}
+.tx360-package-legend{margin-top:12px;color:#526681;font-size:10.5px;font-weight:650}
+@media(max-width:1100px){.tx360-bottomrow{grid-template-columns:1fr!important}.tx360-package-columns{gap:8px}}
+@media(max-width:580px){.tx360-package-columns{grid-template-columns:1fr}.tx360-package-colhead{min-height:0}.tx360-trendwrap{height:310px}}
+
+
+/* NPPF 360 · Velocidades ordenadas y participación de casos */
+.tx360-speedfilters{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0 14px}
+.tx360-speedfilters label{font-size:11px;font-weight:800;color:#203755;border:1px solid #dce6f2;background:#f4f7fd;padding:6px 8px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.tx360-speedfilters input{accent-color:#ee3986;vertical-align:middle}
+.tx360-speedbody{display:grid;grid-template-columns:minmax(0,1.28fr) minmax(180px,.85fr);gap:16px;align-items:center;min-width:0}
+.tx360-speedcanvas{height:250px;min-width:0;position:relative}
+.tx360-speedlegend{display:flex;flex-direction:column;gap:7px;min-width:0}
+.tx360-speedentry{display:grid;grid-template-columns:92px minmax(30px,1fr) 113px;gap:8px;align-items:center;padding:3px 0;border-bottom:1px solid #edf1f7;min-width:0}
+.tx360-speedname{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:850;color:#213752;white-space:nowrap}
+.tx360-speeddot{height:9px;width:9px;flex-shrink:0;border-radius:2px}
+.tx360-speedtrack{height:11px;border-radius:99px;background:#e8edf6;overflow:hidden;min-width:0}
+.tx360-speedfill{height:100%;border-radius:99px;background:#f0448b}
+.tx360-speedvalues{font-size:10px;white-space:nowrap;color:#536985;text-align:right;font-weight:800;font-variant-numeric:tabular-nums}
+.tx360-speedvalues strong{color:#1e3653}
+@media(max-width:1400px){.tx360-speedbody{grid-template-columns:1fr}.tx360-speedcanvas{height:230px;max-width:360px;width:100%;margin:auto}.tx360-speedentry{grid-template-columns:90px minmax(30px,1fr) 112px}}
+@media(max-width:600px){.tx360-speedentry{grid-template-columns:78px minmax(30px,1fr) 104px;gap:5px}.tx360-speedvalues,.tx360-speedname{font-size:9px}}
+
+
+/* NPPF M4–M2: ranking por clúster */
+.tx360-cluster-card .tx360-cluster-list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.tx360-cluster-card .tx360-cluster-item{min-width:0}
+.tx360-cluster-card .tx360-cluster-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:11px;font-weight:850;color:#152b4a}
+.tx360-cluster-card .tx360-cluster-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tx360-cluster-card .tx360-cluster-head .tx360-rate{white-space:nowrap;font-size:12px}
+.tx360-cluster-card .tx360-cluster-district{display:flex;justify-content:space-between;gap:8px;color:#63748e;font-size:10px;font-weight:750;margin:3px 0 4px}
+.tx360-cluster-card .tx360-track{height:14px;margin:0}
+.tx360-cluster-card .tx360-package-legend{font-size:10px;margin-top:12px}
+
+/* NPPF GLOBAL COHORT FILTER / CLUSTER SCROLL */
+.tx360-global-filter{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:4px 4px 13px}
+.tx360-global-filter .tx360-filter-title{font-size:12px;font-weight:900;color:#183053;margin-right:3px}
+.tx360-global-filter label{font-size:11px;font-weight:800;color:#203755;border:1px solid #dce6f2;background:#fff;padding:7px 10px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.tx360-global-filter input{accent-color:#ed3985;vertical-align:middle}
+.tx360-selection-hint{color:#65738a;font-size:10px;font-weight:600}
+.tx360-cluster-card .tx360-cluster-list{max-height:420px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b2c1d6 #edf2f8;padding-right:6px}
+.tx360-cluster-count{margin-top:7px;font-size:10px;color:#526681;font-weight:750}
+.tx360-cluster-card .tx360-cluster-item{padding-bottom:5px;border-bottom:1px solid #eef1f8}
+/* INDEX NPPF · v2026-11-28b: aprovechar toda la altura disponible de la tarjeta. */
+.tx360-cluster-card{display:flex;flex-direction:column;min-height:0}
+.tx360-cluster-card .tx360-cluster-list{
+    flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;
+    align-content:flex-start;gap:10px;
+}
+.tx360-cluster-card .tx360-package-legend{flex:0 0 auto;margin-top:10px}
+@media(max-width:1320px){
+    /* En dos columnas la fila puede quedar sin una tarjeta alta de referencia. */
+    .tx360-cluster-card .tx360-cluster-list{min-height:320px;max-height:540px;flex:1 1 auto}
+}
+@media(max-width:900px){.tx360-global-filter{gap:5px}.tx360-global-filter label{padding:6px}}
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -6902,7 +7030,186 @@ $tx_index_render_kpi_comparativo = static function(string $codigo) use ($tx_cmp_
     </div>
     <?php endforeach; ?>
     </div><!-- dashboard-analytics-grid: cumplimiento + comparativos -->
+<?php
+if (!function_exists('tx360_class_rate')) {
+    function tx360_class_rate(?float $pct): string {
+        if ($pct === null) return 'na';
+        if ($pct < 4) return 'good';
+        if ($pct <= 5) return 'warn';
+        return 'bad';
+    }
+}
+if (!function_exists('tx360_render_list_card')) {
+    function tx360_render_list_card(array $tx360, string $group, string $dimension, string $title): void {
+        $rows = $tx360['groups'][$group][$dimension] ?? [];
+        $groupTotal = $tx360['totals'][$group] ?? ['nppf'=>0,'ins'=>0,'prevent'=>0];
+        $esc=static fn($v)=>htmlspecialchars((string)$v,ENT_QUOTES,'UTF-8');
+        echo '<div class="tx360-card tx360-dynamic-list" data-dimension="'.$esc($dimension).'">';
+        echo '<div class="tx360-card-title">'.$esc($title).'</div>';
+        $subtitle = $group==='older' ? 'Cosechas '.implode(' / ',array_map(static fn($m)=>$tx360['cohortLabels'][$m]??'N/D',['m4','m3','m2'])) : 'Cosecha '.($tx360['cohortLabels']['m1']??'N/D');
+        echo '<div class="tx360-subtitle">'.$esc($subtitle).'</div>';
+        echo '<div class="tx360-total">NPPF <strong>'.number_format((float)$groupTotal['nppf']).' / '.number_format((float)$groupTotal['ins']).'</strong> · '.(tx360_rate($groupTotal)===null?'N/D':number_format((float)tx360_rate($groupTotal),2).'%');
+        if($group==='m1')echo ' · <em>Preventivo '.number_format((float)$groupTotal['prevent']).'</em>';
+        echo '</div><div class="tx360-items">';
+        foreach($rows as $name=>$row){
+            $pct=tx360_rate($row);$class=tx360_class_rate($pct);
+            $bar=$pct===null?0:min(100,$pct*6);
+            echo '<div class="tx360-item">';
+            echo '<div class="tx360-line"><strong title="'.$esc($name).'">'.$esc($name).'</strong>';
+            if($group==='older')echo '<span class="tx360-rate '.$class.'">'.($pct===null?'N/D':number_format($pct,2).'%').'</span>';
+            echo '</div>';
+            if($group==='m1'){
+                $prevPct=($row['ins']??0)>0?100*(float)($row['prevent']??0)/(float)$row['ins']:null;
+                $prevBar=$prevPct===null?0:min(100,$prevPct*6);
+                echo '<div class="tx360-m1-bars">';
+                echo '<div class="tx360-m1-col"><div class="tx360-m1-label"><span>M1</span><b class="tx360-rate '.$class.'">'.($pct===null?'N/D':number_format($pct,2).'%').'</b></div><div class="tx360-track"><div class="tx360-fill '.$class.'" style="width:'.$bar.'%"></div></div></div>';
+                echo '<div class="tx360-m1-col"><div class="tx360-m1-label"><span>Preventivo</span><b class="tx360-prevent-label">'.($prevPct===null?'N/D':number_format($prevPct,2).'%').'</b></div><div class="tx360-track"><div class="tx360-fill tx360-prevent-fill" style="width:'.$prevBar.'%"></div></div></div>';
+                echo '</div>';
+            }else echo '<div class="tx360-track"><div class="tx360-fill '.$class.'" style="width:'.$bar.'%"></div></div>';
+            echo '<div class="tx360-line tx360-mini"><span>'.number_format((float)$row['nppf']).' / '.number_format((float)$row['ins']).' instalaciones</span>';
+            if($group==='m1')echo '<span>Prev. '.number_format((float)$row['prevent']).'</span>';
+            echo '</div></div>';
+        }
+        echo '</div></div>';
+    }
+}
+if (!function_exists('tx360_render_cluster_card')) {
+    function tx360_render_cluster_card(array $tx360, string $which): void {
+        $esc=static fn($v)=>htmlspecialchars((string)$v,ENT_QUOTES,'UTF-8');
+        $isTop=$which==='top';
+        echo '<div class="tx360-card tx360-cluster-card" data-half="'.$which.'">';
+        echo '<div class="tx360-card-title">'.($isTop?'TOP · Mejor NPPF por Clúster':'BOTTOM · Peor NPPF por Clúster').'</div>';
+        echo '<div class="tx360-subtitle">'.($isTop?'Menor':'Mayor').' tasa NPPF · Distrito incluido · Desliza para ver toda la mitad</div>';
+        if (!empty($tx360['clusters']['error']))echo '<div class="tx360-message">'.$esc($tx360['clusters']['error']).'</div>';
+        echo '<div class="tx360-cluster-count"></div><div class="tx360-cluster-list" tabindex="0" aria-label="Lista desplazable de clústeres"></div>';
+        echo '<div class="tx360-package-legend">Orden por tasa NPPF; en empates, primero mayor volumen. Revisa siempre el denominador.</div></div>';
+    }
+}
+if (!function_exists('tx360_render_packages_comparison')) {
+    function tx360_render_packages_comparison(array $tx360): void {
+        $rank = $tx360['package_rank'] ?? array_slice(array_keys($tx360['packages']['older'] ?? []),0,8);
+        $esc = static fn($s) => htmlspecialchars((string)$s, ENT_QUOTES,'UTF-8');
+        echo '<div class="tx360-card tx360-package-comparison">';
+        echo '<div class="tx360-card-title">NPPF · Paquetes de mayor volumen</div>';
+        echo '<div class="tx360-subtitle">Ordenados por instalaciones M4–M2, de mayor a menor. Mismo orden para comparar M1 y Preventivo.</div>';
+        if (!$rank) { echo '<div class="tx360-message">Sin instalaciones por paquete para las cosechas seleccionadas.</div></div>'; return; }
+        echo '<div class="tx360-package-columns">';
+        foreach (['older'=>'M4–M2 confirmado','m1'=>'M1 confirmado','prevent'=>'M1 preventivo'] as $key=>$title) {
+            $field = $key==='prevent'?'prevent':'nppf';
+            echo '<div class="tx360-package-column"><div class="tx360-package-colhead">'.$esc($title).'</div>';
+            foreach($rank as $name) {
+                $row=$tx360['packages'][$key][$name] ?? ['ins'=>0,'nppf'=>0,'prevent'=>0];
+                $ins=(int)($row['ins']??0);$cases=(int)($row[$field]??0);
+                $pct=$ins>0?round(100*$cases/$ins,2):null;
+                $bar=$pct===null?0:min(100,$pct*6);
+                $cls=$key==='prevent'?'tx360-prevent-fill':tx360_class_rate($pct);
+                $rate=$pct===null?'N/D':number_format($pct,2).'%';
+                echo '<div class="tx360-package-item">';
+                echo '<div class="tx360-package-name" title="'.$esc($name).'">'.$esc($name).'</div>';
+                echo '<div class="tx360-package-rate"><strong>'.($key==='prevent'?'<span class="tx360-prevent-label">'.$rate.'</span>':'<span class="tx360-rate '. $cls .'">'.$rate.'</span>').'</strong><span>'.number_format($cases).' / '.number_format($ins).' INS</span></div>';
+                echo '<div class="tx360-track"><div class="tx360-fill '.$cls.'" style="width:'.$bar.'%"></div></div>';
+                echo '</div>';
+            }
+            echo '</div>';
+        }
+        echo '</div><div class="tx360-package-legend">Porcentaje = casos de la cosecha / instalaciones del mismo paquete · Preventivo no se suma a NPPF.</div></div>';
+    }
+}
+?>
+    <!-- NPPF 360: dos renglones ejecutivos antes de ARPU. -->
+    <section class="tx360-section" aria-label="Calidad de venta NPPF">
+        <div class="tx360-heading"><div><strong>Calidad de venta · NPPF</strong>
+            <span><?= htmlspecialchars((string)$tx360['universe'],ENT_QUOTES,'UTF-8') ?></span></div>
+            <small>Fuente NPPF: <?= htmlspecialchars((string)($tx360['cut']??'Sin corte'),ENT_QUOTES,'UTF-8') ?> · Evaluación: <?= htmlspecialchars((string)$tx360['eval'],ENT_QUOTES,'UTF-8') ?></small>
+        </div>
+        <div class="tx360-global-filter" role="group" aria-label="Cosechas para todas las tarjetas NPPF">
+            <span class="tx360-filter-title">Cosechas:</span>
+            <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 preventivo'] as $key=>$label): ?>
+            <label><input type="checkbox" class="tx360-speedcheck" value="<?= $key ?>" <?= in_array($key,['m4','m3','m2'],true)?'checked':'' ?>> <?= htmlspecialchars($label,ENT_QUOTES,'UTF-8') ?></label>
+            <?php endforeach; ?>
+            <span class="tx360-selection-hint">Preventivo separado del NPPF confirmado</span>
+        </div>
+        <?php if (!$tx360['ok']): ?>
+            <div class="tx360-message">NPPF no disponible: <?= htmlspecialchars((string)$tx360['error'],ENT_QUOTES,'UTF-8') ?>. No se muestran cifras estimadas.</div>
+        <?php else: ?>
+        <div class="tx360-toprow">
+            <?php tx360_render_list_card($tx360,'older','district','NPPF por distrito · M4–M2'); ?>
+            <?php tx360_render_list_card($tx360,'older','channel','NPPF por canal · M4–M2'); ?>
+            <?php tx360_render_cluster_card($tx360,'top'); ?>
+            <?php tx360_render_cluster_card($tx360,'bottom'); ?>
+        </div>
+        <div class="tx360-bottomrow">
+            <div class="tx360-card tx360-trendcard">
+                <div class="tx360-card-title">Tendencia NPPF por cosechas seleccionadas</div>
+                <div class="tx360-subtitle">Barras = instalaciones · línea = % NPPF confirmado · punto amarillo = M1 preventivo</div>
+                <div class="tx360-trendwrap"><canvas id="tx360Trend" aria-label="Tendencia mensual de NPPF"></canvas></div>
+                <?php if(!empty($tx360['m1_month'])): ?><div class="tx360-kicker">M1: <?= htmlspecialchars((new DateTimeImmutable($tx360['m1_month'].'-01'))->format('m/Y'),ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
+                <div class="tx360-note">Se muestran únicamente los meses de instalación correspondientes a las cosechas elegidas. Preventivo permanece separado.</div>
+            </div>
+            <div class="tx360-card tx360-speedcard">
+                <div class="tx360-card-title">NPPF · Calidad de venta por velocidad</div>
+                <div class="tx360-subtitle">Tasa NPPF de menor a mayor velocidad. El anillo muestra participación de casos, no tasa.</div>
+
+                <div class="tx360-speedbody">
+                    <div class="tx360-speedlegend" id="tx360SpeedLegend" aria-live="polite"></div>
+                    <div class="tx360-speedcanvas"><canvas id="tx360Speed" aria-label="Participación de los casos NPPF por velocidad"></canvas></div>
+                </div>
+                <div class="tx360-package-legend" id="tx360SpeedSummary"></div>
+            </div>
+        </div>
+        <div class="tx360-foot">M4–M2: NPPF de primera factura aún pendiente, sin M1 · M1 preventivo se informa por separado y nunca se suma a la tasa NPPF. Reversos incluidos. Los datos pendientes reflejan el último snapshot NPPF, no pagos posteriores.</div>
+        <?php endif; ?>
+    </section>
+
+
     <div class="dashboard-insight-grid"><!-- ARPU y Mix en segunda fila -->
+    <?php else: ?>
+    <!-- NPPF 360: dos renglones ejecutivos antes de ARPU. -->
+    <section class="tx360-section" aria-label="Calidad de venta NPPF">
+        <div class="tx360-heading"><div><strong>Calidad de venta · NPPF</strong>
+            <span><?= htmlspecialchars((string)$tx360['universe'],ENT_QUOTES,'UTF-8') ?></span></div>
+            <small>Fuente NPPF: <?= htmlspecialchars((string)($tx360['cut']??'Sin corte'),ENT_QUOTES,'UTF-8') ?> · Evaluación: <?= htmlspecialchars((string)$tx360['eval'],ENT_QUOTES,'UTF-8') ?></small>
+        </div>
+        <div class="tx360-global-filter" role="group" aria-label="Cosechas para todas las tarjetas NPPF">
+            <span class="tx360-filter-title">Cosechas:</span>
+            <?php foreach (['m4'=>'M4','m3'=>'M3','m2'=>'M2','m1'=>'M1','prevent'=>'M1 preventivo'] as $key=>$label): ?>
+            <label><input type="checkbox" class="tx360-speedcheck" value="<?= $key ?>" <?= in_array($key,['m4','m3','m2'],true)?'checked':'' ?>> <?= htmlspecialchars($label,ENT_QUOTES,'UTF-8') ?></label>
+            <?php endforeach; ?>
+            <span class="tx360-selection-hint">Preventivo separado del NPPF confirmado</span>
+        </div>
+        <?php if (!$tx360['ok']): ?>
+            <div class="tx360-message">NPPF no disponible: <?= htmlspecialchars((string)$tx360['error'],ENT_QUOTES,'UTF-8') ?>. No se muestran cifras estimadas.</div>
+        <?php else: ?>
+        <div class="tx360-toprow">
+            <?php tx360_render_list_card($tx360,'older','district','NPPF por distrito · M4–M2'); ?>
+            <?php tx360_render_list_card($tx360,'older','channel','NPPF por canal · M4–M2'); ?>
+            <?php tx360_render_cluster_card($tx360,'top'); ?>
+            <?php tx360_render_cluster_card($tx360,'bottom'); ?>
+        </div>
+        <div class="tx360-bottomrow">
+            <div class="tx360-card tx360-trendcard">
+                <div class="tx360-card-title">Tendencia NPPF por cosechas seleccionadas</div>
+                <div class="tx360-subtitle">Barras = instalaciones · línea = % NPPF confirmado · punto amarillo = M1 preventivo</div>
+                <div class="tx360-trendwrap"><canvas id="tx360Trend" aria-label="Tendencia mensual de NPPF"></canvas></div>
+                <?php if(!empty($tx360['m1_month'])): ?><div class="tx360-kicker">M1: <?= htmlspecialchars((new DateTimeImmutable($tx360['m1_month'].'-01'))->format('m/Y'),ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
+                <div class="tx360-note">Se muestran únicamente los meses de instalación correspondientes a las cosechas elegidas. Preventivo permanece separado.</div>
+            </div>
+            <div class="tx360-card tx360-speedcard">
+                <div class="tx360-card-title">NPPF · Calidad de venta por velocidad</div>
+                <div class="tx360-subtitle">Tasa NPPF de menor a mayor velocidad. El anillo muestra participación de casos, no tasa.</div>
+
+                <div class="tx360-speedbody">
+                    <div class="tx360-speedlegend" id="tx360SpeedLegend" aria-live="polite"></div>
+                    <div class="tx360-speedcanvas"><canvas id="tx360Speed" aria-label="Participación de los casos NPPF por velocidad"></canvas></div>
+                </div>
+                <div class="tx360-package-legend" id="tx360SpeedSummary"></div>
+            </div>
+        </div>
+        <div class="tx360-foot">M4–M2: NPPF de primera factura aún pendiente, sin M1 · M1 preventivo se informa por separado y nunca se suma a la tasa NPPF. Reversos incluidos. Los datos pendientes reflejan el último snapshot NPPF, no pagos posteriores.</div>
+        <?php endif; ?>
+    </section>
+
+
     <?php endif; ?>
 
         <div class="chart-card arpu-card">
@@ -8453,6 +8760,207 @@ async function submitChangePassword() {
         btn.textContent = 'Guardar cambios';
     }
 }
+</script>
+<script>
+// NPPF 360: Chart.js ya está cargado por INDEX; sin dependencias adicionales.
+(function(){
+ if(typeof Chart==='undefined')return;
+ const data=<?= json_encode($tx360, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?: 'null' ?>;
+ if(!data || !data.ok)return;
+ const fmt=(v)=>Number(v).toLocaleString('es-MX');
+ const fmtPct=v=>Number(v).toFixed(2)+'%';
+ const safe=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+ const speedCanvas=document.getElementById('tx360Speed');
+ let speedChart=null,trendChart=null;
+ const speedPalette=['#16b9db','#f0448b','#923cf0','#f1b532','#00a6ff','#19bda0','#686fd9','#e1784f','#9aa8bc','#746fc0'];
+ const speedNumber=s=>{const m=String(s).match(/[\d,.]+/);return m?Number(m[0].replace(/,/g,'')):Number.POSITIVE_INFINITY;};
+ const selected=()=>[...document.querySelectorAll('.tx360-global-filter .tx360-speedcheck:checked')].map(e=>e.value);
+ // Escala local: máximo observado + 10% de aire, sin modificar tasas reales.
+ const scaleMax=(rates,cap=100)=>{
+  const peak=Math.max(0,...rates.filter(Number.isFinite));
+  if(peak<=0)return 1;
+  if(peak>=cap)return cap;
+  const target=Math.min(cap,peak*1.10);
+  const step=target<=10?0.5:target<=40?1:target<=70?2:5;
+  return Math.min(cap,Math.ceil((target-1e-9)/step)*step);
+ };
+ const barWidth=(pct,max)=>Math.max(0,Math.min(100,100*pct/Math.max(max,0.001)));
+
+ function combineMetrics(chosen, dimension){
+  const result={};
+  for(const period of [...new Set(chosen.map(k=>k==='prevent'?'m1':k))]){
+   for(const [key,row] of Object.entries(data.cohortGroups?.[period]?.[dimension]||{})){
+    const v=result[key]??={ins:0,nppf:0,prevent:0}; v.ins+=Number(row.ins||0);
+   }
+  }
+  for(const cohort of chosen){const period=cohort==='prevent'?'m1':cohort;
+   for(const [key,row] of Object.entries(data.cohortGroups?.[period]?.[dimension]||{})){
+    const v=result[key]??={ins:0,nppf:0,prevent:0};
+    if(cohort==='prevent')v.prevent+=Number(row.prevent||0);
+    else v.nppf+=Number(row.nppf||0);
+   }
+  }
+  return result;
+ }
+ function renderLists(chosen){
+  document.querySelectorAll('.tx360-dynamic-list').forEach(card=>{
+   const dim=card.dataset.dimension, items=combineMetrics(chosen,dim);
+   const ordered=Object.entries(items).sort((a,b)=>{
+    const ar=a[1].ins? (a[1].nppf+a[1].prevent)/a[1].ins:Infinity;
+    const br=b[1].ins? (b[1].nppf+b[1].prevent)/b[1].ins:Infinity;
+    return ar-br || b[1].ins-a[1].ins;
+   });
+   const maxBar=scaleMax(ordered.map(([,r])=>r.ins?100*(r.nppf+r.prevent)/r.ins:0));
+   const total=Object.values(items).reduce((s,r)=>({ins:s.ins+r.ins,nppf:s.nppf+r.nppf,prevent:s.prevent+r.prevent}),{ins:0,nppf:0,prevent:0});
+   const cases=total.nppf+total.prevent;
+   const title=card.querySelector('.tx360-card-title'); if(title)title.textContent=(dim==='district'?'NPPF por distrito':'NPPF por canal')+' · selección';
+   const subtitle=card.querySelector('.tx360-subtitle');if(subtitle)subtitle.textContent=chosen.map(k=>k==='prevent'?'M1 preventivo':k.toUpperCase()).join(' · ')||'Ninguna cosecha seleccionada';
+   const totalEl=card.querySelector('.tx360-total'); if(totalEl)totalEl.innerHTML='NPPF <strong>'+fmt(total.nppf)+' / '+fmt(total.ins)+'</strong> · '+(total.ins?fmtPct(100*total.nppf/total.ins):'N/D')+(chosen.includes('prevent')?' · <em>Preventivo '+fmt(total.prevent)+'</em>':'');
+   const holder=card.querySelector('.tx360-items');if(!holder)return;
+   holder.innerHTML=ordered.map(([name,r])=>{
+    const cases=r.nppf+r.prevent, rate=r.ins?100*cases/r.ins:0;
+    const cls=rate<4?'good':rate<=5?'warn':'bad';
+    return '<div class="tx360-item"><div class="tx360-line"><strong title="'+safe(name)+'">'+safe(name)+'</strong><span class="tx360-rate '+cls+'">'+(r.ins?fmtPct(rate):'N/D')+'</span></div><div class="tx360-track"><div class="tx360-fill '+cls+'" style="width:'+barWidth(rate,maxBar)+'%"></div></div><div class="tx360-line tx360-mini"><span>'+fmt(r.nppf)+' NPPF / '+fmt(r.ins)+' INS</span>'+(chosen.includes('prevent')?'<span>Prev. '+fmt(r.prevent)+'</span>':'')+'</div></div>';
+   }).join('')||'<div class="tx360-message">Selecciona una cosecha.</div>';
+  });
+ }
+ function combineClusters(chosen){
+  const rows={};
+  const periods=[...new Set(chosen.map(k=>k==='prevent'?'m1':k))];
+  for(const period of periods)for(const [key,r] of Object.entries(data.clusters?.byCohort?.[period]||{})){
+   const v=rows[key]??={name:r.name,district:r.district,ins:0,nppf:0,prevent:0};v.ins+=Number(r.ins||0);
+  }
+  for(const k of chosen){const period=k==='prevent'?'m1':k;
+   for(const [key,r] of Object.entries(data.clusters?.byCohort?.[period]||{})){
+    const v=rows[key]??={name:r.name,district:r.district,ins:0,nppf:0,prevent:0};
+    if(k==='prevent')v.prevent+=Number(r.prevent||0); else v.nppf+=Number(r.nppf||0);
+   }
+  }
+  return Object.values(rows).filter(r=>r.ins>0).sort((a,b)=>(a.nppf+a.prevent)/a.ins-(b.nppf+b.prevent)/b.ins || b.ins-a.ins || (a.district+'|'+a.name).localeCompare(b.district+'|'+b.name,'es'));
+ }
+ function renderClusters(chosen){
+  const all=combineClusters(chosen),half=Math.ceil(all.length/2);
+  const halves={top:all.slice(0,half),bottom:all.slice(half).reverse()};
+  // BOTTOM: una instalación aislada (1/1=100%) mantiene su porcentaje visible,
+  // pero no distorsiona la escala de las demás barras. El siguiente máximo con
+  // exposición de al menos 2 INS define la escala (+10% de margen).
+  // Si todos los clústeres tienen una única instalación, usar escala normal.
+  const bottomScalable=halves.bottom.filter(r=>r.ins>1);
+  const bottomReference=bottomScalable.length?bottomScalable:halves.bottom;
+  const scales={
+   top:scaleMax(halves.top.map(r=>100*(r.nppf+r.prevent)/r.ins)),
+   bottom:scaleMax(bottomReference.map(r=>100*(r.nppf+r.prevent)/r.ins))
+  };
+  document.querySelectorAll('.tx360-cluster-card').forEach(card=>{
+   const mode=card.dataset.half,list=card.querySelector('.tx360-cluster-list');if(!list)return;
+   const rows=halves[mode]||[];
+   const count=card.querySelector('.tx360-cluster-count');if(count)count.textContent=fmt(rows.length)+' de '+fmt(all.length)+' clústeres · '+(mode==='top'?'mejor':'peor')+' mitad';
+   list.innerHTML=rows.map((r,j)=>{
+    const cases=r.nppf+r.prevent,pct=100*cases/r.ins,cls=pct<4?'good':pct<=5?'warn':'bad';
+    return '<div class="tx360-cluster-item"><div class="tx360-cluster-head"><strong title="'+safe(r.name)+'">'+(mode==='top'?j+1:all.length-j)+'. '+safe(r.name)+'</strong><span class="tx360-rate '+cls+'">'+fmtPct(pct)+'</span></div><div class="tx360-cluster-district">'+safe(r.district)+' <span>'+fmt(cases)+' / '+fmt(r.ins)+' INS'+(chosen.includes('prevent')?' · prev '+fmt(r.prevent):'')+'</span></div><div class="tx360-track"><div class="tx360-fill '+cls+'" style="width:'+barWidth(pct,scales[mode])+'%"></div></div></div>';
+   }).join('')||'<div class="tx360-message">Sin clústeres para la selección.</div>';
+   list.scrollTop=0;
+  });
+ }
+ function renderSpeed(chosen){
+  if(!speedCanvas)return;
+  const records=data.speeds||{},counts={};
+  const periods=[...new Set(chosen.map(k=>k==='prevent'?'m1':k))];
+  for(const period of periods)for(const [name,row] of Object.entries(records[period]||{})){
+   (counts[name]??={ins:0,nppf:0,prevent:0}).ins+=Number(row.ins||0);
+  }
+  for(const period of chosen){const key=period==='prevent'?'m1':period;
+   for(const [name,row] of Object.entries(records[key]||{})){
+    const r=counts[name]??={ins:0,nppf:0,prevent:0};
+    if(period==='prevent')r.prevent+=Number(row.prevent||0);
+    else r.nppf+=Number(row.nppf||0);
+   }
+  }
+  const ordered=Object.entries(counts).map(([name,v])=>({name,...v,cases:v.nppf+v.prevent})).filter(r=>r.ins||r.cases)
+    .sort((a,b)=>speedNumber(a.name)-speedNumber(b.name) || a.name.localeCompare(b.name,'es'));
+  const totalCases=ordered.reduce((n,r)=>n+r.cases,0),totalIns=ordered.reduce((n,r)=>n+r.ins,0);
+  const maxRate=scaleMax(ordered.map(r=>r.ins?100*r.cases/r.ins:0));
+  const legend=document.getElementById('tx360SpeedLegend');
+  legend.innerHTML=ordered.map((r,i)=>{
+   const rate=r.ins?100*r.cases/r.ins:null;
+   const w=rate===null?0:Math.min(100,rate/maxRate*100);
+   const clr=speedPalette[i%speedPalette.length];
+   return '<div class="tx360-speedentry"><div class="tx360-speedname"><span class="tx360-speeddot" style="background:'+clr+'"></span>'+safe(r.name)+'</div><div class="tx360-speedtrack" title="'+(rate===null?'Sin instalaciones':fmtPct(rate))+'"><div class="tx360-speedfill" style="width:'+w+'%"></div></div><div class="tx360-speedvalues">'+fmt(r.cases)+' / '+fmt(r.ins)+' · <strong>'+(rate===null?'N/D':fmtPct(rate))+'</strong></div></div>';
+  }).join('')||'<span>Selecciona al menos una cosecha.</span>';
+  document.getElementById('tx360SpeedSummary').textContent=totalIns
+   ?fmt(totalCases)+' casos · '+fmt(totalIns)+' instalaciones · '+fmtPct(100*totalCases/totalIns)+' (selección). Barras = tasa por velocidad; anillo = participación de casos.'
+   :'Sin instalaciones para la selección.';
+  if(speedChart){speedChart.destroy();speedChart=null;}
+  const included=ordered.filter(r=>r.cases>0);
+  if(included.length){speedChart=new Chart(speedCanvas,{type:'doughnut',data:{labels:included.map(r=>r.name),datasets:[{
+   data:included.map(r=>r.cases),backgroundColor:included.map(r=>speedPalette[ordered.indexOf(r)%speedPalette.length]),borderColor:'#fff',borderWidth:2,hoverOffset:5
+  }]},options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.label+': '+fmt(ctx.raw)+' casos ('+fmtPct(100*ctx.raw/totalCases)+' de los casos)'}}}}});}
+ }
+ // Cada cosecha se grafica por su MES REAL de instalación, no por todo 2026.
+ // Prevención M1 se presenta como punto separado y no se suma a confirmado.
+ const cohortMonth=(key)=>{
+  const label=String(data.cohortLabels?.[key]||'');
+  const match=label.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  return match?match[3]+'-'+match[2]:null;
+ };
+ const monthLabel=(m)=>{const [y,mm]=m.split('-');return new Date(Number(y),Number(mm)-1,1).toLocaleDateString('es-MX',{month:'short',year:'2-digit'});};
+ function updateTrend(chosen){
+  if(!trendChart)return;
+  const selectedMonths=[...new Set(chosen.map(k=>cohortMonth(k==='prevent'?'m1':k)).filter(Boolean))].sort();
+  const activeMonths=selectedMonths.filter(m=>Object.prototype.hasOwnProperty.call(data.trend||{},m));
+  trendChart.$tx360ActiveMonths=activeMonths;
+  trendChart.data.labels=activeMonths.map(monthLabel);
+  trendChart.data.datasets.forEach(ds=>{
+   if(ds.label==='Instalaciones')ds.data=activeMonths.map(m=>Number(data.trend[m]?.ins||0));
+   if(ds.label==='NPPF confirmado (%)')ds.data=activeMonths.map(m=>{
+    const r=data.trend[m]||{},ins=Number(r.ins||0);
+    const key=Object.entries(data.cohortLabels||{}).find(([k])=>k!=='prevent'&&cohortMonth(k)===m)?.[0];
+    return key&&chosen.includes(key)&&ins?+(100*Number(r.nppf||0)/ins).toFixed(2):null;
+   });
+   if(ds.label==='M1 preventivo (%)')ds.data=activeMonths.map(m=>{
+    const r=data.trend[m]||{},ins=Number(r.ins||0);
+    return chosen.includes('prevent')&&m===cohortMonth('m1')&&ins&&Number(r.prevent||0)>0?+(100*Number(r.prevent)/ins).toFixed(2):null;
+   });
+  });
+  trendChart.update();
+ }
+ function updateAll(){const chosen=selected();renderLists(chosen);renderClusters(chosen);renderSpeed(chosen);updateTrend(chosen);}
+ document.querySelectorAll('.tx360-global-filter .tx360-speedcheck').forEach(el=>el.addEventListener('change',updateAll));
+ // FIX: pintar tarjetas/listados desde el primer render, ANTES de crear la tendencia Chart.js.
+ // Si un plugin de la tendencia falla durante su primer dibujo, el selector ya no
+ // dejara los rankings y las velocidades vacios hasta que el usuario cambie M2.
+ updateAll();
+ const trend=document.getElementById('tx360Trend');
+ if(trend){
+  const months=Object.keys(data.trend||{}), values=months.map(m=>data.trend[m]);
+  const monthLabels=months.map(m=>{const [y,mm]=m.split('-');return new Date(Number(y),Number(mm)-1,1).toLocaleDateString('es-MX',{month:'short',year:'2-digit'});});
+  const m1Key=data.m1_month||null;
+  const installData=values.map(v=>v.ins||0);
+  const confirmedPct=values.map(v=>v.ins?+(100*v.nppf/v.ins).toFixed(2):null);
+  const preventPts=values.map((v,i)=> months[i]===m1Key && v.ins && v.prevent ? +(100*v.prevent/v.ins).toFixed(2) : null);
+  const highlightPlugin={id:'tx360M1Highlight',beforeDatasetsDraw(chart,args,opts){const m1Index=(chart.$tx360ActiveMonths||[]).indexOf(m1Key);if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const meta=x.getPixelForValue(m1Index);const prev=x.getPixelForValue(Math.max(0,m1Index-0.5));const next=x.getPixelForValue(Math.min((chart.$tx360ActiveMonths||[]).length-1,m1Index+0.5));ctx.save();ctx.fillStyle='rgba(246,218,118,0.16)';ctx.fillRect(prev,chartArea.top,next-prev,chartArea.bottom-chartArea.top);ctx.restore();},afterDraw(chart,args,opts){const m1Index=(chart.$tx360ActiveMonths||[]).indexOf(m1Key);if(m1Index<0)return;const {ctx,chartArea,scales:{x}}=chart;const xPos=x.getPixelForValue(m1Index);ctx.save();ctx.fillStyle='#8a6a00';ctx.font='700 10px Arial';ctx.textAlign='center';ctx.fillText('M1',xPos,chartArea.top+12);ctx.restore();}};
+  const nppfPointLabels={id:'tx360NppfPointLabels',afterDatasetsDraw(chart){
+   const datasetIndex=chart.data.datasets.findIndex(d=>d.label==='NPPF confirmado (%)');
+   if(datasetIndex<0)return;
+   const meta=chart.getDatasetMeta(datasetIndex);
+   const ctx=chart.ctx;ctx.save();ctx.font='bold 11px Arial, sans-serif';ctx.textAlign='center';ctx.textBaseline='bottom';
+   const top=chart.chartArea.top;
+   meta.data.forEach((point,i)=>{
+    const value=Number(chart.data.datasets[datasetIndex].data[i]);if(chart.data.datasets[datasetIndex].data[i]===null || !Number.isFinite(value) || !point || point.skip)return;
+    const label=value.toFixed(2)+'%';const x=point.x;const y=Math.max(top+15,point.y-9);
+    const width=ctx.measureText(label).width+8;
+    ctx.fillStyle='rgba(255,255,255,.93)';ctx.fillRect(x-width/2,y-12,width,14);
+    ctx.fillStyle='#d71569';ctx.fillText(label,x,y);
+   });ctx.restore();
+  }};
+  trendChart=new Chart(trend,{type:'bar',data:{labels:monthLabels,datasets:[
+   {type:'bar',label:'Instalaciones',order:10,data:installData,backgroundColor:'rgba(11,165,239,.68)',borderColor:'#0289d5',borderWidth:0,yAxisID:'yIns',borderRadius:4,maxBarThickness:54,categoryPercentage:.82,barPercentage:.88},
+   {type:'line',label:'NPPF confirmado (%)',order:1,data:confirmedPct,borderColor:'#f01879',backgroundColor:'rgba(243,41,127,.25)',tension:.3,fill:'origin',borderWidth:4,pointRadius:4,pointHoverRadius:7,yAxisID:'yPct'},
+   {type:'line',label:'M1 preventivo (%)',order:0,data:preventPts,borderColor:'#f3af25',backgroundColor:'#f3af25',showLine:false,pointRadius:5,pointHoverRadius:6,yAxisID:'yPct'}
+  ]},options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:20}},plugins:{legend:{position:'bottom',labels:{boxWidth:13,color:'#233756',font:{size:12,weight:'bold'}}},tooltip:{callbacks:{afterBody:(items)=>{const idx=items[0].dataIndex;const month=trendChart?.$tx360ActiveMonths?.[idx];const v=(data.trend||{})[month]||{};return 'NPPF: '+fmt(v.nppf||0)+' · Prev.: '+fmt(v.prevent||0)+' · INS: '+fmt(v.ins||0);}}}},scales:{yIns:{beginAtZero:true,position:'left',grid:{drawBorder:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>fmt(v)}},yPct:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false},ticks:{color:'#344963',font:{size:11,weight:'bold'},callback:v=>v+'%'}},x:{ticks:{color:'#344963',font:{size:11,weight:'bold'},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},plugins:[highlightPlugin,nppfPointLabels]});
+ }
+ updateAll();
+})();
 </script>
 </body>
 </html>
