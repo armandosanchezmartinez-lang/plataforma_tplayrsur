@@ -6447,6 +6447,16 @@ require_once __DIR__.'/includes/motor_nppf.php';
 @media(max-width:1400px){.tx360-speedbody{grid-template-columns:1fr}.tx360-speedcanvas{height:230px;max-width:360px;width:100%;margin:auto}.tx360-speedentry{grid-template-columns:90px minmax(30px,1fr) 112px}}
 @media(max-width:600px){.tx360-speedentry{grid-template-columns:78px minmax(30px,1fr) 104px;gap:5px}.tx360-speedvalues,.tx360-speedname{font-size:9px}}
 
+
+/* NPPF M4–M2: ranking por clúster */
+.tx360-cluster-card .tx360-cluster-list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.tx360-cluster-card .tx360-cluster-item{min-width:0}
+.tx360-cluster-card .tx360-cluster-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:11px;font-weight:850;color:#152b4a}
+.tx360-cluster-card .tx360-cluster-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tx360-cluster-card .tx360-cluster-head .tx360-rate{white-space:nowrap;font-size:12px}
+.tx360-cluster-card .tx360-cluster-district{display:flex;justify-content:space-between;gap:8px;color:#63748e;font-size:10px;font-weight:750;margin:3px 0 4px}
+.tx360-cluster-card .tx360-track{height:14px;margin:0}
+.tx360-cluster-card .tx360-package-legend{font-size:10px;margin-top:12px}
 </style>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -7041,6 +7051,41 @@ if (!function_exists('tx360_render_list_card')) {
         echo '</div></div>';
     }
 }
+if (!function_exists('tx360_render_cluster_card')) {
+    function tx360_render_cluster_card(array $tx360, string $which): void {
+        $esc=static fn($v)=>htmlspecialchars((string)$v,ENT_QUOTES,'UTF-8');
+        $isTop=($which==='top');
+        $title=$isTop?'TOP 10 NPPF por Clúster':'BOTTOM 10 NPPF por Clúster';
+        $rows=$tx360['clusters'][$which]??[];
+        echo '<div class="tx360-card tx360-cluster-card">';
+        echo '<div class="tx360-card-title">'.$esc($title).'</div>';
+        echo '<div class="tx360-subtitle">Cosechas M4–M2 · '.($isTop?'Mayor':'Menor').' tasa NPPF · Distrito incluido</div>';
+        if (!empty($tx360['clusters']['error'])) {
+            echo '<div class="tx360-message">'.$esc($tx360['clusters']['error']).'</div></div>';
+            return;
+        }
+        if (!$rows) {
+            echo '<div class="tx360-message">Sin clústeres adicionales para este extremo del ranking o sin instalaciones clasificadas.</div></div>';
+            return;
+        }
+        echo '<div class="tx360-cluster-list">';
+        foreach($rows as $i=>$row) {
+            $ins=(int)($row['ins']??0);$cases=(int)($row['nppf']??0);
+            $pct=$ins>0?round(100*$cases/$ins,2):0;
+            $cls=tx360_class_rate($pct);
+            // Barras calibradas contra tasa porcentual, con escala fija 0–100%.
+            $width=min(100,max(0,$pct));
+            echo '<div class="tx360-cluster-item">';
+            echo '<div class="tx360-cluster-head"><strong title="'.$esc($row['name']).'">'.($i+1).'. '.$esc($row['name']).'</strong><span class="tx360-rate '.$cls.'">'.number_format($pct,2).'%</span></div>';
+            echo '<div class="tx360-cluster-district">'.$esc($row['district']).' <span>'.number_format($cases).' / '.number_format($ins).' INS</span></div>';
+            echo '<div class="tx360-track"><div class="tx360-fill '.$cls.'" style="width:'.number_format($width,2,'.','').'%"></div></div>';
+            echo '</div>';
+        }
+        echo '</div>';
+        echo '<div class="tx360-package-legend">Tasa = casos NPPF / instalaciones del clúster. Sin mínimo de instalaciones; interpretar bases pequeñas con cautela.</div>';
+        echo '</div>';
+    }
+}
 if (!function_exists('tx360_render_packages_comparison')) {
     function tx360_render_packages_comparison(array $tx360): void {
         $rank = $tx360['package_rank'] ?? array_slice(array_keys($tx360['packages']['older'] ?? []),0,8);
@@ -7084,8 +7129,8 @@ if (!function_exists('tx360_render_packages_comparison')) {
         <div class="tx360-toprow">
             <?php tx360_render_list_card($tx360,'older','district','NPPF por distrito · M4–M2'); ?>
             <?php tx360_render_list_card($tx360,'older','channel','NPPF por canal · M4–M2'); ?>
-            <?php tx360_render_list_card($tx360,'m1','district','NPPF por distrito · M1 + Preventivo'); ?>
-            <?php tx360_render_list_card($tx360,'m1','channel','NPPF por canal · M1 + Preventivo'); ?>
+            <?php tx360_render_cluster_card($tx360,'top'); ?>
+            <?php tx360_render_cluster_card($tx360,'bottom'); ?>
         </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
@@ -7129,8 +7174,8 @@ if (!function_exists('tx360_render_packages_comparison')) {
         <div class="tx360-toprow">
             <?php tx360_render_list_card($tx360,'older','district','NPPF por distrito · M4–M2'); ?>
             <?php tx360_render_list_card($tx360,'older','channel','NPPF por canal · M4–M2'); ?>
-            <?php tx360_render_list_card($tx360,'m1','district','NPPF por distrito · M1 + Preventivo'); ?>
-            <?php tx360_render_list_card($tx360,'m1','channel','NPPF por canal · M1 + Preventivo'); ?>
+            <?php tx360_render_cluster_card($tx360,'top'); ?>
+            <?php tx360_render_cluster_card($tx360,'bottom'); ?>
         </div>
         <div class="tx360-bottomrow">
             <div class="tx360-card tx360-trendcard">
