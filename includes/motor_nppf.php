@@ -6,7 +6,8 @@
  */
 $tx360 = ['ok'=>false,'error'=>null,'cut'=>null,'eval'=>date('Y-m-d'),
     'groups'=>['older'=>[],'m1'=>[]],'trend'=>[],'packages'=>['older'=>[],'m1'=>[],'prevent'=>[]],'cohortLabels'=>[],
-    'universe'=>'','totals'=>[],'m1_month'=>null,'speeds'=>[]];
+    'universe'=>'','totals'=>[],'m1_month'=>null,'speeds'=>[],
+    'clusters'=>['top'=>[],'bottom'=>[],'total'=>0,'source'=>null,'error'=>null,'unclassified_ins'=>0]];
 if (!function_exists('tx360_norm_account')) {
 function tx360_norm_account($raw): string {
     $v = preg_replace('/\D/u','',(string)$raw) ?? '';
@@ -83,6 +84,24 @@ try {
     }
     foreach($speedConflict as $k=>$_)$speedMap[$k]='No clasificada';
     foreach(['m4','m3','m2','m1'] as $m)$tx360['speeds'][$m]=[];
+    // Fuente del clúster: dato del evento de instalación. No inferirlo de distrito,
+    // municipio, nombre de paquete ni del catálogo agregado Clusters_BDU.
+    $clusterColumn = null;
+    $columnsRes = mysqli_query($conexion, "SHOW COLUMNS FROM instalaciones");
+    $installCols = [];
+    while ($columnsRes && ($col = mysqli_fetch_assoc($columnsRes))) {
+        $installCols[strtolower((string)$col['Field'])] = (string)$col['Field'];
+    }
+    foreach (['cluster','clúster','nombre_cluster','nombre_clúster','cluster_bdu','cluster_hijo','cluster_nombre','nombre_cl','cluster_name'] as $candidate) {
+        if (isset($installCols[$candidate])) { $clusterColumn=$installCols[$candidate]; break; }
+    }
+    $clusterFieldSql = $clusterColumn!==null ? '`'.str_replace('`','',$clusterColumn).'` AS tx_cluster' : "NULL AS tx_cluster";
+    $tx360['clusters']['source']=$clusterColumn;
+    if ($clusterColumn===null) {
+        $tx360['clusters']['error']='No se encontró un campo de clúster en instalaciones; falta identificar la fuente cuenta → clúster.';
+    }
+    $clusterGroups = [];
+
 
     // El período visible selecciona el MES/SEMANA de referencia. NPPF usa las cosechas previas.
     $refStart=$periodo==='semanal' ? $tx_semana_lunes->format('Y-m-d') : sprintf('%04d-%02d-01',$anio_query,$mes_actual);
@@ -135,7 +154,7 @@ try {
     if($hcMode && !$tx_stg_hc_ok) throw new RuntimeException('Motor HC no disponible para certificar las cosechas de esta línea');
     $tx360['universe']=$isRegion?'Todos los canales · Región SUR':($isDistrict?'Todos los canales · Distrito':'Instalaciones certificadas por Motor HC · Línea autorizada');
     $seen=[];
-    $consume=function($account,$date,$district,$channel,$plan) use (&$tx360,&$raw,&$seen,&$byDate,$districtTarget,$isRegion,$isDistrict,$end,$speedMap){
+    $consume=function($account,$date,$district,$channel,$plan,$cluster) use (&$tx360,&$clusterGroups,&$raw,&$seen,&$byDate,$districtTarget,$isRegion,$isDistrict,$end,$speedMap){
         $date=substr((string)$date,0,10);$account=tx360_norm_account($account);
         if($account===''||$date===''||$date>$end)return;
         $unique=$account.'|'.$date;
@@ -167,6 +186,20 @@ try {
         if($class==='prevent')$tx360['totals'][$group]['prevent']++;
         tx360_bucket($tx360['groups'][$group]['district'],$district,$class);
         tx360_bucket($tx360['groups'][$group]['channel'],$channel,$class);
+        if($group==='older' && $tx360['clusters']['source'] !== null) {
+            $cluster=trim((string)$cluster);
+            if ($cluster==='' || $cluster==='-' || strtoupper($cluster)==='NULL') {
+                $tx360['clusters']['unclassified_ins']++;
+            } else {
+                // Clave compuesta: nombres iguales en distritos distintos son entidades separadas.
+                $cluster = mb_strtoupper(preg_replace('/\s+/u',' ', $cluster),'UTF-8');
+                $clusterKey=$district.'|'.$cluster;
+                $clusterGroups[$clusterKey]??=['name'=>$cluster,'district'=>$district,'ins'=>0,'nppf'=>0];
+                $clusterGroups[$clusterKey]['ins']++;
+                if($class==='nppf')$clusterGroups[$clusterKey]['nppf']++;
+            }
+        }
+
         $planKey=mb_strtoupper(preg_replace('/\s+/u',' ',trim($plan)),'UTF-8');
         $speed=$speedMap[$planKey]??'No clasificada';
         tx360_bucket($tx360['speeds'][$cohort],$speed,$class);
@@ -184,12 +217,12 @@ try {
             if($acct!=='' && $f!=='')$certified[$acct.'|'.$f]=true;
         }
         if(!$certified)throw new RuntimeException('No hay instalaciones HC certificadas en el alcance seleccionado');
-        $q=$conexion->prepare("SELECT cuenta,fecha,distrito,origen_prospecto,plan FROM instalaciones WHERE fecha BETWEEN ? AND ? AND origen_prospecto <> '-'");
+        $q=$conexion->prepare("SELECT cuenta,fecha,distrito,origen_prospecto,plan,$clusterFieldSql FROM instalaciones WHERE fecha BETWEEN ? AND ? AND origen_prospecto <> '-'");
         if(!$q)throw new RuntimeException('Consulta HC de instalaciones no disponible');
         $q->bind_param('ss',$start,$end);$q->execute();$rr=$q->get_result();
         while($e=$rr->fetch_assoc()){
             $k=tx360_norm_account($e['cuenta']).'|'.substr((string)$e['fecha'],0,10);
-            if(isset($certified[$k]))$consume($e['cuenta'],$e['fecha'],$e['distrito'],$e['origen_prospecto'],$e['plan']);
+            if(isset($certified[$k]))$consume($e['cuenta'],$e['fecha'],$e['distrito'],$e['origen_prospecto'],$e['plan'],$e['tx_cluster']??null);
         }
         $q->close();
     } else {
@@ -197,13 +230,32 @@ try {
         $foliosNppf=$sellerMode ? array_values(array_unique(array_filter(array_map('strval',$folio_ids)))) : [];
         if($sellerMode && !$foliosNppf)throw new RuntimeException('Vendedor sin folios autorizados para NPPF');
         $extra=$sellerMode?' AND folio_empleado IN ('.implode(',',array_fill(0,count($foliosNppf),'?')).')':'';
-        $q=$conexion->prepare("SELECT cuenta,fecha,distrito,origen_prospecto,plan FROM instalaciones WHERE fecha BETWEEN ? AND ? AND origen_prospecto <> '-' $extra ORDER BY fecha");
+        $q=$conexion->prepare("SELECT cuenta,fecha,distrito,origen_prospecto,plan,$clusterFieldSql FROM instalaciones WHERE fecha BETWEEN ? AND ? AND origen_prospecto <> '-' $extra ORDER BY fecha");
         if(!$q)throw new RuntimeException('Consulta de instalaciones no disponible');
         $params=array_merge([$start,$end],$foliosNppf);
         $q->bind_param(str_repeat('s',count($params)),...$params);$q->execute();$rr=$q->get_result();
-        while($e=$rr->fetch_assoc())$consume($e['cuenta'],$e['fecha'],$e['distrito'],$e['origen_prospecto'],$e['plan']);
+        while($e=$rr->fetch_assoc())$consume($e['cuenta'],$e['fecha'],$e['distrito'],$e['origen_prospecto'],$e['plan'],$e['tx_cluster']??null);
         $q->close();
     }
+    // Top 10: tasa NPPF más alta (mayor atención). Bottom 10: más baja.
+    // Universo M4–M2, sin umbral mínimo arbitrario de instalaciones.
+    // Una tasa de 100% con 1/1 se identifica por su denominador en la tarjeta.
+    $clusterRows=array_values(array_filter($clusterGroups,static fn($r)=>(int)$r['ins']>0));
+    $clusterRate=static fn($r)=>(float)$r['nppf']/(float)$r['ins'];
+    usort($clusterRows,static function($a,$b) use($clusterRate) {
+        $diff=$clusterRate($b)<=>$clusterRate($a);
+        return $diff ?: (($b['nppf']<=>$a['nppf']) ?: strcmp($a['name'],$b['name']));
+    });
+    $tx360['clusters']['total']=count($clusterRows);
+    $tx360['clusters']['top']=array_slice($clusterRows,0,10);
+    // No repetir un clúster en ambos extremos si el universo es pequeño.
+    $topKeys=array_fill_keys(array_map(static fn($r)=>$r['district'].'|'.$r['name'],$tx360['clusters']['top']),true);
+    $bottomCandidates=array_values(array_filter($clusterRows,static fn($r)=>!isset($topKeys[$r['district'].'|'.$r['name']])));
+    usort($bottomCandidates,static function($a,$b) use($clusterRate) {
+        $diff=$clusterRate($a)<=>$clusterRate($b);
+        return $diff ?: (($b['ins']<=>$a['ins']) ?: strcmp($a['name'],$b['name']));
+    });
+    $tx360['clusters']['bottom']=array_slice($bottomCandidates,0,10);
     // Orden ejecutivo: M4–M2 de menor a mayor NPPF; M1 hereda el orden de M4–M2.
     $tx360['groups']['older']['district'] = tx360_sort_asc_rate($tx360['groups']['older']['district'], 'nppf');
     $tx360['groups']['older']['channel']  = tx360_sort_asc_rate($tx360['groups']['older']['channel'], 'nppf');
