@@ -8872,6 +8872,10 @@ async function submitChangePassword() {
  }}
  let trendBaseConfirmed=[],trendBasePrevent=[];
  document.querySelectorAll('.tx360-global-filter .tx360-speedcheck').forEach(el=>el.addEventListener('change',updateAll));
+ // FIX: pintar tarjetas/listados desde el primer render, ANTES de crear la tendencia Chart.js.
+ // Si un plugin de la tendencia falla durante su primer dibujo, el selector ya no
+ // dejara los rankings y las velocidades vacios hasta que el usuario cambie M2.
+ updateAll();
  const trend=document.getElementById('tx360Trend');
  if(trend){
   const months=Object.keys(data.trend||{}), values=months.map(m=>data.trend[m]);
