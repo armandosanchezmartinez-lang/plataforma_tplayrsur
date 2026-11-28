@@ -6467,6 +6467,17 @@ require_once __DIR__.'/includes/motor_nppf.php';
 .tx360-cluster-card .tx360-cluster-list{max-height:420px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b2c1d6 #edf2f8;padding-right:6px}
 .tx360-cluster-count{margin-top:7px;font-size:10px;color:#526681;font-weight:750}
 .tx360-cluster-card .tx360-cluster-item{padding-bottom:5px;border-bottom:1px solid #eef1f8}
+/* INDEX NPPF · v2026-11-28b: aprovechar toda la altura disponible de la tarjeta. */
+.tx360-cluster-card{display:flex;flex-direction:column;min-height:0}
+.tx360-cluster-card .tx360-cluster-list{
+    flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;
+    align-content:flex-start;gap:10px;
+}
+.tx360-cluster-card .tx360-package-legend{flex:0 0 auto;margin-top:10px}
+@media(max-width:1320px){
+    /* En dos columnas la fila puede quedar sin una tarjeta alta de referencia. */
+    .tx360-cluster-card .tx360-cluster-list{min-height:320px;max-height:540px;flex:1 1 auto}
+}
 @media(max-width:900px){.tx360-global-filter{gap:5px}.tx360-global-filter label{padding:6px}}
 </style>
 
@@ -8830,7 +8841,16 @@ async function submitChangePassword() {
  function renderClusters(chosen){
   const all=combineClusters(chosen),half=Math.ceil(all.length/2);
   const halves={top:all.slice(0,half),bottom:all.slice(half).reverse()};
-  const scales={top:scaleMax(halves.top.map(r=>100*(r.nppf+r.prevent)/r.ins)),bottom:scaleMax(halves.bottom.map(r=>100*(r.nppf+r.prevent)/r.ins))};
+  // BOTTOM: una instalación aislada (1/1=100%) mantiene su porcentaje visible,
+  // pero no distorsiona la escala de las demás barras. El siguiente máximo con
+  // exposición de al menos 2 INS define la escala (+10% de margen).
+  // Si todos los clústeres tienen una única instalación, usar escala normal.
+  const bottomScalable=halves.bottom.filter(r=>r.ins>1);
+  const bottomReference=bottomScalable.length?bottomScalable:halves.bottom;
+  const scales={
+   top:scaleMax(halves.top.map(r=>100*(r.nppf+r.prevent)/r.ins)),
+   bottom:scaleMax(bottomReference.map(r=>100*(r.nppf+r.prevent)/r.ins))
+  };
   document.querySelectorAll('.tx360-cluster-card').forEach(card=>{
    const mode=card.dataset.half,list=card.querySelector('.tx360-cluster-list');if(!list)return;
    const rows=halves[mode]||[];
